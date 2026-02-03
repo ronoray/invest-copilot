@@ -1,0 +1,69 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  invest-postgres:
+    image: postgres:16-alpine
+    container_name: invest-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-investuser}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME:-investcopilot}
+    volumes:
+      - invest_postgres_data:/var/lib/postgresql/data
+    networks:
+      - traefik-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-investuser}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # API Backend
+  invest-api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    container_name: invest-api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${DB_USER:-investuser}:${DB_PASSWORD}@invest-postgres:5432/${DB_NAME:-investcopilot}
+      ALPHA_VANTAGE_KEY: ${ALPHA_VANTAGE_KEY}
+      CLAUDE_API_KEY: ${CLAUDE_API_KEY}
+      PORT: 3100
+    depends_on:
+      invest-postgres:
+        condition: service_healthy
+    networks:
+      - traefik-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.invest-api.rule=Host(`invest.hungrytimes.in`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.invest-api.entrypoints=websecure"
+      - "traefik.http.routers.invest-api.tls.certresolver=letsencrypt"
+      - "traefik.http.services.invest-api.loadbalancer.server.port=3100"
+
+  # Frontend
+  invest-web:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.client
+    container_name: invest-web
+    restart: unless-stopped
+    networks:
+      - traefik-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.invest-web.rule=Host(`invest.hungrytimes.in`)"
+      - "traefik.http.routers.invest-web.entrypoints=websecure"
+      - "traefik.http.routers.invest-web.tls.certresolver=letsencrypt"
+      - "traefik.http.services.invest-web.loadbalancer.server.port=80"
+
+volumes:
+  invest_postgres_data:
+
+networks:
+  traefik-network:
+    external: true

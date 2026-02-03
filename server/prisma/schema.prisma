@@ -1,0 +1,125 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Current portfolio holdings
+model Holding {
+  id            Int      @id @default(autoincrement())
+  symbol        String   // e.g., "RELIANCE", "TCS"
+  exchange      String   @default("NSE") // NSE or BSE
+  quantity      Int
+  avgPrice      Decimal  @db.Decimal(10, 2)
+  currentPrice  Decimal  @db.Decimal(10, 2)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([symbol, exchange])
+  @@index([symbol])
+}
+
+// Trade execution history
+model Trade {
+  id            Int      @id @default(autoincrement())
+  symbol        String
+  exchange      String   @default("NSE")
+  type          String   // BUY or SELL
+  quantity      Int
+  price         Decimal  @db.Decimal(10, 2)
+  totalAmount   Decimal  @db.Decimal(10, 2)
+  charges       Decimal  @db.Decimal(10, 2) @default(0)
+  notes         String?
+  proposalId    Int?     // Link to AI proposal if applicable
+  executedAt    DateTime @default(now())
+  
+  @@index([symbol])
+  @@index([executedAt])
+}
+
+// Watchlist - stocks to monitor
+model Watchlist {
+  id            Int      @id @default(autoincrement())
+  symbol        String   @unique
+  exchange      String   @default("NSE")
+  targetPrice   Decimal? @db.Decimal(10, 2)
+  stopLoss      Decimal? @db.Decimal(10, 2)
+  notes         String?
+  addedAt       DateTime @default(now())
+
+  @@index([symbol])
+}
+
+// AI-generated trade proposals
+model Proposal {
+  id            Int      @id @default(autoincrement())
+  symbol        String
+  exchange      String   @default("NSE")
+  type          String   // BUY or SELL
+  quantity      Int
+  targetPrice   Decimal  @db.Decimal(10, 2)
+  stopLoss      Decimal  @db.Decimal(10, 2)
+  confidence    Int      // 0-100
+  reasoning     Json     // AI analysis details
+  status        String   @default("PENDING") // PENDING, APPROVED, REJECTED, EXECUTED
+  createdAt     DateTime @default(now())
+  reviewedAt    DateTime?
+  
+  @@index([status])
+  @@index([createdAt])
+}
+
+// Price alerts sent to user
+model Alert {
+  id            Int      @id @default(autoincrement())
+  symbol        String
+  alertType     String   // PRICE_TARGET, STOP_LOSS, NEWS, AI_SIGNAL
+  message       String
+  data          Json?    // Additional context
+  sentAt        DateTime @default(now())
+  readAt        DateTime?
+
+  @@index([sentAt])
+}
+
+// Market data cache (5-min candles)
+model MarketData {
+  id            Int      @id @default(autoincrement())
+  symbol        String
+  exchange      String   @default("NSE")
+  open          Decimal  @db.Decimal(10, 2)
+  high          Decimal  @db.Decimal(10, 2)
+  low           Decimal  @db.Decimal(10, 2)
+  close         Decimal  @db.Decimal(10, 2)
+  volume        BigInt
+  timestamp     DateTime
+  
+  @@unique([symbol, exchange, timestamp])
+  @@index([symbol, timestamp])
+}
+
+// Decision journal for learning
+model Journal {
+  id            Int      @id @default(autoincrement())
+  tradeId       Int?
+  symbol        String
+  decision      String   // What you decided
+  reasoning     String   // Why you decided
+  outcome       String?  // What happened
+  learnings     String?  // What you learned
+  createdAt     DateTime @default(now())
+  
+  @@index([symbol])
+  @@index([createdAt])
+}
+
+// System configuration
+model Config {
+  id            Int      @id @default(autoincrement())
+  key           String   @unique
+  value         Json
+  updatedAt     DateTime @updatedAt
+}

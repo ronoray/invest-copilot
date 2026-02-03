@@ -1,0 +1,23 @@
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Copy package files
+COPY server/package*.json ./
+
+# Install dependencies
+RUN npm ci --only=production
+
+# Copy prisma schema
+COPY server/prisma ./prisma/
+
+# Generate Prisma client
+RUN npx prisma generate
+
+# Copy application code
+COPY server/ ./
+
+EXPOSE 3000
+
+# Run migrations and start server
+CMD npx prisma migrate deploy && node index.js

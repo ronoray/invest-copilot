@@ -122,8 +122,9 @@ services:
       CLOUDFLARE_ACCESS_AUDIENCE: ${CLOUDFLARE_ACCESS_AUDIENCE}
       CLOUDFLARE_ACCESS_TEAM_DOMAIN: ${CLOUDFLARE_ACCESS_TEAM_DOMAIN}
       
-      # Deployment
-      WEBHOOK_SECRET: ${WEBHOOK_SECRET}
+     # Deployment
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET}
+      DEPLOY_BRANCH: ${DEPLOY_BRANCH:-main}
       
     depends_on:
       invest-postgres:

@@ -3,7 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import dotenv from 'dotenv';
 import cron from 'node-cron';
-import { PrismaClient } from '@prisma/client';
+import prisma from './services/prisma.js';
 
 // Route imports
 import authRoutes from './routes/auth.js';
@@ -30,7 +30,6 @@ import { handleDeployWebhook, triggerManualDeploy } from './services/deploy-webh
 dotenv.config();
 
 const app = express();
-const prisma = new PrismaClient();
 const PORT = process.env.PORT || 3100;
 
 // ============================================

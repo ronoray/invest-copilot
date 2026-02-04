@@ -1,13 +1,5 @@
-import { PrismaClient } from '@prisma/client';
+import prisma from './prisma.js';
 import logger from './logger.js';
-
-let prisma;
-try {
-  prisma = new PrismaClient();
-} catch (error) {
-  logger.error('Failed to initialize Prisma:', error);
-  throw error;
-}
 
 /**
  * Portfolio Calculator Service

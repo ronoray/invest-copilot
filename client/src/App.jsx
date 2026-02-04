@@ -1,5 +1,8 @@
 import { Routes, Route, Link } from 'react-router-dom';
-import { Home, Briefcase, Eye, FileText, Lightbulb, Receipt, Target } from 'lucide-react';
+import { Home, Briefcase, Eye, Lightbulb, Receipt, Target, LogOut } from 'lucide-react';
+import { useAuth } from './context/AuthContext';
+import ProtectedRoute from './components/ProtectedRoute';
+import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Portfolio from './pages/Portfolio';
 import Watchlist from './pages/Watchlist';
@@ -9,6 +12,27 @@ import TaxDashboard from './pages/TaxDashboard';
 import YourPlan from './pages/YourPlan';
 
 function App() {
+  return (
+    <Routes>
+      {/* Public Route - Login */}
+      <Route path="/login" element={<Login />} />
+
+      {/* Protected Routes */}
+      <Route
+        path="/*"
+        element={
+          <ProtectedRoute>
+            <AppLayout />
+          </ProtectedRoute>
+        }
+      />
+    </Routes>
+  );
+}
+
+function AppLayout() {
+  const { user, logout } = useAuth();
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Navigation */}
@@ -27,6 +51,20 @@ function App() {
                 <NavLink to="/tax" icon={<Receipt size={18} />}>Tax</NavLink>
                 <NavLink to="/watchlist" icon={<Eye size={18} />}>Watchlist</NavLink>
               </div>
+            </div>
+
+            {/* User Menu */}
+            <div className="flex items-center space-x-4">
+              <span className="text-sm text-gray-600">
+                Welcome, {user?.name || 'User'}
+              </span>
+              <button
+                onClick={logout}
+                className="inline-flex items-center px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+              >
+                <LogOut size={16} className="mr-2" />
+                Logout
+              </button>
             </div>
           </div>
         </div>

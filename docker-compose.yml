@@ -133,6 +133,7 @@ services:
     volumes:
       - invest_logs:/app/logs
       - invest_backups:/backups
+      - /tmp:/tmp
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.invest-api.rule=Host(`invest.hungrytimes.in`) && PathPrefix(`/api`)"

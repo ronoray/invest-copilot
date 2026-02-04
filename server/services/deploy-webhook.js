@@ -1,18 +1,11 @@
 import crypto from 'crypto';
-import { spawn } from 'child_process';
+import { writeFileSync } from 'fs';
 import logger from './logger.js';
 
-/**
- * GitHub Webhook Handler for Investment Co-Pilot Deployment
- */
-
 const WEBHOOK_SECRET = process.env.GITHUB_WEBHOOK_SECRET;
-const DEPLOY_SCRIPT = '/opt/invest-copilot/deploy-invest.sh';
 const TARGET_BRANCH = process.env.DEPLOY_BRANCH || 'main';
+const TRIGGER_FILE = '/tmp/invest-deploy-trigger.json';
 
-/**
- * Verify GitHub webhook signature
- */
 function verifySignature(payload, signature) {
   if (!WEBHOOK_SECRET) {
     logger.warn('GITHUB_WEBHOOK_SECRET not set, skipping signature verification');
@@ -23,50 +16,46 @@ function verifySignature(payload, signature) {
   const digest = 'sha256=' + hmac.update(JSON.stringify(payload)).digest('hex');
   
   try {
-    return crypto.timingSafeEqual(
-      Buffer.from(signature),
-      Buffer.from(digest)
-    );
+    return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(digest));
   } catch (error) {
     logger.error('Signature verification error:', error);
     return false;
   }
 }
 
-/**
- * Execute deployment script
- */
 function executeDeploy(sha, branch) {
-  return new Promise((resolve, reject) => {
-    logger.info(`Starting deployment: ${branch}@${sha}`);
+  return new Promise((resolve) => {
+    logger.info(`Triggering deployment: ${branch}@${sha}`);
     
-    const deploy = spawn('sudo', ['/bin/bash', DEPLOY_SCRIPT], {
-      env: {
-        ...process.env,
-        INVEST_BRANCH: branch
-      },
-      detached: true,
-      stdio: 'ignore'
-    });
-
-    deploy.unref();
-
-    // Don't wait for deployment to complete
-    resolve({
-      success: true,
-      message: 'Deployment started in background',
+    const triggerData = {
       sha,
-      branch
-    });
+      branch,
+      timestamp: new Date().toISOString(),
+      service: 'invest-copilot'
+    };
+    
+    try {
+      writeFileSync(TRIGGER_FILE, JSON.stringify(triggerData));
+      logger.info('Deployment trigger file written');
+      resolve({
+        success: true,
+        message: 'Deployment queued',
+        sha,
+        branch
+      });
+    } catch (error) {
+      logger.error('Failed to write trigger file:', error);
+      resolve({
+        success: false,
+        message: 'Failed to queue deployment',
+        error: error.message
+      });
+    }
   });
 }
 
-/**
- * Webhook handler middleware
- */
 export async function handleDeployWebhook(req, res) {
   try {
-    // Verify signature
     const signature = req.headers['x-hub-signature-256'];
     if (!signature) {
       logger.warn('No signature provided');
@@ -79,70 +68,37 @@ export async function handleDeployWebhook(req, res) {
     }
 
     const { ref, repository, head_commit } = req.body;
-
-    // Verify it's a push to the target branch
     const branch = ref?.replace('refs/heads/', '');
+    
     if (branch !== TARGET_BRANCH) {
       logger.info(`Ignoring push to branch: ${branch}`);
-      return res.json({ 
-        message: `Ignoring push to ${branch}, only deploying ${TARGET_BRANCH}` 
-      });
+      return res.json({ message: `Ignoring push to ${branch}` });
     }
 
-    const repoName = repository?.full_name;
     const sha = head_commit?.id;
     const message = head_commit?.message;
     const author = head_commit?.author?.name;
 
-    logger.info(`Received push event: ${repoName}@${branch} by ${author}`);
+    logger.info(`Received push event: ${repository?.full_name}@${branch} by ${author}`);
     logger.info(`Commit: ${sha?.substring(0, 7)} - ${message}`);
 
-    // Execute deployment
     const result = await executeDeploy(sha, branch);
-
-    res.json({
-      success: true,
-      deployment: result,
-      commit: {
-        sha: sha?.substring(0, 7),
-        message,
-        author,
-        branch
-      }
-    });
+    res.json({ success: true, deployment: result });
 
   } catch (error) {
     logger.error('Webhook handler error:', error);
-    res.status(500).json({ 
-      error: 'Deployment failed', 
-      message: error.message 
-    });
+    res.status(500).json({ error: 'Deployment failed', message: error.message });
   }
 }
 
-/**
- * Manual deployment trigger
- */
 export async function triggerManualDeploy(req, res) {
   try {
     const { branch = TARGET_BRANCH } = req.body;
-
-    logger.info(`Manual deployment triggered for branch: ${branch}`);
-
     const result = await executeDeploy('manual', branch);
-
-    res.json({
-      success: true,
-      deployment: result,
-      message: `Deployment of ${branch} started`
-    });
-
+    res.json({ success: true, deployment: result });
   } catch (error) {
     logger.error('Manual deploy error:', error);
-    res.status(500).json({ 
-      error: 'Deployment failed', 
-      message: error.message 
-    });
+    res.status(500).json({ error: 'Deployment failed', message: error.message });
   }
 }
 

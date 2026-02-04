@@ -334,3 +334,5 @@ Kolkata, West Bengal, India
 - [ ] Test market data sync
 
 **Ready to track your investments? Let's go! 📈**
+
+# Auto-deploy test

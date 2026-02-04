@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { authApi } from '../utils/api';
 
 const AuthContext = createContext(null);
 
@@ -23,20 +24,8 @@ export const AuthProvider = ({ children }) => {
       }
 
       // Verify token with backend
-      const response = await fetch('/api/auth/me', {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setUser(data.user);
-      } else {
-        // Token invalid, clear it
-        localStorage.removeItem('accessToken');
-        localStorage.removeItem('refreshToken');
-      }
+      const data = await authApi.me();
+      setUser(data.user);
     } catch (error) {
       console.error('Auth check failed:', error);
       localStorage.removeItem('accessToken');
@@ -48,20 +37,7 @@ export const AuthProvider = ({ children }) => {
 
   const login = async (email, password) => {
     try {
-      const response = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ email, password }),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Login failed');
-      }
-
-      const data = await response.json();
+      const data = await authApi.login(email, password);
       
       // Store tokens
       localStorage.setItem('accessToken', data.accessToken);
@@ -82,16 +58,7 @@ export const AuthProvider = ({ children }) => {
 
   const logout = async () => {
     try {
-      const token = localStorage.getItem('accessToken');
-      
-      if (token) {
-        await fetch('/api/auth/logout', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
-        });
-      }
+      await authApi.logout();
     } catch (error) {
       console.error('Logout error:', error);
     } finally {

@@ -3,6 +3,7 @@ import { PrismaClient } from '@prisma/client';
 import { getCurrentPrice } from '../services/marketData.js';
 import { scanMarketForOpportunities } from '../services/advancedScreener.js';
 import { sendAlert, broadcastMessage } from '../services/telegramBot.js';
+import bot from '../services/telegramBot.js';
 import logger from '../services/logger.js';
 
 const prisma = new PrismaClient();

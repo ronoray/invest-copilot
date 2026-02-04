@@ -5,11 +5,33 @@ import { getCurrentPrice } from './marketData.js';
 import { scanMarketForOpportunities } from './advancedScreener.js';
 
 const prisma = new PrismaClient();
-const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
+
+// Create bot instance ONLY ONCE
+let bot = null;
+
+function getBot() {
+  if (!bot) {
+    bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { 
+      polling: {
+        interval: 1000,
+        autoStart: true,
+        params: {
+          timeout: 10
+        }
+      }
+    });
+    
+    // Handle polling errors
+    bot.on('polling_error', (error) => {
+      logger.error('Telegram polling error:', error);
+    });
+  }
+  return bot;
+}
 
 /**
  * Investment Co-Pilot Telegram Bot
- * Complete implementation with all features
+ * Fixed version - prevents command loops
  */
 
 // ============================================
@@ -96,14 +118,24 @@ ${profitPercent > 0 ? '✅ Book profit now!' : '🛑 Cut losses!'}`;
 }
 
 // ============================================
-// BOT COMMANDS
+// BOT COMMANDS - REGISTERED ONLY ONCE
 // ============================================
 
-// /start
-bot.onText(/\/start/, async (msg) => {
-  await getOrCreateUser(msg.from.id, msg.from.username, msg.from.first_name);
+export function initTelegramBot() {
+  const botInstance = getBot();
+  
+  logger.info('Initializing Telegram bot commands...');
 
-  const welcomeMsg = `👋 *Welcome to Investment Co-Pilot!*
+  // Remove all previous listeners to prevent duplicates
+  botInstance.removeAllListeners('message');
+  botInstance.removeAllListeners('text');
+
+  // /start
+  botInstance.onText(/^\/start$/, async (msg) => {
+    try {
+      await getOrCreateUser(msg.from.id, msg.from.username, msg.from.first_name);
+
+      const welcomeMsg = `👋 *Welcome to Investment Co-Pilot!*
 
 I'm your AI investment assistant.
 
@@ -120,12 +152,17 @@ I'm your AI investment assistant.
 
 Let's build wealth! 💰`;
 
-  await bot.sendMessage(msg.chat.id, welcomeMsg, { parse_mode: 'Markdown' });
-});
+      await botInstance.sendMessage(msg.chat.id, welcomeMsg, { parse_mode: 'Markdown' });
+    } catch (error) {
+      logger.error('Start command error:', error);
+      await botInstance.sendMessage(msg.chat.id, '❌ Error starting bot');
+    }
+  });
 
-// /help
-bot.onText(/\/help/, async (msg) => {
-  const helpMsg = `📚 *Commands*
+  // /help
+  botInstance.onText(/^\/help$/, async (msg) => {
+    try {
+      const helpMsg = `📚 *Commands*
 
 *Portfolio:*
 /portfolio - View holdings
@@ -147,20 +184,24 @@ bot.onText(/\/help/, async (msg) => {
 /mute - Disable alerts
 /unmute - Enable alerts`;
 
-  await bot.sendMessage(msg.chat.id, helpMsg, { parse_mode: 'Markdown' });
-});
+      await botInstance.sendMessage(msg.chat.id, helpMsg, { parse_mode: 'Markdown' });
+    } catch (error) {
+      logger.error('Help command error:', error);
+      await botInstance.sendMessage(msg.chat.id, '❌ Error showing help');
+    }
+  });
 
-// /scan
-bot.onText(/\/scan/, async (msg) => {
-  await bot.sendMessage(msg.chat.id, '🔍 Scanning market...');
+  // /scan
+  botInstance.onText(/^\/scan$/, async (msg) => {
+    try {
+      await botInstance.sendMessage(msg.chat.id, '🔍 Scanning market...');
 
-  try {
-    const opportunities = await scanMarketForOpportunities({
-      targetCount: { high: 3, medium: 3, low: 3 },
-      baseAmount: 10000
-    });
+      const opportunities = await scanMarketForOpportunities({
+        targetCount: { high: 3, medium: 3, low: 3 },
+        baseAmount: 10000
+      });
 
-    const scanMsg = `✅ *Scan Complete!*
+      const scanMsg = `✅ *Scan Complete!*
 
 🔥 *High Risk (${opportunities.high.length}):*
 ${opportunities.high.map(s => `• ${s.symbol} - ${formatPrice(s.price)}`).join('\n')}
@@ -173,89 +214,89 @@ ${opportunities.low.map(s => `• ${s.symbol} - ${formatPrice(s.price)}`).join('
 
 Type /why [SYMBOL] to learn more!`;
 
-    await bot.sendMessage(msg.chat.id, scanMsg, { parse_mode: 'Markdown' });
-  } catch (error) {
-    logger.error('Scan error:', error);
-    await bot.sendMessage(msg.chat.id, '❌ Scan failed');
-  }
-});
-
-// /why [SYMBOL]
-bot.onText(/\/why (.+)/, async (msg, match) => {
-  const symbol = match[1].toUpperCase();
-  await bot.sendMessage(msg.chat.id, `🔍 Analyzing ${symbol}...`);
-
-  try {
-    const opportunities = await scanMarketForOpportunities({
-      targetCount: { high: 5, medium: 5, low: 5 },
-      baseAmount: 10000
-    });
-
-    const allStocks = [...opportunities.high, ...opportunities.medium, ...opportunities.low];
-    const stock = allStocks.find(s => s.symbol === symbol);
-
-    if (!stock) {
-      await bot.sendMessage(msg.chat.id, `❌ ${symbol} not in current opportunities`);
-      return;
+      await botInstance.sendMessage(msg.chat.id, scanMsg, { parse_mode: 'Markdown' });
+    } catch (error) {
+      logger.error('Scan error:', error);
+      await botInstance.sendMessage(msg.chat.id, '❌ Scan failed');
     }
+  });
 
-    await bot.sendMessage(msg.chat.id, formatBuyAlert(stock), { parse_mode: 'Markdown' });
-  } catch (error) {
-    logger.error('Why error:', error);
-    await bot.sendMessage(msg.chat.id, '❌ Analysis failed');
-  }
-});
+  // /why [SYMBOL]
+  botInstance.onText(/^\/why (.+)$/, async (msg, match) => {
+    try {
+      const symbol = match[1].toUpperCase();
+      await botInstance.sendMessage(msg.chat.id, `🔍 Analyzing ${symbol}...`);
 
-// /price [SYMBOL]
-bot.onText(/\/price (.+)/, async (msg, match) => {
-  const symbol = match[1].toUpperCase();
+      const opportunities = await scanMarketForOpportunities({
+        targetCount: { high: 5, medium: 5, low: 5 },
+        baseAmount: 10000
+      });
 
-  try {
-    const priceData = await getCurrentPrice(symbol, 'NSE');
-    
-    const priceMsg = `📊 *${symbol}*
+      const allStocks = [...opportunities.high, ...opportunities.medium, ...opportunities.low];
+      const stock = allStocks.find(s => s.symbol === symbol);
+
+      if (!stock) {
+        await botInstance.sendMessage(msg.chat.id, `❌ ${symbol} not in current opportunities`);
+        return;
+      }
+
+      await botInstance.sendMessage(msg.chat.id, formatBuyAlert(stock), { parse_mode: 'Markdown' });
+    } catch (error) {
+      logger.error('Why error:', error);
+      await botInstance.sendMessage(msg.chat.id, '❌ Analysis failed');
+    }
+  });
+
+  // /price [SYMBOL]
+  botInstance.onText(/^\/price (.+)$/, async (msg, match) => {
+    try {
+      const symbol = match[1].toUpperCase();
+
+      const priceData = await getCurrentPrice(symbol, 'NSE');
+      
+      const priceMsg = `📊 *${symbol}*
 
 *Price:* ${formatPrice(priceData.price)}
 *Change:* ${priceData.changePercent >= 0 ? '📈' : '📉'} ${formatPercent(priceData.changePercent)}
 
 Type /why ${symbol} for analysis`;
 
-    await bot.sendMessage(msg.chat.id, priceMsg, { parse_mode: 'Markdown' });
-  } catch (error) {
-    logger.error('Price error:', error);
-    await bot.sendMessage(msg.chat.id, `❌ Failed to get price for ${symbol}`);
-  }
-});
-
-// /portfolio
-bot.onText(/\/portfolio/, async (msg) => {
-  try {
-    const holdings = await prisma.holding.findMany();
-    
-    if (holdings.length === 0) {
-      await bot.sendMessage(msg.chat.id, '📭 Portfolio empty. Use /scan!');
-      return;
+      await botInstance.sendMessage(msg.chat.id, priceMsg, { parse_mode: 'Markdown' });
+    } catch (error) {
+      logger.error('Price error:', error);
+      await botInstance.sendMessage(msg.chat.id, `❌ Failed to get price for ${symbol}`);
     }
+  });
 
-    let totalValue = 0;
-    let totalInvested = 0;
+  // /portfolio
+  botInstance.onText(/^\/portfolio$/, async (msg) => {
+    try {
+      const holdings = await prisma.holding.findMany();
+      
+      if (holdings.length === 0) {
+        await botInstance.sendMessage(msg.chat.id, '🔭 Portfolio empty. Use /scan!');
+        return;
+      }
 
-    const lines = holdings.map(h => {
-      const invested = h.quantity * h.avgPrice;
-      const current = h.quantity * (h.currentPrice || h.avgPrice);
-      const pl = current - invested;
-      const plPercent = (pl / invested) * 100;
+      let totalValue = 0;
+      let totalInvested = 0;
 
-      totalValue += current;
-      totalInvested += invested;
+      const lines = holdings.map(h => {
+        const invested = h.quantity * h.avgPrice;
+        const current = h.quantity * (h.currentPrice || h.avgPrice);
+        const pl = current - invested;
+        const plPercent = (pl / invested) * 100;
 
-      return `*${h.symbol}*: ${h.quantity} @ ${formatPrice(h.avgPrice)}\nP&L: ${formatPrice(pl)} (${formatPercent(plPercent)})`;
-    }).join('\n\n');
+        totalValue += current;
+        totalInvested += invested;
 
-    const totalPL = totalValue - totalInvested;
-    const totalPLPercent = (totalPL / totalInvested) * 100;
+        return `*${h.symbol}*: ${h.quantity} @ ${formatPrice(h.avgPrice)}\nP&L: ${formatPrice(pl)} (${formatPercent(plPercent)})`;
+      }).join('\n\n');
 
-    const portfolioMsg = `💼 *PORTFOLIO*
+      const totalPL = totalValue - totalInvested;
+      const totalPLPercent = (totalPL / totalInvested) * 100;
+
+      const portfolioMsg = `💼 *PORTFOLIO*
 ━━━━━━━━━━━━━━━━━━━
 Value: ${formatPrice(totalValue)}
 Invested: ${formatPrice(totalInvested)}
@@ -264,52 +305,53 @@ P&L: ${formatPrice(totalPL)} (${formatPercent(totalPLPercent)})
 ━━━━━━━━━━━━━━━━━━━
 ${lines}`;
 
-    await bot.sendMessage(msg.chat.id, portfolioMsg, { parse_mode: 'Markdown' });
-  } catch (error) {
-    logger.error('Portfolio error:', error);
-    await bot.sendMessage(msg.chat.id, '❌ Failed to fetch portfolio');
-  }
-});
+      await botInstance.sendMessage(msg.chat.id, portfolioMsg, { parse_mode: 'Markdown' });
+    } catch (error) {
+      logger.error('Portfolio error:', error);
+      await botInstance.sendMessage(msg.chat.id, '❌ Failed to fetch portfolio');
+    }
+  });
 
-// /buy [SYMBOL] [QTY]
-bot.onText(/\/buy (\w+) (\d+)/, async (msg, match) => {
-  const symbol = match[1].toUpperCase();
-  const quantity = parseInt(match[2]);
+  // /buy [SYMBOL] [QTY]
+  botInstance.onText(/^\/buy (\w+) (\d+)$/, async (msg, match) => {
+    try {
+      const symbol = match[1].toUpperCase();
+      const quantity = parseInt(match[2]);
 
-  try {
-    const priceData = await getCurrentPrice(symbol, 'NSE');
-    
-    await prisma.holding.upsert({
-      where: { symbol },
-      update: { quantity: { increment: quantity } },
-      create: {
-        symbol,
-        exchange: 'NSE',
-        quantity,
-        avgPrice: priceData.price,
-        currentPrice: priceData.price
-      }
-    });
+      const priceData = await getCurrentPrice(symbol, 'NSE');
+      
+      await prisma.holding.upsert({
+        where: { symbol },
+        update: { quantity: { increment: quantity } },
+        create: {
+          symbol,
+          exchange: 'NSE',
+          quantity,
+          avgPrice: priceData.price,
+          currentPrice: priceData.price
+        }
+      });
 
-    const totalCost = quantity * priceData.price;
+      const totalCost = quantity * priceData.price;
 
-    await bot.sendMessage(msg.chat.id, `✅ *ADDED*
+      await botInstance.sendMessage(msg.chat.id, `✅ *ADDED*
 
 ${symbol}: ${quantity} shares
 Price: ${formatPrice(priceData.price)}
 Total: ${formatPrice(totalCost)}`, { parse_mode: 'Markdown' });
-  } catch (error) {
-    logger.error('Buy error:', error);
-    await bot.sendMessage(msg.chat.id, '❌ Purchase failed');
-  }
-});
+    } catch (error) {
+      logger.error('Buy error:', error);
+      await botInstance.sendMessage(msg.chat.id, '❌ Purchase failed');
+    }
+  });
 
-// /settings
-bot.onText(/\/settings/, async (msg) => {
-  const user = await getOrCreateUser(msg.from.id, msg.from.username, msg.from.first_name);
-  const prefs = user.preferences || {};
+  // /settings
+  botInstance.onText(/^\/settings$/, async (msg) => {
+    try {
+      const user = await getOrCreateUser(msg.from.id, msg.from.username, msg.from.first_name);
+      const prefs = user.preferences || {};
 
-  const settingsMsg = `⚙️ *Settings*
+      const settingsMsg = `⚙️ *Settings*
 
 *Alerts:*
 ${prefs.buySignalsHigh ? '✅' : '❌'} Buy (High risk)
@@ -321,28 +363,45 @@ ${prefs.eveningSummary ? '✅' : '❌'} Evening summary
 
 Use /mute to disable all alerts`;
 
-  await bot.sendMessage(msg.chat.id, settingsMsg, { parse_mode: 'Markdown' });
-});
-
-// /mute
-bot.onText(/\/mute/, async (msg) => {
-  await prisma.telegramUser.update({
-    where: { telegramId: msg.from.id.toString() },
-    data: { isMuted: true }
+      await botInstance.sendMessage(msg.chat.id, settingsMsg, { parse_mode: 'Markdown' });
+    } catch (error) {
+      logger.error('Settings error:', error);
+      await botInstance.sendMessage(msg.chat.id, '❌ Failed to show settings');
+    }
   });
 
-  await bot.sendMessage(msg.chat.id, '🔇 Alerts muted for 24h. Use /unmute to re-enable.');
-});
+  // /mute
+  botInstance.onText(/^\/mute$/, async (msg) => {
+    try {
+      await prisma.telegramUser.update({
+        where: { telegramId: msg.from.id.toString() },
+        data: { isMuted: true }
+      });
 
-// /unmute
-bot.onText(/\/unmute/, async (msg) => {
-  await prisma.telegramUser.update({
-    where: { telegramId: msg.from.id.toString() },
-    data: { isMuted: false }
+      await botInstance.sendMessage(msg.chat.id, '🔇 Alerts muted for 24h. Use /unmute to re-enable.');
+    } catch (error) {
+      logger.error('Mute error:', error);
+      await botInstance.sendMessage(msg.chat.id, '❌ Failed to mute');
+    }
   });
 
-  await bot.sendMessage(msg.chat.id, '🔔 Alerts enabled!');
-});
+  // /unmute
+  botInstance.onText(/^\/unmute$/, async (msg) => {
+    try {
+      await prisma.telegramUser.update({
+        where: { telegramId: msg.from.id.toString() },
+        data: { isMuted: false }
+      });
+
+      await botInstance.sendMessage(msg.chat.id, '🔔 Alerts enabled!');
+    } catch (error) {
+      logger.error('Unmute error:', error);
+      await botInstance.sendMessage(msg.chat.id, '❌ Failed to unmute');
+    }
+  });
+
+  logger.info('Telegram bot commands registered successfully');
+}
 
 // ============================================
 // ALERT FUNCTIONS (Called by cron jobs)
@@ -367,7 +426,8 @@ export async function sendAlert(userId, type, data) {
         message = data.message;
     }
 
-    await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+    const botInstance = getBot();
+    await botInstance.sendMessage(chatId, message, { parse_mode: 'Markdown' });
     logger.info(`Alert sent: ${type} to user ${userId}`);
   } catch (error) {
     logger.error(`Alert error for user ${userId}:`, error);
@@ -380,9 +440,10 @@ export async function broadcastMessage(message) {
       where: { isActive: true, isMuted: false }
     });
 
+    const botInstance = getBot();
     for (const user of users) {
       try {
-        await bot.sendMessage(parseInt(user.telegramId), message, { parse_mode: 'Markdown' });
+        await botInstance.sendMessage(parseInt(user.telegramId), message, { parse_mode: 'Markdown' });
         await new Promise(resolve => setTimeout(resolve, 100));
       } catch (error) {
         logger.error(`Broadcast error for ${user.telegramId}:`, error);
@@ -395,15 +456,4 @@ export async function broadcastMessage(message) {
   }
 }
 
-// ============================================
-// INITIALIZATION
-// ============================================
-
-export function initTelegramBot() {
-  logger.info('Telegram bot initialized');
-  
-  bot.on('error', (error) => logger.error('Bot error:', error));
-  bot.on('polling_error', (error) => logger.error('Polling error:', error));
-}
-
-export default bot;
+export default getBot();

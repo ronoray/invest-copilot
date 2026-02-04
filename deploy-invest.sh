@@ -99,10 +99,12 @@ docker compose up -d 2>&1 || fatal "Docker compose up failed"
 # ============================================================================
 # Health check
 # ============================================================================
+# Health check
 log "Waiting for services to be healthy..."
 ELAPSED=0
 while [ $ELAPSED -lt $HEALTH_TIMEOUT ]; do
-  if docker exec invest-api curl -sf "$HEALTH_URL" >/dev/null 2>&1; then
+  # Check if container is running and API started
+  if docker exec invest-api node -e "const http=require('http');http.get('http://localhost:3100/api/health',(r)=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))" 2>/dev/null; then
     log "✅ Health check passed"
     break
   fi

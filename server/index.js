@@ -25,6 +25,8 @@ import { hashPassword } from './services/authService.js';
 // Middleware imports
 import { authenticate, optionalAuth } from './middleware/auth.js';
 
+import { handleDeployWebhook, triggerManualDeploy } from './services/deploy-webhook.js';
+
 dotenv.config();
 
 const app = express();
@@ -96,6 +98,8 @@ app.use('/api/proposals', authenticate, proposalRoutes);
 app.use('/api/watchlist', authenticate, watchlistRoutes);
 app.use('/api/ai', authenticate, aiRoutes);
 app.use('/api/tax', authenticate, taxRoutes);
+app.post('/api/deploy/webhook', handleDeployWebhook);
+app.post('/api/deploy/trigger', authenticate, triggerManualDeploy);
 
 // ============================================
 // CRON JOBS

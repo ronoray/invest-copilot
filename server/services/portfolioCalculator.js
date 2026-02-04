@@ -14,15 +14,8 @@ const prisma = new PrismaClient();
  */
 export async function calculatePortfolioSummary() {
   try {
-    // Get all holdings
-    const holdings = await prisma.holding.findMany({
-      include: {
-        latestPrice: {
-          orderBy: { createdAt: 'desc' },
-          take: 1,
-        },
-      },
-    });
+    // Get all holdings (they already have currentPrice field)
+    const holdings = await prisma.holding.findMany();
 
     // Get all trades
     const trades = await prisma.trade.findMany({
@@ -34,10 +27,10 @@ export async function calculatePortfolioSummary() {
     let currentValue = 0;
     let realizedPL = 0;
 
-    // Current holdings
+    // Current holdings - use the currentPrice field directly
     holdings.forEach(holding => {
-      const invested = holding.quantity * holding.avgPrice;
-      const current = holding.quantity * (holding.latestPrice[0]?.price || holding.avgPrice);
+      const invested = holding.quantity * Number(holding.avgPrice);
+      const current = holding.quantity * Number(holding.currentPrice);
       
       totalInvested += invested;
       currentValue += current;

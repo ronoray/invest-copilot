@@ -4,7 +4,7 @@ import logger from './logger.js';
 
 const WEBHOOK_SECRET = process.env.GITHUB_WEBHOOK_SECRET;
 const TARGET_BRANCH = process.env.DEPLOY_BRANCH || 'main';
-const TRIGGER_FILE = '/tmp/invest-deploy-trigger.json';
+const TRIGGER_FILE = '/host-tmp/invest-deploy-trigger.json';
 
 function verifySignature(payload, signature) {
   if (!WEBHOOK_SECRET) {

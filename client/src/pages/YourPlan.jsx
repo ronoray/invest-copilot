@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Target, TrendingUp, DollarSign, PieChart, AlertCircle, CheckCircle } from 'lucide-react';
+import { api } from '../utils/api';
 
 export default function YourPlan() {
   const [loading, setLoading] = useState(true);
@@ -12,8 +13,7 @@ export default function YourPlan() {
   const loadPlan = async () => {
     setLoading(true);
     try {
-      const response = await fetch('/api/ai/portfolio-plan');
-      const data = await response.json();
+      const data = await api.get('/ai/portfolio-plan');
       setPlan(data);
     } catch (error) {
       console.error('Failed to load plan:', error);

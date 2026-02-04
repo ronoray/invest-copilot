@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Lightbulb, TrendingUp, AlertTriangle, Target, RefreshCw, Flame, Shield, Zap } from 'lucide-react';
+import { api } from '../utils/api';
 
 export default function AIRecommendations() {
   const [loading, setLoading] = useState(false);
@@ -13,8 +14,7 @@ export default function AIRecommendations() {
 
   const loadRecommendations = async () => {
     try {
-      const response = await fetch('/api/ai/recommendations');
-      const data = await response.json();
+      const data = await api.get('/ai/recommendations');
       
       if (data.categorized) {
         setOpportunities(data.categorized);
@@ -27,13 +27,10 @@ export default function AIRecommendations() {
   const handleScan = async () => {
     setLoading(true);
     try {
-      const response = await fetch('/api/ai/scan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ perCategory: 5, baseAmount: 10000 })
+      const data = await api.post('/ai/scan', { 
+        perCategory: 5, 
+        baseAmount: 10000 
       });
-      
-      const data = await response.json();
       
       if (data.opportunities) {
         setOpportunities(data.opportunities);

@@ -28,22 +28,119 @@ services:
     container_name: invest-api
     restart: unless-stopped
     environment:
+      # Server
       NODE_ENV: production
+      PORT: 3100
+      HOST: 0.0.0.0
+      
+      # Database
       DATABASE_URL: postgresql://${DB_USER:-investuser}:${DB_PASSWORD}@invest-postgres:5432/${DB_NAME:-investcopilot}
+      
+      # JWT
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
+      REFRESH_TOKEN_SECRET: ${REFRESH_TOKEN_SECRET}
+      REFRESH_TOKEN_EXPIRES_IN: ${REFRESH_TOKEN_EXPIRES_IN:-30d}
+      
+      # Admin
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
+      ADMIN_PHONE: ${ADMIN_PHONE}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      ADMIN_NAME: ${ADMIN_NAME:-Admin}
+      
+      # Security
+      BCRYPT_ROUNDS: ${BCRYPT_ROUNDS:-10}
+      OTP_EXPIRES_MINUTES: ${OTP_EXPIRES_MINUTES:-10}
+      MAX_LOGIN_ATTEMPTS: ${MAX_LOGIN_ATTEMPTS:-5}
+      LOCKOUT_DURATION_MINUTES: ${LOCKOUT_DURATION_MINUTES:-15}
+      SESSION_TIMEOUT_MINUTES: ${SESSION_TIMEOUT_MINUTES:-30}
+      SESSION_SECRET: ${SESSION_SECRET}
+      
+      # API Keys
       ALPHA_VANTAGE_KEY: ${ALPHA_VANTAGE_KEY}
       CLAUDE_API_KEY: ${CLAUDE_API_KEY}
-      PORT: 3100
+      
+      # Telegram
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_ADMIN_ID: ${TELEGRAM_ADMIN_ID}
+      
+      # Email (GoDaddy)
+      EMAIL_HOST: ${EMAIL_HOST:-smtpout.secureserver.net}
+      EMAIL_PORT: ${EMAIL_PORT:-587}
+      EMAIL_SECURE: ${EMAIL_SECURE:-true}
+      EMAIL_USER: ${EMAIL_USER}
+      EMAIL_PASSWORD: ${EMAIL_PASSWORD}
+      EMAIL_FROM_NAME: ${EMAIL_FROM_NAME:-Investment Co-Pilot}
+      EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS}
+      
+      # MSG91
+      MSG91_AUTH_KEY: ${MSG91_AUTH_KEY}
+      MSG91_SENDER_ID: ${MSG91_SENDER_ID:-HNGRYT}
+      MSG91_ROUTE: ${MSG91_ROUTE:-4}
+      MSG91_OTP_TEMPLATE_ID: ${MSG91_OTP_TEMPLATE_ID}
+      MSG91_BUY_ALERT_TEMPLATE_ID: ${MSG91_BUY_ALERT_TEMPLATE_ID}
+      MSG91_SELL_ALERT_TEMPLATE_ID: ${MSG91_SELL_ALERT_TEMPLATE_ID}
+      MSG91_TARGET_HIT_TEMPLATE_ID: ${MSG91_TARGET_HIT_TEMPLATE_ID}
+      MSG91_STOP_LOSS_TEMPLATE_ID: ${MSG91_STOP_LOSS_TEMPLATE_ID}
+      MSG91_WHATSAPP_TEMPLATE_ID: ${MSG91_WHATSAPP_TEMPLATE_ID}
+      MSG91_WHATSAPP_NUMBER: ${MSG91_WHATSAPP_NUMBER}
+      
+      # URLs
+      FRONTEND_URL: ${FRONTEND_URL:-https://invest.hungrytimes.in}
+      BACKEND_URL: ${BACKEND_URL:-https://invest.hungrytimes.in/api}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS}
+      
+      # Cookies
+      COOKIE_DOMAIN: ${COOKIE_DOMAIN:-.hungrytimes.in}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      COOKIE_SAME_SITE: ${COOKIE_SAME_SITE:-strict}
+      
+      # Rate Limiting
+      RATE_LIMIT_WINDOW_MS: ${RATE_LIMIT_WINDOW_MS:-900000}
+      RATE_LIMIT_MAX_REQUESTS: ${RATE_LIMIT_MAX_REQUESTS:-100}
+      
+      # Notifications
+      ENABLE_EMAIL_NOTIFICATIONS: ${ENABLE_EMAIL_NOTIFICATIONS:-true}
+      ENABLE_SMS_NOTIFICATIONS: ${ENABLE_SMS_NOTIFICATIONS:-false}
+      ENABLE_WHATSAPP_NOTIFICATIONS: ${ENABLE_WHATSAPP_NOTIFICATIONS:-false}
+      ENABLE_TELEGRAM_NOTIFICATIONS: ${ENABLE_TELEGRAM_NOTIFICATIONS:-true}
+      
+      # Cron
+      ENABLE_CRON: ${ENABLE_CRON:-true}
+      
+      # Logging
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_FILE_PATH: ${LOG_FILE_PATH:-./logs}
+      
+      # Backups
+      BACKUP_ENABLED: ${BACKUP_ENABLED:-true}
+      BACKUP_SCHEDULE: ${BACKUP_SCHEDULE:-0 2 * * *}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
+      
+      # Cloudflare
+      CLOUDFLARE_ACCESS_ENABLED: ${CLOUDFLARE_ACCESS_ENABLED:-false}
+      CLOUDFLARE_ACCESS_AUDIENCE: ${CLOUDFLARE_ACCESS_AUDIENCE}
+      CLOUDFLARE_ACCESS_TEAM_DOMAIN: ${CLOUDFLARE_ACCESS_TEAM_DOMAIN}
+      
+      # Deployment
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET}
+      
     depends_on:
       invest-postgres:
         condition: service_healthy
     networks:
       - traefik-network
+    volumes:
+      - invest_logs:/app/logs
+      - invest_backups:/backups
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.invest-api.rule=Host(`invest.hungrytimes.in`) && PathPrefix(`/api`)"
       - "traefik.http.routers.invest-api.entrypoints=websecure"
       - "traefik.http.routers.invest-api.tls.certresolver=letsencrypt"
       - "traefik.http.services.invest-api.loadbalancer.server.port=3100"
+      # Middleware for API (optional)
+      - "traefik.http.middlewares.invest-api-stripprefix.stripprefix.prefixes=/api"
 
   # Frontend
   invest-web:
@@ -52,6 +149,8 @@ services:
       dockerfile: docker/Dockerfile.client
     container_name: invest-web
     restart: unless-stopped
+    environment:
+      VITE_API_URL: https://invest.hungrytimes.in/api
     networks:
       - traefik-network
     labels:
@@ -60,9 +159,16 @@ services:
       - "traefik.http.routers.invest-web.entrypoints=websecure"
       - "traefik.http.routers.invest-web.tls.certresolver=letsencrypt"
       - "traefik.http.services.invest-web.loadbalancer.server.port=80"
+      # Security headers
+      - "traefik.http.middlewares.invest-security.headers.stsSeconds=31536000"
+      - "traefik.http.middlewares.invest-security.headers.stsIncludeSubdomains=true"
+      - "traefik.http.middlewares.invest-security.headers.stsPreload=true"
+      - "traefik.http.routers.invest-web.middlewares=invest-security"
 
 volumes:
   invest_postgres_data:
+  invest_logs:
+  invest_backups:
 
 networks:
   traefik-network:

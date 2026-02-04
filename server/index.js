@@ -6,14 +6,24 @@ import cron from 'node-cron';
 import { PrismaClient } from '@prisma/client';
 
 // Route imports
+import authRoutes from './routes/auth.js';
 import portfolioRoutes from './routes/portfolio.js';
 import marketRoutes from './routes/market.js';
 import proposalRoutes from './routes/proposal.js';
 import watchlistRoutes from './routes/watchlist.js';
+import aiRoutes from './routes/ai.js';
+import taxRoutes from './routes/tax.js';
+import portfolioCalcRoutes from './routes/portfolioCalc.js';
 
 // Service imports
 import { scanMarket } from './jobs/marketScanner.js';
+import { initTelegramBot } from './services/telegramBot.js';
+import { initTelegramAlerts } from './jobs/telegramAlerts.js';
 import logger from './services/logger.js';
+import { hashPassword } from './services/authService.js';
+
+// Middleware imports
+import { authenticate, optionalAuth } from './middleware/auth.js';
 
 dotenv.config();
 
@@ -21,9 +31,22 @@ const app = express();
 const prisma = new PrismaClient();
 const PORT = process.env.PORT || 3100;
 
-// Middleware
+// ============================================
+// MIDDLEWARE
+// ============================================
+
 app.use(helmet());
-app.use(cors());
+
+// CORS Configuration
+const corsOptions = {
+  origin: process.env.ALLOWED_ORIGINS?.split(',') || [
+    'https://invest.hungrytimes.in',
+    'http://localhost:3101'
+  ],
+  credentials: true
+};
+app.use(cors(corsOptions));
+
 app.use(express.json());
 
 // Request logging
@@ -32,23 +55,53 @@ app.use((req, res, next) => {
   next();
 });
 
-// Health check
+// ============================================
+// HEALTH CHECKS
+// ============================================
+
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    version: '1.0.0'
+  });
 });
 
 app.get('/api/health', (req, res) => {
-  res.json({ ok: true, timestamp: new Date().toISOString() });
+  res.json({ 
+    ok: true, 
+    timestamp: new Date().toISOString(),
+    services: {
+      database: 'connected',
+      email: process.env.ENABLE_EMAIL_NOTIFICATIONS === 'true' ? 'enabled' : 'disabled',
+      sms: process.env.ENABLE_SMS_NOTIFICATIONS === 'true' ? 'enabled' : 'disabled',
+      whatsapp: process.env.ENABLE_WHATSAPP_NOTIFICATIONS === 'true' ? 'enabled' : 'disabled',
+      telegram: process.env.ENABLE_TELEGRAM_NOTIFICATIONS === 'true' ? 'enabled' : 'disabled'
+    }
+  });
 });
 
-// API Routes
-app.use('/api/portfolio', portfolioRoutes);
-app.use('/api/market', marketRoutes);
-app.use('/api/proposals', proposalRoutes);
-app.use('/api/watchlist', watchlistRoutes);
+// ============================================
+// API ROUTES
+// ============================================
 
-// Cron Jobs
-if (process.env.NODE_ENV === 'production') {
+// Public routes
+app.use('/api/auth', authRoutes);
+
+// Protected routes (require authentication)
+app.use('/api/portfolio', authenticate, portfolioRoutes);
+app.use('/api/portfolio-calc', authenticate, portfolioCalcRoutes);
+app.use('/api/market', optionalAuth, marketRoutes);
+app.use('/api/proposals', authenticate, proposalRoutes);
+app.use('/api/watchlist', authenticate, watchlistRoutes);
+app.use('/api/ai', authenticate, aiRoutes);
+app.use('/api/tax', authenticate, taxRoutes);
+
+// ============================================
+// CRON JOBS
+// ============================================
+
+if (process.env.NODE_ENV === 'production' || process.env.ENABLE_CRON === 'true') {
   // Market scanner - every 5 minutes during market hours (9:15 AM - 3:30 PM IST)
   cron.schedule('*/5 9-15 * * 1-5', async () => {
     try {
@@ -60,11 +113,34 @@ if (process.env.NODE_ENV === 'production') {
   }, {
     timezone: 'Asia/Kolkata'
   });
-  
+
   logger.info('Cron jobs initialized');
 }
 
-// Error handling
+// ============================================
+// TELEGRAM BOT INTEGRATION
+// ============================================
+
+if (process.env.NODE_ENV !== 'test' && process.env.TELEGRAM_BOT_TOKEN) {
+  try {
+    initTelegramBot();
+    initTelegramAlerts();
+    logger.info('Telegram bot integrated');
+  } catch (error) {
+    logger.error('Telegram bot initialization error:', error);
+  }
+}
+
+// ============================================
+// ERROR HANDLING
+// ============================================
+
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({ error: 'Route not found' });
+});
+
+// Global error handler
 app.use((err, req, res, next) => {
   logger.error('Server error:', err);
   res.status(500).json({ 
@@ -73,15 +149,88 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Start server
-app.listen(PORT, () => {
-  logger.info(`Investment API running on port ${PORT}`);
-  logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
-});
+// ============================================
+// DATABASE INITIALIZATION
+// ============================================
 
-// Graceful shutdown
+async function initializeDatabase() {
+  try {
+    // Test database connection
+    await prisma.$connect();
+    logger.info('Database connected');
+
+    // Create admin user if doesn't exist
+    if (process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD) {
+      const adminExists = await prisma.user.findUnique({
+        where: { email: process.env.ADMIN_EMAIL }
+      });
+
+      if (!adminExists) {
+        const hashedPassword = await hashPassword(process.env.ADMIN_PASSWORD);
+        
+        await prisma.user.create({
+          data: {
+            email: process.env.ADMIN_EMAIL,
+            phone: process.env.ADMIN_PHONE || null,
+            password: hashedPassword,
+            name: process.env.ADMIN_NAME || 'Admin',
+            role: 'admin',
+            isActive: true,
+            emailVerified: true,
+            phoneVerified: false
+          }
+        });
+
+        logger.info('Admin user created');
+      }
+    }
+  } catch (error) {
+    logger.error('Database initialization error:', error);
+    process.exit(1);
+  }
+}
+
+// ============================================
+// SERVER STARTUP
+// ============================================
+
+async function startServer() {
+  try {
+    await initializeDatabase();
+
+    app.listen(PORT, () => {
+      logger.info(`Investment Co-Pilot API running on port ${PORT}`);
+      logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
+      logger.info(`Frontend URL: ${process.env.FRONTEND_URL}`);
+      
+      // Log service status
+      logger.info('Services status:');
+      logger.info(`  Email: ${process.env.ENABLE_EMAIL_NOTIFICATIONS === 'true' ? 'Enabled' : 'Disabled'}`);
+      logger.info(`  SMS: ${process.env.ENABLE_SMS_NOTIFICATIONS === 'true' ? 'Enabled' : 'Disabled'}`);
+      logger.info(`  WhatsApp: ${process.env.ENABLE_WHATSAPP_NOTIFICATIONS === 'true' ? 'Enabled' : 'Disabled'}`);
+      logger.info(`  Telegram: ${process.env.ENABLE_TELEGRAM_NOTIFICATIONS === 'true' ? 'Enabled' : 'Disabled'}`);
+    });
+  } catch (error) {
+    logger.error('Server startup error:', error);
+    process.exit(1);
+  }
+}
+
+// ============================================
+// GRACEFUL SHUTDOWN
+// ============================================
+
 process.on('SIGTERM', async () => {
   logger.info('SIGTERM received, closing gracefully...');
   await prisma.$disconnect();
   process.exit(0);
 });
+
+process.on('SIGINT', async () => {
+  logger.info('SIGINT received, closing gracefully...');
+  await prisma.$disconnect();
+  process.exit(0);
+});
+
+// Start the server
+startServer();

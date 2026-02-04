@@ -1,3 +1,6 @@
+// Investment Co-Pilot - Complete Database Schema
+// PostgreSQL with full authentication & integrations
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -7,119 +10,201 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// Current portfolio holdings
+// ============================================
+// USER & AUTHENTICATION
+// ============================================
+
+model User {
+  id            Int       @id @default(autoincrement())
+  email         String    @unique
+  phone         String?   @unique
+  password      String
+  name          String
+  role          String    @default("user") // user, admin
+  
+  // Verification
+  isActive      Boolean   @default(true)
+  emailVerified Boolean   @default(false)
+  phoneVerified Boolean   @default(false)
+  
+  // Security
+  lastLoginAt   DateTime?
+  loginAttempts Int       @default(0)
+  lockedUntil   DateTime?
+  
+  // Password Reset
+  resetToken    String?
+  resetExpires  DateTime?
+  
+  // Preferences
+  preferences   Json      @default("{}")
+  
+  // Timestamps
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  sessions      Session[]
+  holdings      Holding[]
+  watchlist     Watchlist[]
+  telegramUser  TelegramUser?
+  auditLogs     AuditLog[]
+
+  @@index([email])
+  @@index([phone])
+  @@index([isActive])
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  userId    Int
+  token     String   @unique
+  ipAddress String?
+  userAgent String?
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId])
+  @@index([token])
+  @@index([expiresAt])
+}
+
+model OTP {
+  id         Int      @id @default(autoincrement())
+  identifier String   // email or phone
+  code       String
+  type       String   // login, verify_email, verify_phone, reset_password
+  expiresAt  DateTime
+  used       Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  
+  @@index([identifier, type])
+  @@index([code])
+  @@index([expiresAt])
+}
+
+// ============================================
+// PORTFOLIO & HOLDINGS
+// ============================================
+
 model Holding {
-  id            Int      @id @default(autoincrement())
-  symbol        String   // e.g., "RELIANCE", "TCS"
-  exchange      String   @default("NSE") // NSE or BSE
-  quantity      Int
-  avgPrice      Decimal  @db.Decimal(10, 2)
-  currentPrice  Decimal  @db.Decimal(10, 2)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  @@unique([symbol, exchange])
-  @@index([symbol])
-}
-
-// Trade execution history
-model Trade {
-  id            Int      @id @default(autoincrement())
-  symbol        String
-  exchange      String   @default("NSE")
-  type          String   // BUY or SELL
-  quantity      Int
-  price         Decimal  @db.Decimal(10, 2)
-  totalAmount   Decimal  @db.Decimal(10, 2)
-  charges       Decimal  @db.Decimal(10, 2) @default(0)
-  notes         String?
-  proposalId    Int?     // Link to AI proposal if applicable
-  executedAt    DateTime @default(now())
+  id           Int      @id @default(autoincrement())
+  userId       Int
+  symbol       String
+  exchange     String   @default("NSE")
+  quantity     Int
+  avgPrice     Float
+  currentPrice Float?
+  targetPrice  Float?
+  stopLoss     Float?
+  notes        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
   
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId, symbol, exchange])
+  @@index([userId])
   @@index([symbol])
-  @@index([executedAt])
 }
 
-// Watchlist - stocks to monitor
 model Watchlist {
-  id            Int      @id @default(autoincrement())
-  symbol        String   @unique
-  exchange      String   @default("NSE")
-  targetPrice   Decimal? @db.Decimal(10, 2)
-  stopLoss      Decimal? @db.Decimal(10, 2)
-  notes         String?
-  addedAt       DateTime @default(now())
-
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  symbol    String
+  exchange  String   @default("NSE")
+  notes     String?
+  alertAt   Float?
+  createdAt DateTime @default(now())
+  
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId, symbol, exchange])
+  @@index([userId])
   @@index([symbol])
 }
 
-// AI-generated trade proposals
-model Proposal {
-  id            Int      @id @default(autoincrement())
-  symbol        String
-  exchange      String   @default("NSE")
-  type          String   // BUY or SELL
-  quantity      Int
-  targetPrice   Decimal  @db.Decimal(10, 2)
-  stopLoss      Decimal  @db.Decimal(10, 2)
-  confidence    Int      // 0-100
-  reasoning     Json     // AI analysis details
-  status        String   @default("PENDING") // PENDING, APPROVED, REJECTED, EXECUTED
-  createdAt     DateTime @default(now())
-  reviewedAt    DateTime?
+// ============================================
+// TELEGRAM INTEGRATION
+// ============================================
+
+model TelegramUser {
+  id          Int      @id @default(autoincrement())
+  userId      Int      @unique
+  telegramId  String   @unique
+  username    String?
+  firstName   String?
+  isActive    Boolean  @default(true)
+  isMuted     Boolean  @default(false)
+  preferences Json     @default("{}")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  alertHistory AlertHistory[]
+
+  @@index([telegramId])
+  @@index([isActive])
+}
+
+model AlertHistory {
+  id             Int      @id @default(autoincrement())
+  telegramUserId Int
+  symbol         String
+  alertType      String   // BUY_SIGNAL, SELL_SIGNAL, TARGET_HIT, STOP_LOSS
+  price          Float
+  sent           Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  telegramUser TelegramUser @relation(fields: [telegramUserId], references: [id], onDelete: Cascade)
+
+  @@index([telegramUserId, createdAt])
+  @@index([symbol, alertType, createdAt])
+}
+
+// ============================================
+// NOTIFICATIONS
+// ============================================
+
+model Notification {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  channel   String   // email, sms, whatsapp, telegram
+  type      String   // buy_alert, sell_alert, daily_digest, otp
+  subject   String?
+  message   String
+  status    String   @default("pending") // pending, sent, failed
+  sentAt    DateTime?
+  error     String?
+  metadata  Json?
+  createdAt DateTime @default(now())
   
-  @@index([status])
+  @@index([userId, status])
+  @@index([channel, status])
+  @@index([type, status])
   @@index([createdAt])
 }
 
-// Price alerts sent to user
-model Alert {
-  id            Int      @id @default(autoincrement())
-  symbol        String
-  alertType     String   // PRICE_TARGET, STOP_LOSS, NEWS, AI_SIGNAL
-  message       String
-  data          Json?    // Additional context
-  sentAt        DateTime @default(now())
-  readAt        DateTime?
+// ============================================
+// AUDIT LOG
+// ============================================
 
-  @@index([sentAt])
-}
-
-// Market data cache (5-min candles)
-model MarketData {
-  id            Int      @id @default(autoincrement())
-  symbol        String
-  exchange      String   @default("NSE")
-  open          Decimal  @db.Decimal(10, 2)
-  high          Decimal  @db.Decimal(10, 2)
-  low           Decimal  @db.Decimal(10, 2)
-  close         Decimal  @db.Decimal(10, 2)
-  volume        BigInt
-  timestamp     DateTime
+model AuditLog {
+  id        Int      @id @default(autoincrement())
+  userId    Int?
+  action    String   // login, logout, create_holding, delete_holding, etc.
+  entity    String?  // holding, watchlist, user
+  entityId  Int?
+  metadata  Json?
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
   
-  @@unique([symbol, exchange, timestamp])
-  @@index([symbol, timestamp])
-}
-
-// Decision journal for learning
-model Journal {
-  id            Int      @id @default(autoincrement())
-  tradeId       Int?
-  symbol        String
-  decision      String   // What you decided
-  reasoning     String   // Why you decided
-  outcome       String?  // What happened
-  learnings     String?  // What you learned
-  createdAt     DateTime @default(now())
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
   
-  @@index([symbol])
+  @@index([userId, createdAt])
+  @@index([action])
   @@index([createdAt])
-}
-
-// System configuration
-model Config {
-  id            Int      @id @default(autoincrement())
-  key           String   @unique
-  value         Json
-  updatedAt     DateTime @updatedAt
 }

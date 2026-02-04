@@ -1,0 +1,409 @@
+import TelegramBot from 'node-telegram-bot-api';
+import { PrismaClient } from '@prisma/client';
+import logger from './logger.js';
+import { getCurrentPrice } from './marketData.js';
+import { scanMarketForOpportunities } from './advancedScreener.js';
+
+const prisma = new PrismaClient();
+const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
+
+/**
+ * Investment Co-Pilot Telegram Bot
+ * Complete implementation with all features
+ */
+
+// ============================================
+// UTILITIES & FORMATTING
+// ============================================
+
+function formatPrice(price) {
+  return `₹${price.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function formatPercent(percent) {
+  const sign = percent >= 0 ? '+' : '';
+  return `${sign}${percent.toFixed(2)}%`;
+}
+
+function getRiskEmoji(category) {
+  return category === 'high' ? '🔥' : category === 'medium' ? '⚡' : '🛡️';
+}
+
+async function getOrCreateUser(telegramId, username, firstName) {
+  let user = await prisma.telegramUser.findUnique({
+    where: { telegramId: telegramId.toString() }
+  });
+
+  if (!user) {
+    user = await prisma.telegramUser.create({
+      data: {
+        telegramId: telegramId.toString(),
+        username,
+        firstName,
+        isActive: true,
+        preferences: {
+          buySignalsHigh: true,
+          buySignalsMedium: true,
+          buySignalsLow: true,
+          sellSignals: true,
+          dailyDigest: true,
+          eveningSummary: true
+        }
+      }
+    });
+    logger.info(`New Telegram user: ${firstName}`);
+  }
+
+  return user;
+}
+
+// ============================================
+// ALERT MESSAGE FORMATTERS
+// ============================================
+
+function formatBuyAlert(stock) {
+  return `${getRiskEmoji(stock.riskCategory)} *BUY ALERT - ${stock.symbol}*
+━━━━━━━━━━━━━━━━━━━
+Price: ${formatPrice(stock.price)}
+Risk: ${stock.riskCategory.toUpperCase()} (${stock.riskScore}/10)
+
+*Why Buy?*
+${stock.simpleWhy.map(r => `✓ ${r}`).join('\n')}
+
+*Investment:* ${formatPrice(stock.suggestedAmount)}
+*Target:* ${formatPrice(stock.targetPrice)} (${formatPercent(((stock.targetPrice - stock.price) / stock.price) * 100)})
+*Stop Loss:* ${formatPrice(stock.stopLoss)} (${formatPercent(((stock.stopLoss - stock.price) / stock.price) * 100)})
+
+*Expected Returns:*
+🚀 Best: ${stock.expectedReturns.best}
+📊 Likely: ${stock.expectedReturns.likely}
+📉 Worst: ${stock.expectedReturns.worst}`;
+}
+
+function formatSellAlert(holding, currentPrice, reason) {
+  const profit = (currentPrice - holding.avgPrice) * holding.quantity;
+  const profitPercent = ((currentPrice - holding.avgPrice) / holding.avgPrice) * 100;
+  
+  return `💰 *SELL ALERT - ${holding.symbol}*
+━━━━━━━━━━━━━━━━━━━
+Current: ${formatPrice(currentPrice)}
+Your Buy: ${formatPrice(holding.avgPrice)}
+Profit: ${formatPrice(profit)} (${formatPercent(profitPercent)})
+
+*Reason:* ${reason}
+
+${profitPercent > 0 ? '✅ Book profit now!' : '🛑 Cut losses!'}`;
+}
+
+// ============================================
+// BOT COMMANDS
+// ============================================
+
+// /start
+bot.onText(/\/start/, async (msg) => {
+  await getOrCreateUser(msg.from.id, msg.from.username, msg.from.first_name);
+
+  const welcomeMsg = `👋 *Welcome to Investment Co-Pilot!*
+
+I'm your AI investment assistant.
+
+*Features:*
+✅ AI stock recommendations
+✅ Real-time buy/sell alerts
+✅ Portfolio tracking
+✅ Tax optimization
+
+*Quick Start:*
+/scan - Find opportunities
+/portfolio - View holdings
+/help - All commands
+
+Let's build wealth! 💰`;
+
+  await bot.sendMessage(msg.chat.id, welcomeMsg, { parse_mode: 'Markdown' });
+});
+
+// /help
+bot.onText(/\/help/, async (msg) => {
+  const helpMsg = `📚 *Commands*
+
+*Portfolio:*
+/portfolio - View holdings
+/pnl - Profit & loss
+/plan - Investment plan
+
+*Market:*
+/scan - AI market scan
+/opportunities - Top 5 picks
+/price [SYMBOL] - Get price
+/why [SYMBOL] - Analysis
+
+*Actions:*
+/buy [SYMBOL] [QTY] - Add stock
+/sell [SYMBOL] [QTY] - Remove stock
+
+*Settings:*
+/settings - Preferences
+/mute - Disable alerts
+/unmute - Enable alerts`;
+
+  await bot.sendMessage(msg.chat.id, helpMsg, { parse_mode: 'Markdown' });
+});
+
+// /scan
+bot.onText(/\/scan/, async (msg) => {
+  await bot.sendMessage(msg.chat.id, '🔍 Scanning market...');
+
+  try {
+    const opportunities = await scanMarketForOpportunities({
+      targetCount: { high: 3, medium: 3, low: 3 },
+      baseAmount: 10000
+    });
+
+    const scanMsg = `✅ *Scan Complete!*
+
+🔥 *High Risk (${opportunities.high.length}):*
+${opportunities.high.map(s => `• ${s.symbol} - ${formatPrice(s.price)}`).join('\n')}
+
+⚡ *Medium Risk (${opportunities.medium.length}):*
+${opportunities.medium.map(s => `• ${s.symbol} - ${formatPrice(s.price)}`).join('\n')}
+
+🛡️ *Low Risk (${opportunities.low.length}):*
+${opportunities.low.map(s => `• ${s.symbol} - ${formatPrice(s.price)}`).join('\n')}
+
+Type /why [SYMBOL] to learn more!`;
+
+    await bot.sendMessage(msg.chat.id, scanMsg, { parse_mode: 'Markdown' });
+  } catch (error) {
+    logger.error('Scan error:', error);
+    await bot.sendMessage(msg.chat.id, '❌ Scan failed');
+  }
+});
+
+// /why [SYMBOL]
+bot.onText(/\/why (.+)/, async (msg, match) => {
+  const symbol = match[1].toUpperCase();
+  await bot.sendMessage(msg.chat.id, `🔍 Analyzing ${symbol}...`);
+
+  try {
+    const opportunities = await scanMarketForOpportunities({
+      targetCount: { high: 5, medium: 5, low: 5 },
+      baseAmount: 10000
+    });
+
+    const allStocks = [...opportunities.high, ...opportunities.medium, ...opportunities.low];
+    const stock = allStocks.find(s => s.symbol === symbol);
+
+    if (!stock) {
+      await bot.sendMessage(msg.chat.id, `❌ ${symbol} not in current opportunities`);
+      return;
+    }
+
+    await bot.sendMessage(msg.chat.id, formatBuyAlert(stock), { parse_mode: 'Markdown' });
+  } catch (error) {
+    logger.error('Why error:', error);
+    await bot.sendMessage(msg.chat.id, '❌ Analysis failed');
+  }
+});
+
+// /price [SYMBOL]
+bot.onText(/\/price (.+)/, async (msg, match) => {
+  const symbol = match[1].toUpperCase();
+
+  try {
+    const priceData = await getCurrentPrice(symbol, 'NSE');
+    
+    const priceMsg = `📊 *${symbol}*
+
+*Price:* ${formatPrice(priceData.price)}
+*Change:* ${priceData.changePercent >= 0 ? '📈' : '📉'} ${formatPercent(priceData.changePercent)}
+
+Type /why ${symbol} for analysis`;
+
+    await bot.sendMessage(msg.chat.id, priceMsg, { parse_mode: 'Markdown' });
+  } catch (error) {
+    logger.error('Price error:', error);
+    await bot.sendMessage(msg.chat.id, `❌ Failed to get price for ${symbol}`);
+  }
+});
+
+// /portfolio
+bot.onText(/\/portfolio/, async (msg) => {
+  try {
+    const holdings = await prisma.holding.findMany();
+    
+    if (holdings.length === 0) {
+      await bot.sendMessage(msg.chat.id, '📭 Portfolio empty. Use /scan!');
+      return;
+    }
+
+    let totalValue = 0;
+    let totalInvested = 0;
+
+    const lines = holdings.map(h => {
+      const invested = h.quantity * h.avgPrice;
+      const current = h.quantity * (h.currentPrice || h.avgPrice);
+      const pl = current - invested;
+      const plPercent = (pl / invested) * 100;
+
+      totalValue += current;
+      totalInvested += invested;
+
+      return `*${h.symbol}*: ${h.quantity} @ ${formatPrice(h.avgPrice)}\nP&L: ${formatPrice(pl)} (${formatPercent(plPercent)})`;
+    }).join('\n\n');
+
+    const totalPL = totalValue - totalInvested;
+    const totalPLPercent = (totalPL / totalInvested) * 100;
+
+    const portfolioMsg = `💼 *PORTFOLIO*
+━━━━━━━━━━━━━━━━━━━
+Value: ${formatPrice(totalValue)}
+Invested: ${formatPrice(totalInvested)}
+P&L: ${formatPrice(totalPL)} (${formatPercent(totalPLPercent)})
+
+━━━━━━━━━━━━━━━━━━━
+${lines}`;
+
+    await bot.sendMessage(msg.chat.id, portfolioMsg, { parse_mode: 'Markdown' });
+  } catch (error) {
+    logger.error('Portfolio error:', error);
+    await bot.sendMessage(msg.chat.id, '❌ Failed to fetch portfolio');
+  }
+});
+
+// /buy [SYMBOL] [QTY]
+bot.onText(/\/buy (\w+) (\d+)/, async (msg, match) => {
+  const symbol = match[1].toUpperCase();
+  const quantity = parseInt(match[2]);
+
+  try {
+    const priceData = await getCurrentPrice(symbol, 'NSE');
+    
+    await prisma.holding.upsert({
+      where: { symbol },
+      update: { quantity: { increment: quantity } },
+      create: {
+        symbol,
+        exchange: 'NSE',
+        quantity,
+        avgPrice: priceData.price,
+        currentPrice: priceData.price
+      }
+    });
+
+    const totalCost = quantity * priceData.price;
+
+    await bot.sendMessage(msg.chat.id, `✅ *ADDED*
+
+${symbol}: ${quantity} shares
+Price: ${formatPrice(priceData.price)}
+Total: ${formatPrice(totalCost)}`, { parse_mode: 'Markdown' });
+  } catch (error) {
+    logger.error('Buy error:', error);
+    await bot.sendMessage(msg.chat.id, '❌ Purchase failed');
+  }
+});
+
+// /settings
+bot.onText(/\/settings/, async (msg) => {
+  const user = await getOrCreateUser(msg.from.id, msg.from.username, msg.from.first_name);
+  const prefs = user.preferences || {};
+
+  const settingsMsg = `⚙️ *Settings*
+
+*Alerts:*
+${prefs.buySignalsHigh ? '✅' : '❌'} Buy (High risk)
+${prefs.buySignalsMedium ? '✅' : '❌'} Buy (Medium risk)
+${prefs.buySignalsLow ? '✅' : '❌'} Buy (Low risk)
+${prefs.sellSignals ? '✅' : '❌'} Sell signals
+${prefs.dailyDigest ? '✅' : '❌'} Daily digest
+${prefs.eveningSummary ? '✅' : '❌'} Evening summary
+
+Use /mute to disable all alerts`;
+
+  await bot.sendMessage(msg.chat.id, settingsMsg, { parse_mode: 'Markdown' });
+});
+
+// /mute
+bot.onText(/\/mute/, async (msg) => {
+  await prisma.telegramUser.update({
+    where: { telegramId: msg.from.id.toString() },
+    data: { isMuted: true }
+  });
+
+  await bot.sendMessage(msg.chat.id, '🔇 Alerts muted for 24h. Use /unmute to re-enable.');
+});
+
+// /unmute
+bot.onText(/\/unmute/, async (msg) => {
+  await prisma.telegramUser.update({
+    where: { telegramId: msg.from.id.toString() },
+    data: { isMuted: false }
+  });
+
+  await bot.sendMessage(msg.chat.id, '🔔 Alerts enabled!');
+});
+
+// ============================================
+// ALERT FUNCTIONS (Called by cron jobs)
+// ============================================
+
+export async function sendAlert(userId, type, data) {
+  try {
+    const user = await prisma.telegramUser.findUnique({ where: { id: userId } });
+    if (!user || !user.isActive || user.isMuted) return;
+
+    const chatId = parseInt(user.telegramId);
+    let message;
+
+    switch(type) {
+      case 'BUY_SIGNAL':
+        message = formatBuyAlert(data);
+        break;
+      case 'SELL_SIGNAL':
+        message = formatSellAlert(data.holding, data.currentPrice, data.reason);
+        break;
+      default:
+        message = data.message;
+    }
+
+    await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+    logger.info(`Alert sent: ${type} to user ${userId}`);
+  } catch (error) {
+    logger.error(`Alert error for user ${userId}:`, error);
+  }
+}
+
+export async function broadcastMessage(message) {
+  try {
+    const users = await prisma.telegramUser.findMany({
+      where: { isActive: true, isMuted: false }
+    });
+
+    for (const user of users) {
+      try {
+        await bot.sendMessage(parseInt(user.telegramId), message, { parse_mode: 'Markdown' });
+        await new Promise(resolve => setTimeout(resolve, 100));
+      } catch (error) {
+        logger.error(`Broadcast error for ${user.telegramId}:`, error);
+      }
+    }
+
+    logger.info(`Broadcast sent to ${users.length} users`);
+  } catch (error) {
+    logger.error('Broadcast error:', error);
+  }
+}
+
+// ============================================
+// INITIALIZATION
+// ============================================
+
+export function initTelegramBot() {
+  logger.info('Telegram bot initialized');
+  
+  bot.on('error', (error) => logger.error('Bot error:', error));
+  bot.on('polling_error', (error) => logger.error('Polling error:', error));
+}
+
+export default bot;

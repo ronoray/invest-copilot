@@ -23,7 +23,6 @@ build/
 *.db
 *.db-journal
 *.sql
-migrations/
 
 # IDE
 .vscode/

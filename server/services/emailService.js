@@ -1,4 +1,5 @@
 import nodemailer from 'nodemailer';
+const { createTransport } = nodemailer;
 import logger from './logger.js';
 
 /**
@@ -7,7 +8,7 @@ import logger from './logger.js';
  */
 
 // Create transporter
-const transporter = nodemailer.createTransporter({
+const transporter = createTransport({
   host: process.env.EMAIL_HOST || 'smtpout.secureserver.net',
   port: parseInt(process.env.EMAIL_PORT) || 465,
   secure: process.env.EMAIL_SECURE === 'true' || true,

@@ -1,23 +1,20 @@
-FROM node:20-alpine
+FROM node:20-slim
+
+# Install OpenSSL for Prisma
+RUN apt-get update -y && apt-get install -y openssl
 
 WORKDIR /app
 
-# Copy package files
 COPY server/package*.json ./
-
-# Install dependencies
-RUN npm ci --only=production
-
-# Copy prisma schema
 COPY server/prisma ./prisma/
 
-# Generate Prisma client
-RUN npx prisma generate
+RUN npm install --omit=dev
 
-# Copy application code
 COPY server/ ./
 
-EXPOSE 3000
+# Generate Prisma Client
+RUN npx prisma generate
 
-# Run migrations and start server
-CMD npx prisma migrate deploy && node index.js
+EXPOSE 3100
+
+CMD ["node", "index.js"]

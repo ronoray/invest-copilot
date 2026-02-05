@@ -46,7 +46,10 @@ model User {
   // Relations
   sessions      Session[]
   holdings      Holding[]
+  trades        Trade[]
   watchlist     Watchlist[]
+  proposals     Proposal[]
+  taxRecords    TaxRecord[]
   telegramUser  TelegramUser?
   auditLogs     AuditLog[]
 
@@ -110,6 +113,27 @@ model Holding {
   @@index([symbol])
 }
 
+model Trade {
+  id         Int      @id @default(autoincrement())
+  userId     Int
+  symbol     String
+  exchange   String   @default("NSE")
+  type       String   // BUY, SELL
+  quantity   Int
+  price      Float
+  fees       Float?   @default(0)
+  profit     Float?   // For SELL trades
+  executedAt DateTime
+  notes      String?
+  createdAt  DateTime @default(now())
+  
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId])
+  @@index([symbol])
+  @@index([executedAt])
+}
+
 model Watchlist {
   id        Int      @id @default(autoincrement())
   userId    Int
@@ -124,6 +148,67 @@ model Watchlist {
   @@unique([userId, symbol, exchange])
   @@index([userId])
   @@index([symbol])
+}
+
+// ============================================
+// AI RECOMMENDATIONS
+// ============================================
+
+model Proposal {
+  id           Int      @id @default(autoincrement())
+  userId       Int
+  symbol       String
+  exchange     String   @default("NSE")
+  action       String   // BUY, SELL, HOLD
+  targetPrice  Float
+  stopLoss     Float
+  reasoning    String   @db.Text
+  confidence   String   // HIGH, MEDIUM, LOW
+  timeHorizon  String   // SHORT, MEDIUM, LONG
+  riskCategory String   // HIGH, MEDIUM, LOW
+  status       String   @default("PENDING") // PENDING, ACCEPTED, REJECTED
+  createdAt    DateTime @default(now())
+  expiresAt    DateTime?
+  
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId, status])
+  @@index([symbol])
+  @@index([createdAt])
+}
+
+// ============================================
+// CONFIGURATION
+// ============================================
+
+model Config {
+  id              Int      @id @default(autoincrement())
+  key             String   @unique
+  value           String   @db.Text
+  startingCapital Float?   @default(10000)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// ============================================
+// TAX TRACKING
+// ============================================
+
+model TaxRecord {
+  id               Int      @id @default(autoincrement())
+  userId           Int
+  financialYear    String   // e.g., "2025-2026"
+  shortTermGains   Float    @default(0)
+  longTermGains    Float    @default(0)
+  totalTaxLiability Float   @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId, financialYear])
+  @@index([userId])
+  @@index([financialYear])
 }
 
 // ============================================

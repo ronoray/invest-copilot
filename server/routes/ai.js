@@ -1,6 +1,6 @@
 import express from 'express';
 import { scanMarketForOpportunities } from '../services/advancedScreener.js';
-import { calculatePortfolioSummary, getReinvestmentSuggestions } from '../services/portfolioCalculator.js';
+import prisma from '../services/prisma.js';
 import Anthropic from '@anthropic-ai/sdk';
 import logger from '../services/logger.js';
 
@@ -12,8 +12,67 @@ const anthropic = new Anthropic({
 });
 
 /**
+ * Safe portfolio summary - never crashes
+ */
+async function getSafePortfolioSummary() {
+  try {
+    const holdings = await prisma.holding.findMany();
+    
+    if (!holdings || holdings.length === 0) {
+      return {
+        totalValue: 0,
+        totalInvested: 0,
+        totalProfitLoss: 0,
+        profitLossPercent: 0,
+        holdings: [],
+        totalStocks: 0,
+        reinvestmentCapacity: 10000
+      };
+    }
+
+    let totalValue = 0;
+    let totalInvested = 0;
+
+    holdings.forEach(h => {
+      const invested = h.quantity * parseFloat(h.avgPrice);
+      const current = h.quantity * parseFloat(h.currentPrice || h.avgPrice);
+      totalInvested += invested;
+      totalValue += current;
+    });
+
+    const totalPL = totalValue - totalInvested;
+    const totalPLPercent = totalInvested > 0 ? (totalPL / totalInvested) * 100 : 0;
+
+    return {
+      totalValue,
+      totalInvested,
+      totalProfitLoss: totalPL,
+      profitLossPercent: totalPLPercent,
+      holdings: holdings.map(h => ({
+        symbol: h.symbol,
+        quantity: h.quantity,
+        avgPrice: parseFloat(h.avgPrice),
+        currentPrice: parseFloat(h.currentPrice || h.avgPrice)
+      })),
+      totalStocks: holdings.length,
+      reinvestmentCapacity: Math.max(10000, totalValue * 0.1)
+    };
+  } catch (error) {
+    logger.error('Portfolio summary error:', error);
+    return {
+      totalValue: 0,
+      totalInvested: 0,
+      totalProfitLoss: 0,
+      profitLossPercent: 0,
+      holdings: [],
+      totalStocks: 0,
+      reinvestmentCapacity: 10000
+    };
+  }
+}
+
+/**
  * GET /api/ai/recommendations
- * Returns empty on initial load
  */
 router.get('/recommendations', async (req, res) => {
   try {
@@ -32,31 +91,22 @@ router.get('/recommendations', async (req, res) => {
 
 /**
  * POST /api/ai/scan
- * Advanced market scan with real price data
  */
 router.post('/scan', async (req, res) => {
   try {
     const { baseAmount = 10000, perCategory = 5 } = req.body;
     
-    logger.info(`Starting advanced market scan - amount: ₹${baseAmount}`);
+    logger.info(`Starting market scan - amount: ₹${baseAmount}`);
     
-    // Get portfolio context
-    let portfolioSummary;
-    try {
-      portfolioSummary = await calculatePortfolioSummary();
-    } catch (error) {
-      logger.warn('Portfolio unavailable, using default');
-      portfolioSummary = { reinvestmentCapacity: baseAmount };
-    }
+    const portfolio = await getSafePortfolioSummary();
     
-    // Run real scanner
     const opportunities = await scanMarketForOpportunities({
       targetCount: { 
         high: perCategory, 
         medium: perCategory, 
         low: perCategory 
       },
-      baseAmount: portfolioSummary.reinvestmentCapacity || baseAmount
+      baseAmount: portfolio.reinvestmentCapacity || baseAmount
     });
     
     const total = 
@@ -74,7 +124,7 @@ router.post('/scan', async (req, res) => {
         highRisk: opportunities.high.length,
         mediumRisk: opportunities.medium.length,
         lowRisk: opportunities.low.length,
-        availableCapital: portfolioSummary.reinvestmentCapacity || baseAmount
+        availableCapital: portfolio.reinvestmentCapacity || baseAmount
       },
       scannedAt: new Date().toISOString()
     });
@@ -90,41 +140,18 @@ router.post('/scan', async (req, res) => {
 
 /**
  * GET /api/ai/portfolio-plan
- * Generate personalized investment plan with Claude AI insights
  */
 router.get('/portfolio-plan', async (req, res) => {
   try {
     logger.info('Generating portfolio plan...');
     
-    // Get portfolio metrics (handle empty portfolio and errors gracefully)
-    let summary = {
-      totalValue: 0,
-      totalInvested: 0,
-      totalProfitLoss: 0,
-      profitLossPercent: 0,
-      holdings: [],
-      totalStocks: 0
-    };
-    
-    let reinvestment = {
-      recommendedAmount: 10000,
-      reasoning: 'Starting fresh portfolio',
-      strategy: 'BALANCED'
-    };
-    
-    try {
-      summary = await calculatePortfolioSummary();
-      reinvestment = await getReinvestmentSuggestions();
-      logger.info('Portfolio metrics loaded successfully');
-    } catch (error) {
-      logger.warn('Portfolio calculation failed, using defaults:', error.message);
-      // Defaults already set above
-    }
+    // Get portfolio safely
+    const summary = await getSafePortfolioSummary();
     
     // Scan for opportunities
     const opportunities = await scanMarketForOpportunities({
       targetCount: { high: 3, medium: 3, low: 3 },
-      baseAmount: reinvestment.recommendedAmount || 10000
+      baseAmount: summary.reinvestmentCapacity || 10000
     });
     
     const allStocks = [
@@ -149,38 +176,33 @@ router.get('/portfolio-plan', async (req, res) => {
       worstCase += stock.suggestedAmount * worst;
     });
     
-    // ✅ NOW ADD CLAUDE AI ANALYSIS
+    // Get AI insights
     let aiInsights = null;
     try {
-      logger.info('Calling Claude API for portfolio insights...');
+      logger.info('Calling Claude API...');
       
-      const prompt = `You are a friendly investment advisor. Analyze this portfolio plan and provide simple, actionable insights.
+      const prompt = `You are a friendly investment advisor. Analyze this portfolio plan:
 
 **Current Portfolio:**
-- Total Value: ₹${summary.totalValue}
+- Value: ₹${summary.totalValue}
 - Invested: ₹${summary.totalInvested}
 - P&L: ₹${summary.totalProfitLoss} (${summary.profitLossPercent?.toFixed(2)}%)
-- Holdings: ${summary.holdings?.length || 0} stocks
+- Holdings: ${summary.totalStocks} stocks
 
 **Proposed Plan:**
-- Investment Amount: ₹${totalInvestment}
-- Stocks: ${allStocks.map(s => `${s.symbol} (₹${s.suggestedAmount})`).join(', ')}
-- Risk Distribution: High=${opportunities.high.length}, Medium=${opportunities.medium.length}, Low=${opportunities.low.length}
+- Investment: ₹${totalInvestment}
+- Stocks: ${allStocks.map(s => s.symbol).join(', ')}
+- High=${opportunities.high.length}, Medium=${opportunities.medium.length}, Low=${opportunities.low.length}
 
-**Expected Returns:**
-- Best Case: ₹${Math.round(bestCase)} (+${Math.round(((bestCase - totalInvestment) / totalInvestment) * 100)}%)
-- Likely Case: ₹${Math.round(likelyCase)} (+${Math.round(((likelyCase - totalInvestment) / totalInvestment) * 100)}%)
-- Worst Case: ₹${Math.round(worstCase)} (${Math.round(((worstCase - totalInvestment) / totalInvestment) * 100)}%)
-
-Return ONLY this JSON (no markdown, no extra text):
+Return ONLY JSON (no markdown):
 {
   "overallRating": "EXCELLENT|GOOD|MODERATE|RISKY",
-  "confidence": 0-100,
+  "confidence": 75,
   "keyInsights": ["insight 1", "insight 2", "insight 3"],
   "warnings": ["warning 1", "warning 2"],
-  "actionItems": ["action 1", "action 2", "action 3"],
-  "personalizedAdvice": "2-3 sentences of friendly advice like talking to a friend",
-  "riskAssessment": "1-2 sentences about risk level"
+  "actionItems": ["action 1", "action 2"],
+  "personalizedAdvice": "2-3 sentences",
+  "riskAssessment": "1-2 sentences"
 }`;
 
       const message = await anthropic.messages.create({
@@ -194,27 +216,28 @@ Return ONLY this JSON (no markdown, no extra text):
       
       if (jsonMatch) {
         aiInsights = JSON.parse(jsonMatch[0]);
-        logger.info('Claude AI analysis completed successfully');
-      } else {
-        logger.warn('Failed to parse Claude response, using fallback');
+        logger.info('Claude AI analysis completed');
       }
     } catch (aiError) {
-      logger.error('Claude API error:', aiError);
-      // Continue without AI insights rather than failing entire request
+      logger.error('Claude API error:', aiError.message);
       aiInsights = {
         overallRating: 'MODERATE',
         confidence: 70,
-        keyInsights: ['Market scan completed successfully', 'Diversified risk allocation', 'Consider your risk tolerance'],
+        keyInsights: ['Market scan completed', 'Diversified allocation', 'Review each stock'],
         warnings: ['AI analysis temporarily unavailable'],
-        actionItems: ['Review each stock recommendation', 'Set stop losses', 'Monitor regularly'],
-        personalizedAdvice: 'Solid plan with balanced risk. Review details and invest within your comfort zone.',
-        riskAssessment: 'Balanced portfolio with mix of high, medium, and low risk stocks.'
+        actionItems: ['Review stocks', 'Set stop losses', 'Monitor regularly'],
+        personalizedAdvice: 'Solid plan with balanced risk. Review details carefully.',
+        riskAssessment: 'Balanced portfolio with mixed risk levels.'
       };
     }
     
-    const response = {
+    res.json({
       portfolio: summary,
-      reinvestment,
+      reinvestment: {
+        recommendedAmount: summary.reinvestmentCapacity,
+        reasoning: 'Based on available capital and risk profile',
+        strategy: 'BALANCED'
+      },
       plan: {
         totalInvestment,
         stocks: allStocks,
@@ -232,18 +255,17 @@ Return ONLY this JSON (no markdown, no extra text):
           worstCasePercent: Math.round(((worstCase - totalInvestment) / totalInvestment) * 100)
         }
       },
-      aiInsights // ✅ AI-powered insights added!
-    };
+      aiInsights
+    });
     
-    logger.info('Portfolio plan generated successfully with AI insights');
-    res.json(response);
+    logger.info('Portfolio plan generated successfully');
     
   } catch (error) {
-    logger.error('Portfolio plan error:', error);
+    logger.error('Portfolio plan error:', error.message);
+    logger.error('Stack:', error.stack);
     res.status(500).json({ 
       error: 'Failed to generate plan', 
-      message: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      message: error.message
     });
   }
 });

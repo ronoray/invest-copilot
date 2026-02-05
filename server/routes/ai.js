@@ -12,6 +12,134 @@ const anthropic = new Anthropic({
 });
 
 /**
+ * 10 COMPREHENSIVE ANALYSIS PROMPTS
+ * Each provides deep, actionable insights
+ */
+const COMPREHENSIVE_PROMPTS = {
+  marketAnalysis: (capital, stocks) => `
+## 1. MARKET ANALYSIS
+Analyze the current stock market environment with a focus on ₹${capital} capital. 
+Identify short-term and long-term trends, key support and resistance levels, and emerging patterns. 
+Factor in recent earnings, macroeconomic news, and industry developments for ${stocks || 'NSE/BSE top stocks'}.
+Suggest 3-5 specific investment opportunities with entry points and reasoning.`,
+
+  portfolioDiversification: (holdings) => `
+## 2. PORTFOLIO DIVERSIFICATION  
+Current holdings: ${holdings || 'None yet - starting fresh'}
+
+Evaluate concentration risk and suggest diversification strategies:
+- 3 new sectors to consider
+- 2-3 specific stocks per sector
+- Asset allocation percentages
+- How each addition reduces portfolio risk`,
+
+  riskManagement: (strategy) => `
+## 3. RISK MANAGEMENT
+Effective risk management for ${strategy} strategy:
+- Stop-loss placement rules (percentage-based)
+- Position sizing formula (% of portfolio per trade)
+- Diversification guidelines
+- Risk-to-reward ratios (minimum 1:2)
+Provide specific examples with INR amounts.`,
+
+  technicalAnalysis: (stocks) => `
+## 4. TECHNICAL ANALYSIS
+Full technical analysis of: ${stocks || 'Top NSE stocks'}
+
+For each stock:
+- Price action (support/resistance)
+- Volume patterns
+- Moving averages (50-day, 200-day)
+- RSI (overbought/oversold)
+- MACD (momentum)
+- Bollinger Bands
+
+BUY/SELL/HOLD with entry/exit points.`,
+
+  economicIndicators: (stocks) => `
+## 5. ECONOMIC INDICATORS
+How key indicators influence ${stocks || 'Indian markets'}:
+- RBI interest rates
+- Inflation (CPI/WPI)
+- GDP growth
+- FII flows
+- USD-INR exchange rate
+- Crude oil prices
+
+Positioning strategies for upcoming releases.`,
+
+  valueInvesting: (companies) => `
+## 6. VALUE INVESTING
+Analyze ${companies || 'top NSE companies'} using value principles:
+- P/E ratio vs industry
+- P/B ratio
+- Debt-to-equity
+- ROE
+- Dividend yield
+- Free cash flow
+- Competitive moat
+
+Undervalued/overvalued with buy/pass recommendations.`,
+
+  marketSentiment: (stocks) => `
+## 7. MARKET SENTIMENT
+Assess sentiment for ${stocks || 'Indian markets'}:
+- News trends (bullish/bearish)
+- Analyst ratings
+- Social media sentiment
+- Put/call ratios
+- FII/DII activity
+- India VIX
+
+How to use sentiment for timing.`,
+
+  earningsReports: (companies) => `
+## 8. EARNINGS ANALYSIS
+Recent earnings for ${companies || 'major NSE companies'}:
+- Revenue growth (YoY, QoQ)
+- Net profit margins
+- EPS
+- Forward guidance
+- Management commentary
+- Segment performance
+
+BEAT/MEET/MISS expectations. Price movement prediction.`,
+
+  growthVsDividend: () => `
+## 9. GROWTH VS DIVIDEND
+Compare strategies:
+
+**Growth Stocks** (Tech, Pharma):
+- High growth potential
+- Reinvest profits
+- Higher volatility
+- Long-term wealth building
+
+**Dividend Stocks** (Banks, Utilities):
+- Stable income
+- Regular payouts
+- Lower volatility
+- Income generation
+
+2-3 stocks per category with allocation %.`,
+
+  globalEvents: (stocks) => `
+## 10. GLOBAL EVENTS
+How global events impact ${stocks || 'Indian markets'}:
+- US Federal Reserve policy
+- China economic data
+- Geopolitical tensions
+- Supply chain issues
+- Commodity prices
+
+Hedging strategies:
+- Sector diversification
+- Gold/commodities
+- Cash reserves
+- Defensive stocks`
+};
+
+/**
  * Safe portfolio summary - never crashes
  */
 async function getSafePortfolioSummary() {
@@ -73,6 +201,7 @@ async function getSafePortfolioSummary() {
 
 /**
  * GET /api/ai/recommendations
+ * EXISTING FUNCTIONALITY - PRESERVED
  */
 router.get('/recommendations', async (req, res) => {
   try {
@@ -91,6 +220,7 @@ router.get('/recommendations', async (req, res) => {
 
 /**
  * POST /api/ai/scan
+ * EXISTING FUNCTIONALITY - PRESERVED
  */
 router.post('/scan', async (req, res) => {
   try {
@@ -140,15 +270,13 @@ router.post('/scan', async (req, res) => {
 
 /**
  * GET /api/ai/portfolio-plan
+ * EXISTING FUNCTIONALITY - PRESERVED
  */
 router.get('/portfolio-plan', async (req, res) => {
   try {
     logger.info('Generating portfolio plan...');
     
-    // Get portfolio safely
     const summary = await getSafePortfolioSummary();
-    
-    // Scan for opportunities
     const opportunities = await scanMarketForOpportunities({
       targetCount: { high: 3, medium: 3, low: 3 },
       baseAmount: summary.reinvestmentCapacity || 10000
@@ -165,7 +293,6 @@ router.get('/portfolio-plan', async (req, res) => {
       0
     );
     
-    // Calculate expected outcomes
     let bestCase = 0, likelyCase = 0, worstCase = 0;
     allStocks.forEach(stock => {
       const best = stock.targetPrice / stock.price;
@@ -176,7 +303,6 @@ router.get('/portfolio-plan', async (req, res) => {
       worstCase += stock.suggestedAmount * worst;
     });
     
-    // Get AI insights
     let aiInsights = null;
     try {
       logger.info('Calling Claude API...');
@@ -262,10 +388,150 @@ Return ONLY JSON (no markdown):
     
   } catch (error) {
     logger.error('Portfolio plan error:', error.message);
-    logger.error('Stack:', error.stack);
     res.status(500).json({ 
       error: 'Failed to generate plan', 
       message: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/ai/comprehensive-analysis
+ * NEW: 10-SECTION COMPREHENSIVE ANALYSIS
+ */
+router.get('/comprehensive-analysis', async (req, res) => {
+  try {
+    logger.info('Generating 10-section comprehensive analysis...');
+    
+    const summary = await getSafePortfolioSummary();
+    const holdingsList = summary.holdings.length > 0
+      ? summary.holdings.map(h => `${h.symbol} (${h.quantity} shares @ ₹${h.avgPrice})`).join(', ')
+      : 'No holdings yet';
+    const stockSymbols = summary.holdings.map(h => h.symbol).join(', ') || 'NSE top stocks';
+    
+    const prompt = `You are an expert investment advisor. Provide comprehensive analysis.
+
+**PORTFOLIO:**
+- Capital: ₹${summary.totalValue || 10000}
+- Holdings: ${holdingsList}
+- P&L: ₹${summary.totalProfitLoss} (${summary.profitLossPercent?.toFixed(2)}%)
+
+${COMPREHENSIVE_PROMPTS.marketAnalysis(summary.totalValue || 10000, stockSymbols)}
+${COMPREHENSIVE_PROMPTS.portfolioDiversification(holdingsList)}
+${COMPREHENSIVE_PROMPTS.riskManagement('balanced growth')}
+${COMPREHENSIVE_PROMPTS.technicalAnalysis(stockSymbols)}
+${COMPREHENSIVE_PROMPTS.economicIndicators(stockSymbols)}
+${COMPREHENSIVE_PROMPTS.valueInvesting(stockSymbols)}
+${COMPREHENSIVE_PROMPTS.marketSentiment(stockSymbols)}
+${COMPREHENSIVE_PROMPTS.earningsReports(stockSymbols)}
+${COMPREHENSIVE_PROMPTS.growthVsDividend()}
+${COMPREHENSIVE_PROMPTS.globalEvents(stockSymbols)}
+
+**FORMAT:**
+- Clear headers with emojis
+- Specific stock tickers (CAPS)
+- Bullet points
+- Confidence: HIGH 🟢 / MEDIUM 🟡 / LOW 🔴
+- Time: SHORT/MEDIUM/LONG
+- Risk: LOW/MODERATE/HIGH
+- Use ₹ for prices`;
+
+    const message = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 8000,
+      temperature: 0.7,
+      messages: [{ role: 'user', content: prompt }]
+    });
+    
+    const analysis = message.content[0].text;
+    
+    logger.info(`Comprehensive analysis complete (${analysis.length} chars)`);
+    
+    res.json({
+      success: true,
+      analysis,
+      generatedAt: new Date(),
+      sectionsCount: 10
+    });
+    
+  } catch (error) {
+    logger.error('Comprehensive analysis error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to generate analysis',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/ai/plan/snapshot
+ * NEW: PORTFOLIO SNAPSHOT FOR PLAN PAGE
+ */
+router.get('/plan/snapshot', async (req, res) => {
+  try {
+    const config = await prisma.config.findFirst({
+      where: { key: 'starting_capital' }
+    });
+    
+    const startingCapital = parseFloat(config?.startingCapital || 0);
+    const summary = await getSafePortfolioSummary();
+    
+    const availableCash = startingCapital - summary.totalInvested;
+    
+    res.json({
+      startingCapital: parseFloat(startingCapital.toFixed(2)),
+      currentlyInvested: parseFloat(summary.totalInvested.toFixed(2)),
+      availableCash: parseFloat(availableCash.toFixed(2)),
+      currentValue: parseFloat(summary.totalValue.toFixed(2)),
+      totalPnL: parseFloat(summary.totalProfitLoss.toFixed(2)),
+      totalPnLPercent: parseFloat(summary.profitLossPercent.toFixed(2))
+    });
+    
+  } catch (error) {
+    logger.error('Plan snapshot error:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch snapshot',
+      details: error.message 
+    });
+  }
+});
+
+/**
+ * POST /api/ai/plan/update-capital
+ * NEW: UPDATE STARTING CAPITAL
+ */
+router.post('/plan/update-capital', async (req, res) => {
+  try {
+    const { capital } = req.body;
+    
+    if (!capital || capital <= 0) {
+      return res.status(400).json({ error: 'Invalid capital amount' });
+    }
+    
+    const config = await prisma.config.upsert({
+      where: { key: 'starting_capital' },
+      update: {
+        value: capital.toString(),
+        startingCapital: parseFloat(capital)
+      },
+      create: {
+        key: 'starting_capital',
+        value: capital.toString(),
+        startingCapital: parseFloat(capital)
+      }
+    });
+    
+    res.json({
+      message: 'Starting capital updated',
+      capital: parseFloat(config.startingCapital)
+    });
+    
+  } catch (error) {
+    logger.error('Update capital error:', error);
+    res.status(500).json({ 
+      error: 'Failed to update capital',
+      details: error.message 
     });
   }
 });

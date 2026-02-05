@@ -1,6 +1,6 @@
-import { Routes, Route, Link } from 'react-router-dom';
+import { Routes, Route, Link, useLocation } from 'react-router-dom';
 import { useState } from 'react';
-import { Home, Briefcase, Eye, Lightbulb, Receipt, Target, LogOut, Menu, X } from 'lucide-react';
+import { Home, Briefcase, Eye, Lightbulb, Receipt, Target, LogOut, Menu, X, Brain } from 'lucide-react';
 import { useAuth } from './context/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import Login from './pages/Login';
@@ -9,6 +9,7 @@ import Portfolio from './pages/Portfolio';
 import Watchlist from './pages/Watchlist';
 import Proposals from './pages/Proposals';
 import AIRecommendations from './pages/AIRecommendations';
+import AIInsights from './pages/AIInsights';
 import TaxDashboard from './pages/TaxDashboard';
 import YourPlan from './pages/YourPlan';
 
@@ -33,6 +34,7 @@ function App() {
 
 function AppLayout() {
   const { user, logout } = useAuth();
+  const location = useLocation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const toggleMobileMenu = () => {
@@ -41,6 +43,10 @@ function AppLayout() {
 
   const closeMobileMenu = () => {
     setMobileMenuOpen(false);
+  };
+
+  const isActive = (path) => {
+    return location.pathname === path;
   };
 
   return (
@@ -58,12 +64,12 @@ function AppLayout() {
               
               {/* Desktop Navigation */}
               <div className="hidden md:ml-6 md:flex md:space-x-4 lg:space-x-8">
-                <NavLink to="/" icon={<Home size={18} />}>Dashboard</NavLink>
-                <NavLink to="/portfolio" icon={<Briefcase size={18} />}>Portfolio</NavLink>
-                <NavLink to="/plan" icon={<Target size={18} />}>Plan</NavLink>
-                <NavLink to="/ai" icon={<Lightbulb size={18} />}>AI</NavLink>
-                <NavLink to="/tax" icon={<Receipt size={18} />}>Tax</NavLink>
-                <NavLink to="/watchlist" icon={<Eye size={18} />}>Watch</NavLink>
+                <NavLink to="/" icon={<Home size={18} />} active={isActive('/')}>Dashboard</NavLink>
+                <NavLink to="/portfolio" icon={<Briefcase size={18} />} active={isActive('/portfolio')}>Portfolio</NavLink>
+                <NavLink to="/plan" icon={<Target size={18} />} active={isActive('/plan')}>Plan</NavLink>
+                <NavLink to="/ai" icon={<Lightbulb size={18} />} active={isActive('/ai')}>AI</NavLink>
+                <NavLink to="/insights" icon={<Brain size={18} />} active={isActive('/insights')}>Insights</NavLink>
+                <NavLink to="/tax" icon={<Receipt size={18} />} active={isActive('/tax')}>Tax</NavLink>
               </div>
             </div>
 
@@ -86,6 +92,7 @@ function AppLayout() {
               <button
                 onClick={toggleMobileMenu}
                 className="inline-flex items-center justify-center p-2 rounded-md text-gray-700 hover:text-blue-600 hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500"
+                aria-label="Toggle menu"
               >
                 {mobileMenuOpen ? <X size={24} /> : <Menu size={24} />}
               </button>
@@ -97,22 +104,60 @@ function AppLayout() {
         {mobileMenuOpen && (
           <div className="md:hidden border-t border-gray-200 bg-white">
             <div className="px-2 pt-2 pb-3 space-y-1">
-              <MobileNavLink to="/" icon={<Home size={20} />} onClick={closeMobileMenu}>
+              <MobileNavLink 
+                to="/" 
+                icon={<Home size={20} />} 
+                onClick={closeMobileMenu}
+                active={isActive('/')}
+              >
                 Dashboard
               </MobileNavLink>
-              <MobileNavLink to="/portfolio" icon={<Briefcase size={20} />} onClick={closeMobileMenu}>
+              <MobileNavLink 
+                to="/portfolio" 
+                icon={<Briefcase size={20} />} 
+                onClick={closeMobileMenu}
+                active={isActive('/portfolio')}
+              >
                 Portfolio
               </MobileNavLink>
-              <MobileNavLink to="/plan" icon={<Target size={20} />} onClick={closeMobileMenu}>
+              <MobileNavLink 
+                to="/plan" 
+                icon={<Target size={20} />} 
+                onClick={closeMobileMenu}
+                active={isActive('/plan')}
+              >
                 Your Plan
               </MobileNavLink>
-              <MobileNavLink to="/ai" icon={<Lightbulb size={20} />} onClick={closeMobileMenu}>
+              <MobileNavLink 
+                to="/ai" 
+                icon={<Lightbulb size={20} />} 
+                onClick={closeMobileMenu}
+                active={isActive('/ai')}
+              >
+                AI Recommendations
+              </MobileNavLink>
+              <MobileNavLink 
+                to="/insights" 
+                icon={<Brain size={20} />} 
+                onClick={closeMobileMenu}
+                active={isActive('/insights')}
+              >
                 AI Insights
               </MobileNavLink>
-              <MobileNavLink to="/tax" icon={<Receipt size={20} />} onClick={closeMobileMenu}>
-                Tax
+              <MobileNavLink 
+                to="/tax" 
+                icon={<Receipt size={20} />} 
+                onClick={closeMobileMenu}
+                active={isActive('/tax')}
+              >
+                Tax Dashboard
               </MobileNavLink>
-              <MobileNavLink to="/watchlist" icon={<Eye size={20} />} onClick={closeMobileMenu}>
+              <MobileNavLink 
+                to="/watchlist" 
+                icon={<Eye size={20} />} 
+                onClick={closeMobileMenu}
+                active={isActive('/watchlist')}
+              >
                 Watchlist
               </MobileNavLink>
             </div>
@@ -146,6 +191,7 @@ function AppLayout() {
           <Route path="/portfolio" element={<Portfolio />} />
           <Route path="/plan" element={<YourPlan />} />
           <Route path="/ai" element={<AIRecommendations />} />
+          <Route path="/insights" element={<AIInsights />} />
           <Route path="/tax" element={<TaxDashboard />} />
           <Route path="/watchlist" element={<Watchlist />} />
           <Route path="/proposals" element={<Proposals />} />
@@ -156,11 +202,15 @@ function AppLayout() {
 }
 
 // Desktop Navigation Link
-function NavLink({ to, icon, children }) {
+function NavLink({ to, icon, children, active }) {
   return (
     <Link
       to={to}
-      className="inline-flex items-center px-1 pt-1 border-b-2 border-transparent text-sm font-medium text-gray-500 hover:text-gray-700 hover:border-gray-300 transition-colors whitespace-nowrap"
+      className={`inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium whitespace-nowrap transition-colors ${
+        active 
+          ? 'border-blue-500 text-blue-600' 
+          : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+      }`}
     >
       <span className="mr-1">{icon}</span>
       <span className="hidden lg:inline">{children}</span>
@@ -169,12 +219,16 @@ function NavLink({ to, icon, children }) {
 }
 
 // Mobile Navigation Link
-function MobileNavLink({ to, icon, children, onClick }) {
+function MobileNavLink({ to, icon, children, onClick, active }) {
   return (
     <Link
       to={to}
       onClick={onClick}
-      className="flex items-center px-3 py-3 rounded-md text-base font-medium text-gray-700 hover:text-blue-600 hover:bg-gray-50 transition-colors"
+      className={`flex items-center px-3 py-3 rounded-md text-base font-medium transition-colors ${
+        active 
+          ? 'text-blue-600 bg-blue-50' 
+          : 'text-gray-700 hover:text-blue-600 hover:bg-gray-50'
+      }`}
     >
       <span className="mr-3">{icon}</span>
       {children}

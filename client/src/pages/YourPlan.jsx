@@ -116,31 +116,31 @@ export default function YourPlan() {
                   {selectedPortfolio.broker.replace('_', ' ')} • {selectedPortfolio.riskProfile}
                   {selectedPortfolio.apiEnabled && ' • API Enabled ✓'}
                 </p>
-                <div className="flex gap-2">
-                  <button onClick={handleRefresh} {...existing props}>
-                    Refresh
-                  </button>
-                  
-                  <button
-                    onClick={() => setShowCapitalModal(true)}
-                    className="flex items-center gap-2 px-4 py-2 bg-white text-emerald-600 border border-white rounded-lg hover:bg-emerald-50"
-                  >
-                    <DollarSign className="w-5 h-5" />
-                    <span className="hidden md:inline">Change Capital</span>
-                  </button>
-                </div>
               </div>
             )}
           </div>
-          <button
-            onClick={handleRefresh}
-            disabled={loading}
-            className="flex items-center gap-2 px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg transition-colors disabled:opacity-50"
-            title="Refresh plan"
-          >
-            <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
-            <span className="hidden md:inline">Refresh</span>
-          </button>
+          
+          {/* Buttons */}
+          <div className="flex gap-2">
+            <button
+              onClick={handleRefresh}
+              disabled={loading}
+              className="flex items-center gap-2 px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg transition-colors disabled:opacity-50"
+              title="Refresh plan"
+            >
+              <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
+              <span className="hidden md:inline">Refresh</span>
+            </button>
+            
+            <button
+              onClick={() => setShowCapitalModal(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-white text-emerald-600 border border-white rounded-lg hover:bg-emerald-50 transition-colors"
+              title="Change capital"
+            >
+              <DollarSign className="w-5 h-5" />
+              <span className="hidden md:inline">Change Capital</span>
+            </button>
+          </div>
         </div>
 
         {/* Portfolio Selector Dropdown */}
@@ -357,14 +357,16 @@ export default function YourPlan() {
               View All Recommendations
             </button>
           </div>
-          <CapitalChangeModal
-            isOpen={showCapitalModal}
-            onClose={() => setShowCapitalModal(false)}
-            portfolio={selectedPortfolio}
-            onSuccess={handleCapitalUpdated}
-          />
         </>
       )}
+      
+      {/* Capital Change Modal */}
+      <CapitalChangeModal
+        isOpen={showCapitalModal}
+        onClose={() => setShowCapitalModal(false)}
+        portfolio={selectedPortfolio}
+        onSuccess={handleCapitalUpdated}
+      />
     </div>
   );
 }

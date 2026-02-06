@@ -140,15 +140,36 @@ Hedging strategies:
 };
 
 /**
- * Safe portfolio summary - never crashes
+ * Get portfolio summary with capital management data
+ * @param {number} portfolioId - Optional portfolio ID to filter by
+ * @param {number} userId - User ID for authorization
+ * @returns {object} Portfolio summary with startingCapital, availableCash, etc.
  */
-async function getSafePortfolioSummary() {
+async function getSafePortfolioSummary(portfolioId = null, userId = null) {
   try {
-    const holdings = await prisma.holding.findMany();
-    
-    if (!holdings || holdings.length === 0) {
+    // Build query filters
+    const whereClause = {};
+    if (userId) whereClause.userId = userId;
+    if (portfolioId) whereClause.id = portfolioId;
+
+    // Fetch portfolio(s) - NEW: Include Portfolio model data
+    const portfolios = await prisma.portfolio.findMany({
+      where: whereClause,
+      include: {
+        holdings: true
+      }
+    });
+
+    if (!portfolios || portfolios.length === 0) {
+      logger.warn('No portfolios found');
       return {
-        totalValue: 0,
+        portfolioId: null,
+        portfolioName: null,
+        ownerName: null,
+        broker: null,
+        startingCapital: 10000,
+        availableCash: 10000,
+        currentValue: 0,
         totalInvested: 0,
         totalProfitLoss: 0,
         profitLossPercent: 0,
@@ -158,37 +179,89 @@ async function getSafePortfolioSummary() {
       };
     }
 
+    // If multiple portfolios, aggregate (for backward compatibility)
+    // If single portfolio, return its specific data
+    const isSinglePortfolio = portfolios.length === 1;
+    const portfolio = portfolios[0];
+
+    // Calculate holdings summary
     let totalValue = 0;
     let totalInvested = 0;
+    const allHoldings = [];
 
-    holdings.forEach(h => {
-      const invested = h.quantity * parseFloat(h.avgPrice);
-      const current = h.quantity * parseFloat(h.currentPrice || h.avgPrice);
-      totalInvested += invested;
-      totalValue += current;
+    portfolios.forEach(p => {
+      p.holdings.forEach(h => {
+        const invested = h.quantity * parseFloat(h.avgPrice);
+        const current = h.quantity * parseFloat(h.currentPrice || h.avgPrice);
+        totalInvested += invested;
+        totalValue += current;
+        
+        allHoldings.push({
+          symbol: h.symbol,
+          quantity: h.quantity,
+          avgPrice: parseFloat(h.avgPrice),
+          currentPrice: parseFloat(h.currentPrice || h.avgPrice),
+          portfolioId: p.id
+        });
+      });
     });
 
     const totalPL = totalValue - totalInvested;
     const totalPLPercent = totalInvested > 0 ? (totalPL / totalInvested) * 100 : 0;
 
+    // NEW: Portfolio-specific data
+    if (isSinglePortfolio) {
+      const startingCapital = parseFloat(portfolio.startingCapital);
+      const availableCash = parseFloat(portfolio.availableCash);
+      const currentValue = parseFloat(portfolio.currentValue);
+
+      return {
+        portfolioId: portfolio.id,
+        portfolioName: portfolio.name,
+        ownerName: portfolio.ownerName,
+        broker: portfolio.broker,
+        startingCapital,
+        availableCash,
+        currentValue,
+        totalInvested,
+        totalProfitLoss: totalPL,
+        profitLossPercent: totalPLPercent,
+        holdings: allHoldings,
+        totalStocks: allHoldings.length,
+        reinvestmentCapacity: Math.max(availableCash * 0.7, 0) // 70% of available cash
+      };
+    }
+
+    // Aggregated view (multiple portfolios)
+    const totalStartingCapital = portfolios.reduce((sum, p) => sum + parseFloat(p.startingCapital), 0);
+    const totalAvailableCash = portfolios.reduce((sum, p) => sum + parseFloat(p.availableCash), 0);
+
     return {
-      totalValue,
+      portfolioId: null, // Multiple portfolios
+      portfolioName: 'All Portfolios',
+      ownerName: null,
+      broker: null,
+      startingCapital: totalStartingCapital,
+      availableCash: totalAvailableCash,
+      currentValue: totalValue,
       totalInvested,
       totalProfitLoss: totalPL,
       profitLossPercent: totalPLPercent,
-      holdings: holdings.map(h => ({
-        symbol: h.symbol,
-        quantity: h.quantity,
-        avgPrice: parseFloat(h.avgPrice),
-        currentPrice: parseFloat(h.currentPrice || h.avgPrice)
-      })),
-      totalStocks: holdings.length,
-      reinvestmentCapacity: Math.max(10000, totalValue * 0.1)
+      holdings: allHoldings,
+      totalStocks: allHoldings.length,
+      reinvestmentCapacity: Math.max(totalAvailableCash * 0.7, 0)
     };
+
   } catch (error) {
     logger.error('Portfolio summary error:', error);
     return {
-      totalValue: 0,
+      portfolioId: null,
+      portfolioName: null,
+      ownerName: null,
+      broker: null,
+      startingCapital: 10000,
+      availableCash: 10000,
+      currentValue: 0,
       totalInvested: 0,
       totalProfitLoss: 0,
       profitLossPercent: 0,
@@ -269,18 +342,43 @@ router.post('/scan', async (req, res) => {
 });
 
 /**
- * GET /api/ai/portfolio-plan
- * EXISTING FUNCTIONALITY - PRESERVED
+ * GET /api/ai/portfolio-plan?portfolioId=1
+ * NEW: Now accepts portfolioId query parameter
+ * Returns per-portfolio plan with capital management data
  */
 router.get('/portfolio-plan', async (req, res) => {
   try {
-    logger.info('Generating portfolio plan...');
+    const { portfolioId } = req.query;
+    const userId = req.userId; // From auth middleware
     
-    const summary = await getSafePortfolioSummary();
-    const opportunities = await scanMarketForOpportunities({
-      targetCount: { high: 3, medium: 3, low: 3 },
-      baseAmount: summary.reinvestmentCapacity || 10000
-    });
+    logger.info(`Generating portfolio plan... (portfolioId: ${portfolioId || 'all'})`);
+    
+    // NEW: Pass portfolioId and userId to get portfolio-specific data
+    const summary = await getSafePortfolioSummary(
+      portfolioId ? parseInt(portfolioId) : null,
+      userId
+    );
+    
+    // NEW: Calculate reinvestment recommendation
+    const availableCash = summary.availableCash;
+    const shouldReinvest = availableCash >= 2000;
+    const recommendedAmount = shouldReinvest ? Math.floor(availableCash * 0.7) : 0;
+    const bufferAmount = shouldReinvest ? availableCash - recommendedAmount : availableCash;
+    
+    let reinvestmentReason;
+    if (shouldReinvest) {
+      reinvestmentReason = `You have ₹${availableCash.toLocaleString('en-IN')} available. Investing ₹${recommendedAmount.toLocaleString('en-IN')} (70%) while keeping ₹${bufferAmount.toLocaleString('en-IN')} as buffer for emergencies.`;
+    } else {
+      reinvestmentReason = `You have ₹${availableCash.toLocaleString('en-IN')} available. Build up to at least ₹2,000 before investing. Keep saving!`;
+    }
+    
+    // Generate opportunities (only if should reinvest)
+    const opportunities = shouldReinvest 
+      ? await scanMarketForOpportunities({
+          targetCount: { high: 3, medium: 3, low: 3 },
+          baseAmount: recommendedAmount
+        })
+      : { high: [], medium: [], low: [] };
     
     const allStocks = [
       ...opportunities.high, 
@@ -293,6 +391,7 @@ router.get('/portfolio-plan', async (req, res) => {
       0
     );
     
+    // Calculate expected outcomes
     let bestCase = 0, likelyCase = 0, worstCase = 0;
     allStocks.forEach(stock => {
       const best = stock.targetPrice / stock.price;
@@ -303,22 +402,30 @@ router.get('/portfolio-plan', async (req, res) => {
       worstCase += stock.suggestedAmount * worst;
     });
     
+    // Get AI insights (only if investing)
     let aiInsights = null;
-    try {
-      logger.info('Calling Claude API...');
-      
-      const prompt = `You are a friendly investment advisor. Analyze this portfolio plan:
+    if (shouldReinvest && allStocks.length > 0) {
+      try {
+        logger.info('Calling Claude API...');
+        
+        const prompt = `You are a friendly investment advisor. Analyze this portfolio plan:
 
-**Current Portfolio:**
-- Value: ₹${summary.totalValue}
-- Invested: ₹${summary.totalInvested}
-- P&L: ₹${summary.totalProfitLoss} (${summary.profitLossPercent?.toFixed(2)}%)
+**Portfolio:** ${summary.portfolioName || 'All Portfolios'}
+${summary.ownerName ? `**Owner:** ${summary.ownerName}` : ''}
+${summary.broker ? `**Broker:** ${summary.broker}` : ''}
+
+**Current Status:**
+- Starting Capital: ₹${summary.startingCapital.toLocaleString('en-IN')}
+- Available Cash: ₹${availableCash.toLocaleString('en-IN')}
+- Currently Invested: ₹${summary.totalInvested.toLocaleString('en-IN')}
+- Current Value: ₹${summary.currentValue.toLocaleString('en-IN')}
+- P&L: ₹${summary.totalProfitLoss.toLocaleString('en-IN')} (${summary.profitLossPercent?.toFixed(2)}%)
 - Holdings: ${summary.totalStocks} stocks
 
 **Proposed Plan:**
-- Investment: ₹${totalInvestment}
+- Investment Amount: ₹${totalInvestment.toLocaleString('en-IN')}
 - Stocks: ${allStocks.map(s => s.symbol).join(', ')}
-- High=${opportunities.high.length}, Medium=${opportunities.medium.length}, Low=${opportunities.low.length}
+- High Risk=${opportunities.high.length}, Medium Risk=${opportunities.medium.length}, Low Risk=${opportunities.low.length}
 
 Return ONLY JSON (no markdown):
 {
@@ -331,40 +438,57 @@ Return ONLY JSON (no markdown):
   "riskAssessment": "1-2 sentences"
 }`;
 
-      const message = await anthropic.messages.create({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1000,
-        messages: [{ role: 'user', content: prompt }],
-      });
+        const message = await anthropic.messages.create({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 1000,
+          messages: [{ role: 'user', content: prompt }],
+        });
 
-      const responseText = message.content[0].text;
-      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-      
-      if (jsonMatch) {
-        aiInsights = JSON.parse(jsonMatch[0]);
-        logger.info('Claude AI analysis completed');
+        const responseText = message.content[0].text;
+        const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+        
+        if (jsonMatch) {
+          aiInsights = JSON.parse(jsonMatch[0]);
+          logger.info('Claude AI analysis completed');
+        }
+      } catch (aiError) {
+        logger.error('Claude API error:', aiError.message);
+        aiInsights = {
+          overallRating: 'MODERATE',
+          confidence: 70,
+          keyInsights: ['Market scan completed', 'Diversified allocation', 'Review each stock'],
+          warnings: ['AI analysis temporarily unavailable'],
+          actionItems: ['Review stocks', 'Set stop losses', 'Monitor regularly'],
+          personalizedAdvice: 'Solid plan with balanced risk. Review details carefully.',
+          riskAssessment: 'Balanced portfolio with mixed risk levels.'
+        };
       }
-    } catch (aiError) {
-      logger.error('Claude API error:', aiError.message);
-      aiInsights = {
-        overallRating: 'MODERATE',
-        confidence: 70,
-        keyInsights: ['Market scan completed', 'Diversified allocation', 'Review each stock'],
-        warnings: ['AI analysis temporarily unavailable'],
-        actionItems: ['Review stocks', 'Set stop losses', 'Monitor regularly'],
-        personalizedAdvice: 'Solid plan with balanced risk. Review details carefully.',
-        riskAssessment: 'Balanced portfolio with mixed risk levels.'
-      };
     }
     
+    // NEW: Response structure matching YourPlan.jsx expectations
     res.json({
-      portfolio: summary,
+      portfolio: {
+        portfolioId: summary.portfolioId,
+        portfolioName: summary.portfolioName,
+        ownerName: summary.ownerName,
+        broker: summary.broker,
+        startingCapital: summary.startingCapital,
+        availableCash: availableCash,
+        currentValue: summary.currentValue,
+        totalInvested: summary.totalInvested,
+        totalPL: summary.totalProfitLoss,
+        totalPLPercent: summary.profitLossPercent,
+        totalValue: summary.currentValue,
+        totalStocks: summary.totalStocks
+      },
       reinvestment: {
-        recommendedAmount: summary.reinvestmentCapacity,
-        reasoning: 'Based on available capital and risk profile',
+        shouldReinvest,
+        recommendedAmount,
+        bufferAmount,
+        reason: reinvestmentReason,
         strategy: 'BALANCED'
       },
-      plan: {
+      plan: shouldReinvest ? {
         totalInvestment,
         stocks: allStocks,
         allocation: {
@@ -380,7 +504,7 @@ Return ONLY JSON (no markdown):
           worstCase: Math.round(worstCase),
           worstCasePercent: Math.round(((worstCase - totalInvestment) / totalInvestment) * 100)
         }
-      },
+      } : null,
       aiInsights
     });
     

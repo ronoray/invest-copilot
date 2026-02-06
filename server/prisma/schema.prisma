@@ -1,5 +1,6 @@
-// Investment Co-Pilot - Complete Database Schema
-// PostgreSQL with full authentication & integrations
+// Investment Co-Pilot - Complete Production Schema v2.1
+// Multi-Portfolio + Upstox Integration + Screenshot Analysis + Capital Management
+// PostgreSQL with comprehensive authentication & broker integrations
 
 generator client {
   provider = "prisma-client-js"
@@ -44,15 +45,15 @@ model User {
   updatedAt     DateTime  @updatedAt
 
   // Relations
-  sessions      Session[]
-  holdings      Holding[]
-  trades        Trade[]
-  watchlist     Watchlist[]
-  proposals     Proposal[]
-  taxRecords    TaxRecord[]
-  telegramUser  TelegramUser?
-  aiAnalyses    AIAnalysis[]      // ← NEW
-  auditLogs     AuditLog[]
+  sessions          Session[]
+  portfolios        Portfolio[]
+  watchlist         Watchlist[]
+  proposals         Proposal[]
+  taxRecords        TaxRecord[]
+  telegramUser      TelegramUser?
+  aiAnalyses        AIAnalysis[]
+  auditLogs         AuditLog[]
+  upstoxIntegration UpstoxIntegration?
 
   @@index([email])
   @@index([phone])
@@ -90,12 +91,81 @@ model OTP {
 }
 
 // ============================================
-// PORTFOLIO & HOLDINGS
+// MULTI-PORTFOLIO ARCHITECTURE
+// ============================================
+
+model Portfolio {
+  id              Int      @id @default(autoincrement())
+  userId          Int
+  
+  // Portfolio Identity
+  name            String   // "Mahua - SBI Securities", "Rono - HDFC", "Rono - Upstox"
+  ownerName       String   // "Mahua Banerjee", "Ronobir Ray"
+  broker          String   // "SBI_SECURITIES", "HDFC_SECURITIES", "UPSTOX"
+  
+  // Capital Management - USER CAN UPDATE ANYTIME
+  startingCapital Float    @default(10000)
+  currentValue    Float?   // Auto-calculated from holdings
+  availableCash   Float    @default(10000)
+  
+  // Market Preferences
+  markets         String[] // ["NSE", "BSE"] or ["NYSE", "NASDAQ"]
+  currency        String   @default("INR") // INR or USD
+  
+  // Risk Profile
+  riskProfile     String   @default("BALANCED") // CONSERVATIVE, BALANCED, AGGRESSIVE
+  
+  // Integration Status
+  apiEnabled      Boolean  @default(false) // true for Upstox, false for SBI/HDFC
+  syncEnabled     Boolean  @default(true)  // Enable auto-sync via API or screenshots
+  
+  // Metadata
+  isActive        Boolean  @default(true)
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Relations
+  user                User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  holdings            Holding[]
+  trades              Trade[]
+  proposals           Proposal[]
+  alertPreferences    AlertPreference?
+  capitalHistory      CapitalHistory[]  // Track capital changes
+  
+  @@index([userId, isActive])
+  @@index([broker])
+  @@index([userId, name])
+}
+
+// ============================================
+// CAPITAL HISTORY - TRACK CAPITAL CHANGES
+// ============================================
+
+model CapitalHistory {
+  id              Int      @id @default(autoincrement())
+  portfolioId     Int
+  
+  oldCapital      Float
+  newCapital      Float
+  reason          String?  // "Initial", "User Update", "Profit Withdrawal", etc.
+  changedBy       String?  // User email or "SYSTEM"
+  
+  createdAt       DateTime @default(now())
+  
+  portfolio       Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+  
+  @@index([portfolioId, createdAt])
+}
+
+// ============================================
+// HOLDINGS - LINKED TO PORTFOLIOS
 // ============================================
 
 model Holding {
   id           Int      @id @default(autoincrement())
-  userId       Int
+  portfolioId  Int
+  
   symbol       String
   exchange     String   @default("NSE")
   quantity     Int
@@ -104,35 +174,52 @@ model Holding {
   targetPrice  Float?
   stopLoss     Float?
   notes        String?
+  
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
   
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  portfolio    Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
   
-  @@unique([userId, symbol, exchange])
-  @@index([userId])
+  @@unique([portfolioId, symbol, exchange])
+  @@index([portfolioId])
   @@index([symbol])
 }
 
+// ============================================
+// TRADES - LINKED TO PORTFOLIOS
+// ============================================
+
 model Trade {
-  id         Int      @id @default(autoincrement())
-  userId     Int
-  symbol     String
-  exchange   String   @default("NSE")
-  type       String   // BUY, SELL
-  quantity   Int
-  price      Float
-  fees       Float?   @default(0)
-  profit     Float?   // For SELL trades
-  executedAt DateTime
-  notes      String?
-  createdAt  DateTime @default(now())
+  id           Int      @id @default(autoincrement())
+  portfolioId  Int
   
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  symbol       String
+  exchange     String   @default("NSE")
+  type         String   // BUY, SELL
+  quantity     Int
+  price        Float
+  fees         Float?   @default(0)
+  profit       Float?   // For SELL trades
   
-  @@index([userId])
+  // Execution Details
+  executedAt   DateTime
+  orderId      String?  // Upstox order ID
+  status       String   @default("COMPLETED") // PENDING, COMPLETED, FAILED, CANCELLED
+  
+  // Source Tracking
+  source       String   @default("MANUAL") // MANUAL, API, SCREENSHOT
+  screenshotId Int?
+  
+  notes        String?
+  createdAt    DateTime @default(now())
+  
+  portfolio    Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+  screenshot   TradeScreenshot? @relation(fields: [screenshotId], references: [id])
+  
+  @@index([portfolioId])
   @@index([symbol])
   @@index([executedAt])
+  @@index([orderId])
 }
 
 model Watchlist {
@@ -152,12 +239,125 @@ model Watchlist {
 }
 
 // ============================================
+// UPSTOX API INTEGRATION
+// ============================================
+
+model UpstoxIntegration {
+  id              Int       @id @default(autoincrement())
+  userId          Int       @unique
+  
+  // API Credentials
+  apiKey          String
+  apiSecret       String
+  
+  // OAuth Tokens
+  accessToken     String?   @db.Text
+  refreshToken    String?   @db.Text
+  tokenExpiresAt  DateTime?
+  
+  // Connection Status
+  isConnected     Boolean   @default(false)
+  lastSyncAt      DateTime?
+  
+  // Metadata
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orders          UpstoxOrder[]
+  
+  @@index([userId])
+  @@index([isConnected])
+}
+
+model UpstoxOrder {
+  id                Int      @id @default(autoincrement())
+  integrationId     Int
+  portfolioId       Int?     // Link to which portfolio placed this order
+  
+  // Order Details
+  orderId           String   @unique // Upstox order ID
+  symbol            String
+  exchange          String
+  transactionType   String   // BUY, SELL
+  orderType         String   // MARKET, LIMIT
+  quantity          Int
+  price             Float?
+  triggerPrice      Float?
+  
+  // Execution
+  status            String   // PENDING, COMPLETE, REJECTED, CANCELLED
+  filledQuantity    Int      @default(0)
+  averagePrice      Float?
+  message           String?  // Error message if failed
+  
+  // Timestamps
+  placedAt          DateTime
+  executedAt        DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  integration       UpstoxIntegration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  
+  @@index([integrationId])
+  @@index([portfolioId])
+  @@index([orderId])
+  @@index([symbol])
+  @@index([status])
+}
+
+// ============================================
+// SCREENSHOT ANALYSIS (Claude Vision API)
+// ============================================
+
+model TradeScreenshot {
+  id              Int      @id @default(autoincrement())
+  userId          Int
+  portfolioId     Int?     // Link to portfolio if identified
+  
+  // Screenshot Data
+  imageUrl        String   // URL to stored screenshot
+  imageHash       String   @unique // To prevent duplicate uploads
+  
+  // Extracted Data (via Claude Vision API)
+  extractedData   Json?    // Raw extracted data
+  symbol          String?
+  quantity        Int?
+  price           Float?
+  tradeType       String?  // BUY, SELL
+  executedAt      DateTime?
+  broker          String?  // Detected broker from screenshot
+  
+  // Processing Status
+  status          String   @default("PENDING") // PENDING, PROCESSED, FAILED
+  confidence      Float?   // AI confidence score (0-1)
+  errorMessage    String?
+  
+  // User Confirmation
+  isConfirmed     Boolean  @default(false)
+  confirmedAt     DateTime?
+  
+  // Relations
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  trades          Trade[]  // Link to created trades
+  
+  @@index([userId])
+  @@index([portfolioId])
+  @@index([status])
+  @@index([imageHash])
+}
+
+// ============================================
 // AI RECOMMENDATIONS & ANALYSIS
 // ============================================
 
 model Proposal {
   id           Int      @id @default(autoincrement())
   userId       Int
+  portfolioId  Int?     // Link to specific portfolio
+  
   symbol       String
   exchange     String   @default("NSE")
   action       String   // BUY, SELL, HOLD
@@ -168,34 +368,74 @@ model Proposal {
   timeHorizon  String   // SHORT, MEDIUM, LONG
   riskCategory String   // HIGH, MEDIUM, LOW
   status       String   @default("PENDING") // PENDING, ACCEPTED, REJECTED
+  
   createdAt    DateTime @default(now())
   expiresAt    DateTime?
   
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  portfolio    Portfolio? @relation(fields: [portfolioId], references: [id])
   
   @@index([userId, status])
+  @@index([portfolioId])
   @@index([symbol])
   @@index([createdAt])
 }
 
-// ============================================
-// NEW: AI COMPREHENSIVE ANALYSIS STORAGE
-// ============================================
-
 model AIAnalysis {
-  id         Int      @id @default(autoincrement())
-  userId     Int
-  analysisType String  // "COMPREHENSIVE" for 10-section analysis, "SINGLE" for individual
-  category   String?  // "MARKET", "TECHNICAL", "RISK", etc. (null for comprehensive)
-  analysis   String   @db.Text
-  metadata   Json?    // Store portfolio snapshot, stocks analyzed, etc.
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id           Int      @id @default(autoincrement())
+  userId       Int
+  analysisType String   // "COMPREHENSIVE", "SINGLE", "PORTFOLIO_PLAN"
+  category     String?  // "MARKET", "TECHNICAL", "RISK", etc.
+  analysis     String   @db.Text
+  metadata     Json?    // Store portfolio snapshot, stocks analyzed, etc.
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, analysisType, createdAt])
   @@index([createdAt])
+}
+
+// ============================================
+// ALERT PREFERENCES (Per Portfolio)
+// ============================================
+
+model AlertPreference {
+  id                Int      @id @default(autoincrement())
+  portfolioId       Int      @unique
+  
+  // Alert Types
+  enableBuySignals  Boolean  @default(true)
+  enableSellSignals Boolean  @default(true)
+  enableTargetAlerts Boolean @default(true)
+  enableStopLossAlerts Boolean @default(true)
+  
+  // Timing
+  morningDigestTime String   @default("09:00") // HH:MM format
+  eveningDigestTime String   @default("18:00")
+  enableMorningDigest Boolean @default(true)
+  enableEveningDigest Boolean @default(true)
+  
+  // 30-Minute Alerts
+  enable30MinAlerts Boolean  @default(true)
+  minPriceChange    Float    @default(2.0) // Minimum % change to trigger alert
+  
+  // Quiet Hours
+  quietHoursStart   String?  // HH:MM format
+  quietHoursEnd     String?  // HH:MM format
+  
+  // Risk Level Filters
+  alertHighRisk     Boolean  @default(true)
+  alertMediumRisk   Boolean  @default(true)
+  alertLowRisk      Boolean  @default(true)
+  
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  portfolio         Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+  
+  @@index([portfolioId])
 }
 
 // ============================================
@@ -206,7 +446,6 @@ model Config {
   id              Int      @id @default(autoincrement())
   key             String   @unique
   value           String   @db.Text
-  startingCapital Float?   @default(10000)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 }
@@ -259,8 +498,9 @@ model AlertHistory {
   id             Int      @id @default(autoincrement())
   telegramUserId Int
   symbol         String
-  alertType      String   // BUY_SIGNAL, SELL_SIGNAL, TARGET_HIT, STOP_LOSS
+  alertType      String   // BUY_SIGNAL, SELL_SIGNAL, TARGET_HIT, STOP_LOSS, PRICE_CHANGE
   price          Float
+  message        String?  @db.Text
   sent           Boolean  @default(false)
   createdAt      DateTime @default(now())
 
@@ -300,8 +540,8 @@ model Notification {
 model AuditLog {
   id        Int      @id @default(autoincrement())
   userId    Int?
-  action    String   // login, logout, create_holding, delete_holding, etc.
-  entity    String?  // holding, watchlist, user
+  action    String   // login, logout, create_holding, delete_holding, update_capital, etc.
+  entity    String?  // holding, watchlist, user, portfolio
   entityId  Int?
   metadata  Json?
   ipAddress String?

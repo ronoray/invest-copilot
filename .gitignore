@@ -60,3 +60,7 @@ seed_admin.sql
 verify_database.sh
 complete_seed_data.sql
 INSERT_DATA_CORRECT.sql
+IMMEDIATE_TODO.md
+MASTER_IMPLEMENTATION.md
+YOURPLAN_IMPLEMENTATION_PLAN.md
+scan_migration_files.ps1

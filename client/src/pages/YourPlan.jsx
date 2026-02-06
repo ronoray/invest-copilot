@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Target, TrendingUp, DollarSign, PieChart, AlertCircle, CheckCircle, RefreshCw } from 'lucide-react';
+import CapitalChangeModal from '../components/CapitalChangeModal';
 import { api } from '../utils/api';
 
 export default function YourPlan() {
@@ -11,7 +12,8 @@ export default function YourPlan() {
   const [loading, setLoading] = useState(true);
   const [plan, setPlan] = useState(null);
   const [error, setError] = useState(null);
-
+  const [showCapitalModal, setShowCapitalModal] = useState(false);
+  
   // Load portfolio list on mount
   useEffect(() => {
     loadPortfolioList();
@@ -55,6 +57,11 @@ export default function YourPlan() {
 
   const handlePortfolioChange = (e) => {
     setSelectedPortfolioId(parseInt(e.target.value));
+  };
+
+  const handleCapitalUpdated = (updatedPortfolio) => {
+    loadPlan();
+    alert(`✅ Capital updated! New: ₹${updatedPortfolio.startingCapital.toLocaleString('en-IN')}`);
   };
 
   const handleRefresh = () => {
@@ -109,6 +116,19 @@ export default function YourPlan() {
                   {selectedPortfolio.broker.replace('_', ' ')} • {selectedPortfolio.riskProfile}
                   {selectedPortfolio.apiEnabled && ' • API Enabled ✓'}
                 </p>
+                <div className="flex gap-2">
+                  <button onClick={handleRefresh} {...existing props}>
+                    Refresh
+                  </button>
+                  
+                  <button
+                    onClick={() => setShowCapitalModal(true)}
+                    className="flex items-center gap-2 px-4 py-2 bg-white text-emerald-600 border border-white rounded-lg hover:bg-emerald-50"
+                  >
+                    <DollarSign className="w-5 h-5" />
+                    <span className="hidden md:inline">Change Capital</span>
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -337,6 +357,12 @@ export default function YourPlan() {
               View All Recommendations
             </button>
           </div>
+          <CapitalChangeModal
+            isOpen={showCapitalModal}
+            onClose={() => setShowCapitalModal(false)}
+            portfolio={selectedPortfolio}
+            onSuccess={handleCapitalUpdated}
+          />
         </>
       )}
     </div>

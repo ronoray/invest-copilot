@@ -12,8 +12,10 @@ export default function YourPlan() {
   const [loading, setLoading] = useState(true);
   const [plan, setPlan] = useState(null);
   const [error, setError] = useState(null);
-  const [showCapitalModal, setShowCapitalModal] = useState(false);
   
+  // Capital management state
+  const [showCapitalModal, setShowCapitalModal] = useState(false);
+
   // Load portfolio list on mount
   useEffect(() => {
     loadPortfolioList();
@@ -59,13 +61,17 @@ export default function YourPlan() {
     setSelectedPortfolioId(parseInt(e.target.value));
   };
 
-  const handleCapitalUpdated = (updatedPortfolio) => {
-    loadPlan();
-    alert(`✅ Capital updated! New: ₹${updatedPortfolio.startingCapital.toLocaleString('en-IN')}`);
-  };
-
   const handleRefresh = () => {
     loadPlan();
+  };
+
+  const handleCapitalUpdated = (updatedPortfolio) => {
+    // Refresh portfolio list to get updated capital
+    loadPortfolioList();
+    // Refresh plan with new capital
+    loadPlan();
+    // Show success message
+    alert(`✅ Capital updated! New capital: ₹${updatedPortfolio.startingCapital.toLocaleString('en-IN')}`);
   };
 
   // Find selected portfolio details

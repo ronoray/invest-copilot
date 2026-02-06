@@ -463,11 +463,19 @@ Sweet dreams! Tomorrow's another opportunity 🚀`;
 async function checkPriceAlerts() {
   try {
     const holdings = await prisma.holding.findMany({
-      include: { user: { include: { telegramUser: true } } }
+      include: { 
+        portfolio: { 
+          include: { 
+            user: { 
+              include: { telegramUser: true } 
+            } 
+          } 
+        } 
+      }
     });
 
     for (const holding of holdings) {
-      if (!holding.user?.telegramUser) continue;
+      if (!holding.portfolio?.user?.telegramUser) continue;
 
       try {
         const currentPrice = await getCurrentPrice(holding.symbol, holding.exchange);

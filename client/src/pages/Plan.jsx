@@ -110,9 +110,9 @@ export default function Plan() {
   return (
     <div className="container mx-auto px-4 py-8 max-w-6xl">
       {/* Header */}
-      <div className="flex items-center justify-between mb-8">
+      <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between mb-8">
         <div>
-          <h1 className="text-3xl font-bold text-gray-800 flex items-center gap-2">
+          <h1 className="text-2xl sm:text-3xl font-bold text-gray-800 flex items-center gap-2">
             🎯 Your Investment Plan
           </h1>
           <p className="text-gray-600 mt-1">Personalized allocation based on your portfolio</p>
@@ -135,7 +135,7 @@ export default function Plan() {
           {/* Starting Capital */}
           <div className="bg-blue-50 rounded-xl p-6 border border-blue-200">
             <p className="text-sm text-gray-600 mb-2">Starting Capital</p>
-            <p className="text-2xl font-bold text-blue-700">
+            <p className="text-xl sm:text-2xl font-bold text-blue-700">
               ₹{snapshot.startingCapital.toLocaleString('en-IN')}
             </p>
           </div>
@@ -143,7 +143,7 @@ export default function Plan() {
           {/* Currently Invested */}
           <div className="bg-purple-50 rounded-xl p-6 border border-purple-200">
             <p className="text-sm text-gray-600 mb-2">Currently Invested</p>
-            <p className="text-2xl font-bold text-purple-700">
+            <p className="text-xl sm:text-2xl font-bold text-purple-700">
               ₹{snapshot.currentlyInvested.toLocaleString('en-IN')}
             </p>
           </div>
@@ -151,7 +151,7 @@ export default function Plan() {
           {/* Available Cash */}
           <div className="bg-green-50 rounded-xl p-6 border border-green-200">
             <p className="text-sm text-gray-600 mb-2">Available Cash</p>
-            <p className="text-2xl font-bold text-green-700">
+            <p className="text-xl sm:text-2xl font-bold text-green-700">
               ₹{snapshot.availableCash.toLocaleString('en-IN')}
             </p>
           </div>

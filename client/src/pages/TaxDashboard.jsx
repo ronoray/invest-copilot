@@ -146,7 +146,7 @@ export default function TaxDashboard() {
             <h3 className="text-sm font-medium text-green-700">LTCG Exempt Used</h3>
             <CheckCircle className="w-5 h-5 text-green-600" />
           </div>
-          <p className="text-3xl font-bold text-green-900">₹{taxData.ltcg.realized.toLocaleString('en-IN')}</p>
+          <p className="text-xl sm:text-3xl font-bold text-green-900">₹{taxData.ltcg.realized.toLocaleString('en-IN')}</p>
           <div className="mt-2 bg-green-200 rounded-full h-2">
             <div 
               className="bg-green-600 rounded-full h-2" 
@@ -164,7 +164,7 @@ export default function TaxDashboard() {
             <h3 className="text-sm font-medium text-blue-700">LTCG Remaining</h3>
             <Target className="w-5 h-5 text-blue-600" />
           </div>
-          <p className="text-3xl font-bold text-blue-900">₹{taxData.ltcg.remaining.toLocaleString('en-IN')}</p>
+          <p className="text-xl sm:text-3xl font-bold text-blue-900">₹{taxData.ltcg.remaining.toLocaleString('en-IN')}</p>
           <p className="text-sm text-blue-600 mt-1 font-semibold">
             Tax-free opportunity
           </p>
@@ -176,7 +176,7 @@ export default function TaxDashboard() {
             <h3 className="text-sm font-medium text-orange-700">STCG Tax</h3>
             <Receipt className="w-5 h-5 text-orange-600" />
           </div>
-          <p className="text-3xl font-bold text-orange-900">₹{taxData.stcg.taxAmount.toLocaleString('en-IN')}</p>
+          <p className="text-xl sm:text-3xl font-bold text-orange-900">₹{taxData.stcg.taxAmount.toLocaleString('en-IN')}</p>
           <p className="text-sm text-orange-600 mt-1">
             @20% on ₹{taxData.stcg.realized.toLocaleString('en-IN')}
           </p>
@@ -188,7 +188,7 @@ export default function TaxDashboard() {
             <h3 className="text-sm font-medium text-purple-700">Total Tax Liability</h3>
             <FileText className="w-5 h-5 text-purple-600" />
           </div>
-          <p className="text-3xl font-bold text-purple-900">₹{taxData.totalTaxLiability.toLocaleString('en-IN')}</p>
+          <p className="text-xl sm:text-3xl font-bold text-purple-900">₹{taxData.totalTaxLiability.toLocaleString('en-IN')}</p>
           <p className="text-sm text-purple-600 mt-1">
             Current FY
           </p>
@@ -199,7 +199,7 @@ export default function TaxDashboard() {
       <div className="bg-blue-50 border-2 border-blue-200 rounded-xl p-5">
         <div className="flex gap-3">
           <AlertCircle className="w-6 h-6 text-blue-600 flex-shrink-0 mt-1" />
-          <div className="text-sm text-blue-900">
+          <div className="text-xs sm:text-sm text-blue-900">
             <p className="font-semibold mb-2">Tax Rules (Equity):</p>
             <ul className="space-y-1">
               <li><strong>LTCG</strong> (held &gt; 12 months): First ₹1,25,000 exempt, then 12.5% tax</li>
@@ -235,7 +235,7 @@ export default function TaxDashboard() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-4 mb-3 text-sm">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-3 text-sm">
                 <div>
                   <p className="text-gray-600">Current Value</p>
                   <p className="font-semibold text-gray-900">₹{opp.currentValue.toLocaleString('en-IN')}</p>
@@ -278,7 +278,58 @@ export default function TaxDashboard() {
           Holdings Tax Breakdown
         </h2>
 
-        <div className="overflow-x-auto">
+        {/* Mobile Card View */}
+        <div className="md:hidden space-y-3">
+          {holdings.map((holding) => (
+            <div key={holding.id} className="bg-gray-50 rounded-lg p-4">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <p className="font-semibold text-gray-900">{holding.stock}</p>
+                  <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${getHoldingBadgeColor(holding.type)}`}>
+                    {holding.type}
+                  </span>
+                </div>
+                <div className="text-right">
+                  {holding.taxOnExit === 0 ? (
+                    <span className="text-green-600 font-semibold text-sm">Tax: ₹0</span>
+                  ) : (
+                    <span className="text-orange-600 font-semibold text-sm">Tax: ₹{holding.taxOnExit}</span>
+                  )}
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                <div>
+                  <p className="text-gray-500 text-xs">Qty</p>
+                  <p className="font-medium text-gray-900">{holding.quantity}</p>
+                </div>
+                <div>
+                  <p className="text-gray-500 text-xs">Gain</p>
+                  <p className="font-medium text-green-600">+₹{holding.unrealizedGain}</p>
+                </div>
+                <div>
+                  <p className="text-gray-500 text-xs">Invested</p>
+                  <p className="font-medium text-gray-900">₹{holding.investedValue.toLocaleString('en-IN')}</p>
+                </div>
+                <div>
+                  <p className="text-gray-500 text-xs">Holding</p>
+                  <p className="font-medium text-gray-900">
+                    {holding.holdingPeriod}m
+                    {holding.type === 'STCG' && (
+                      <span className="text-xs text-gray-500 ml-1">({calculateTimeToLTCG(holding.holdingPeriod)} to LTCG)</span>
+                    )}
+                  </p>
+                </div>
+              </div>
+            </div>
+          ))}
+          <div className="bg-gray-100 rounded-lg p-4 flex justify-between items-center">
+            <p className="font-bold text-gray-900">Total Tax on Exit</p>
+            <p className="font-bold text-orange-600 text-lg">₹{holdings.reduce((sum, h) => sum + h.taxOnExit, 0)}</p>
+          </div>
+        </div>
+
+        {/* Desktop Table View */}
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full">
             <thead>
               <tr className="border-b-2 border-gray-200">
@@ -336,7 +387,7 @@ export default function TaxDashboard() {
       </div>
 
       {/* Export Reports */}
-      <div className="flex gap-4">
+      <div className="flex flex-col sm:flex-row gap-3">
         <button
           onClick={() => {
             const year = selectedYear.split('-')[0];

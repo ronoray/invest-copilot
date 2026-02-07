@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { TrendingUp, TrendingDown, AlertCircle, CheckCircle, Clock, Lightbulb, ArrowRight, RefreshCw, Loader2 } from 'lucide-react';
 import { api } from '../utils/api';
 import { useAuth } from '../context/AuthContext';
+import PortfolioCompletenessAlert from '../components/PortfolioCompletenessAlert';
 
 export default function Dashboard() {
   const { user } = useAuth();
@@ -156,6 +157,37 @@ export default function Dashboard() {
         )}
       </div>
 
+      {/* Portfolio Info Strip */}
+      {selectedPortfolioId !== 'all' && (() => {
+        const sp = portfolios.find(p => p.id === selectedPortfolioId);
+        if (!sp) return null;
+        const brokerLabel = (sp.broker || '').replace(/_/g, ' ');
+        return (
+          <>
+            <div className="bg-white rounded-xl px-4 py-3 shadow-sm border border-gray-200 flex items-center gap-3 flex-wrap text-sm">
+              <span className="font-semibold text-gray-900">{sp.ownerName}</span>
+              <span className="text-gray-400">|</span>
+              <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 font-medium text-xs">{brokerLabel}</span>
+              <span className={`px-2 py-0.5 rounded-full font-medium text-xs ${
+                sp.riskProfile === 'AGGRESSIVE' ? 'bg-red-100 text-red-700' :
+                sp.riskProfile === 'CONSERVATIVE' ? 'bg-green-100 text-green-700' :
+                'bg-blue-100 text-blue-700'
+              }`}>{sp.riskProfile}</span>
+              {sp.investmentGoal && (
+                <span className="text-gray-500">{sp.investmentGoal.replace(/_/g, ' ')}</span>
+              )}
+              <span className="ml-auto font-semibold text-gray-800">
+                Capital: &#8377;{sp.startingCapital?.toLocaleString('en-IN')}
+              </span>
+              <span className="text-green-700 font-medium">
+                Cash: &#8377;{sp.availableCash?.toLocaleString('en-IN')}
+              </span>
+            </div>
+            <PortfolioCompletenessAlert portfolio={sp} linkToPortfolio={true} />
+          </>
+        );
+      })()}
+
       {/* Loading */}
       {loading ? (
         <div className="flex items-center justify-center py-12">
@@ -164,6 +196,40 @@ export default function Dashboard() {
         </div>
       ) : (
         <>
+          {/* Portfolio Overview Cards (All Portfolios view) */}
+          {selectedPortfolioId === 'all' && portfolios.length > 1 && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {portfolios.map(p => {
+                const brokerShort = (p.broker || '').replace(/_/g, ' ');
+                return (
+                  <button
+                    key={p.id}
+                    onClick={() => setSelectedPortfolioId(p.id)}
+                    className="bg-white rounded-xl p-4 border border-gray-200 hover:border-blue-300 hover:shadow-md transition-all text-left"
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="min-w-0 flex-1">
+                        <p className="font-semibold text-gray-900 truncate">{p.ownerName}</p>
+                        <p className="text-xs text-gray-500 truncate">{p.name}</p>
+                      </div>
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0 ml-2 ${
+                        p.riskProfile === 'AGGRESSIVE' ? 'bg-red-100 text-red-700' :
+                        p.riskProfile === 'CONSERVATIVE' ? 'bg-green-100 text-green-700' :
+                        'bg-blue-100 text-blue-700'
+                      }`}>{p.riskProfile}</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-gray-500">
+                      <span>{brokerShort}</span>
+                      <span className="text-gray-300">|</span>
+                      <span className="font-semibold text-gray-800">&#8377;{p.startingCapital?.toLocaleString('en-IN')}</span>
+                      <span className="text-green-600 ml-auto">Cash: &#8377;{p.availableCash?.toLocaleString('en-IN')}</span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
           {/* Quick Stats Grid */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {/* Portfolio Value */}
@@ -172,7 +238,7 @@ export default function Dashboard() {
                 <h3 className="text-sm font-medium text-blue-700">Portfolio Value</h3>
                 <TrendingUp className="w-5 h-5 text-blue-600" />
               </div>
-              <p className="text-3xl font-bold text-blue-900">{formatCurrency(summary?.totalCurrent)}</p>
+              <p className="text-xl sm:text-3xl font-bold text-blue-900">{formatCurrency(summary?.totalCurrent)}</p>
               {summary && (
                 <p className={`text-sm mt-1 font-semibold ${plColor(summary.unrealizedPL)}`}>
                   {Number(summary.unrealizedPL) >= 0 ? '+' : ''}{formatCurrency(summary.unrealizedPL)} ({summary.plPercent}%)
@@ -200,7 +266,7 @@ export default function Dashboard() {
                 <h3 className="text-sm font-medium text-purple-700">Invested</h3>
                 <CheckCircle className="w-5 h-5 text-purple-600" />
               </div>
-              <p className="text-3xl font-bold text-purple-900">{formatCurrency(summary?.totalInvested)}</p>
+              <p className="text-xl sm:text-3xl font-bold text-purple-900">{formatCurrency(summary?.totalInvested)}</p>
               <p className="text-sm text-purple-600 mt-1">Total capital deployed</p>
             </div>
 
@@ -210,7 +276,7 @@ export default function Dashboard() {
                 <h3 className="text-sm font-medium text-amber-700">Holdings</h3>
                 <CheckCircle className="w-5 h-5 text-amber-600" />
               </div>
-              <p className="text-3xl font-bold text-amber-900">{holdings.length}</p>
+              <p className="text-xl sm:text-3xl font-bold text-amber-900">{holdings.length}</p>
               <p className="text-sm text-amber-600 mt-1">
                 {selectedPortfolioId === 'all' ? 'Across all portfolios' : 'In this portfolio'}
               </p>
@@ -232,7 +298,47 @@ export default function Dashboard() {
                 </button>
               </div>
             ) : (
-              <div className="overflow-x-auto">
+              <>
+              {/* Mobile Card View */}
+              <div className="md:hidden space-y-3">
+                {holdings.map((h) => (
+                  <div key={h.id} className="bg-gray-50 rounded-lg p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <div>
+                        <p className="font-semibold text-gray-900">{h.symbol}</p>
+                        {selectedPortfolioId === 'all' && h.portfolioName && (
+                          <p className="text-xs text-gray-500">{h.portfolioName}</p>
+                        )}
+                      </div>
+                      <div className={`text-right ${plColor(h.unrealizedPL)}`}>
+                        <p className="font-semibold">{Number(h.unrealizedPL) >= 0 ? '+' : ''}{formatCurrency(h.unrealizedPL)}</p>
+                        <p className="text-xs">{Number(h.plPercent) >= 0 ? '+' : ''}{h.plPercent}%</p>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-sm">
+                      <div>
+                        <p className="text-gray-500 text-xs">Qty</p>
+                        <p className="font-medium text-gray-900">{h.quantity}</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500 text-xs">Current</p>
+                        <p className="font-medium text-gray-900">₹{Number(h.currentPrice).toFixed(2)}</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500 text-xs">Invested</p>
+                        <p className="font-medium text-gray-900">{formatCurrency(h.investedAmount)}</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500 text-xs">Value</p>
+                        <p className="font-medium text-gray-900">{formatCurrency(h.currentValue)}</p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Desktop Table View */}
+              <div className="hidden md:block overflow-x-auto">
                 <table className="w-full">
                   <thead>
                     <tr className="border-b-2 border-gray-200">
@@ -272,6 +378,7 @@ export default function Dashboard() {
                   </tbody>
                 </table>
               </div>
+              </>
             )}
           </div>
 
@@ -353,7 +460,7 @@ export default function Dashboard() {
           {/* Market Status */}
           <div className="bg-white rounded-xl p-6 shadow-md border border-gray-200">
             <h2 className="text-xl font-semibold mb-4 text-gray-800">Market Status</h2>
-            <div className="flex items-center gap-2 text-sm text-gray-600">
+            <div className="flex items-center flex-wrap gap-2 text-sm text-gray-600">
               <Clock className="w-4 h-4" />
               <span>Market Hours: 9:15 AM - 3:30 PM IST (Mon-Fri)</span>
               <span className={`ml-auto px-3 py-1 rounded-full font-medium text-xs ${

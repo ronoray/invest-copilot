@@ -1,6 +1,6 @@
 import { Routes, Route, Link, useLocation } from 'react-router-dom';
 import { useState } from 'react';
-import { Home, Briefcase, Eye, Lightbulb, Receipt, Target, LogOut, Menu, X, Brain } from 'lucide-react';
+import { Home, Briefcase, Eye, Lightbulb, Receipt, Target, LogOut, Menu, X, Brain, Layers } from 'lucide-react';
 import { useAuth } from './context/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import Login from './pages/Login';
@@ -12,6 +12,7 @@ import AIRecommendations from './pages/AIRecommendations';
 import AIInsights from './pages/AIInsights';
 import TaxDashboard from './pages/TaxDashboard';
 import YourPlan from './pages/YourPlan';
+import MultiAssetRecommendations from './pages/MultiAssetRecommendations';
 
 function App() {
   return (
@@ -67,6 +68,7 @@ function AppLayout() {
                 <NavLink to="/" icon={<Home size={18} />} active={isActive('/')}>Dashboard</NavLink>
                 <NavLink to="/portfolio" icon={<Briefcase size={18} />} active={isActive('/portfolio')}>Portfolio</NavLink>
                 <NavLink to="/plan" icon={<Target size={18} />} active={isActive('/plan')}>Plan</NavLink>
+                <NavLink to="/invest" icon={<Layers size={18} />} active={isActive('/invest')}>Invest</NavLink>
                 <NavLink to="/ai" icon={<Lightbulb size={18} />} active={isActive('/ai')}>AI</NavLink>
                 <NavLink to="/insights" icon={<Brain size={18} />} active={isActive('/insights')}>Insights</NavLink>
                 <NavLink to="/tax" icon={<Receipt size={18} />} active={isActive('/tax')}>Tax</NavLink>
@@ -128,9 +130,17 @@ function AppLayout() {
               >
                 Your Plan
               </MobileNavLink>
-              <MobileNavLink 
-                to="/ai" 
-                icon={<Lightbulb size={20} />} 
+              <MobileNavLink
+                to="/invest"
+                icon={<Layers size={20} />}
+                onClick={closeMobileMenu}
+                active={isActive('/invest')}
+              >
+                Multi-Asset Invest
+              </MobileNavLink>
+              <MobileNavLink
+                to="/ai"
+                icon={<Lightbulb size={20} />}
                 onClick={closeMobileMenu}
                 active={isActive('/ai')}
               >
@@ -190,6 +200,7 @@ function AppLayout() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/portfolio" element={<Portfolio />} />
           <Route path="/plan" element={<YourPlan />} />
+          <Route path="/invest" element={<MultiAssetRecommendations />} />
           <Route path="/ai" element={<AIRecommendations />} />
           <Route path="/insights" element={<AIInsights />} />
           <Route path="/tax" element={<TaxDashboard />} />

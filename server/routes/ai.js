@@ -2,11 +2,12 @@ import express from 'express';
 import multer from 'multer';
 import { readFileSync, mkdirSync } from 'fs';
 import path from 'path';
-import { scanMarketForOpportunities } from '../services/advancedScreener.js';
+import { scanMarketForOpportunities, buildProfileBrief, buildAllPortfoliosBrief } from '../services/advancedScreener.js';
 import prisma from '../services/prisma.js';
 import Anthropic from '@anthropic-ai/sdk';
 import logger from '../services/logger.js';
 import crypto from 'crypto';
+import { generateMultiAssetRecommendations, getCommodityRecommendations, getMutualFundRecommendations } from '../services/multiAssetRecommendations.js';
 
 const router = express.Router();
 
@@ -16,131 +17,168 @@ const anthropic = new Anthropic({
 });
 
 /**
- * 10 COMPREHENSIVE ANALYSIS PROMPTS
- * Each provides deep, actionable insights
+ * 10 COMPREHENSIVE ANALYSIS PROMPTS — PROFILE-AWARE
+ * Each section receives the full portfolio context and provides
+ * deeply personalized, actionable insights.
+ *
+ * @param {string} context - Full portfolio brief (single or all portfolios)
  */
 const COMPREHENSIVE_PROMPTS = {
-  marketAnalysis: (capital, stocks) => `
-## 1. MARKET ANALYSIS
-Analyze the current stock market environment with a focus on ₹${capital} capital. 
-Identify short-term and long-term trends, key support and resistance levels, and emerging patterns. 
-Factor in recent earnings, macroeconomic news, and industry developments for ${stocks || 'NSE/BSE top stocks'}.
-Suggest 3-5 specific investment opportunities with entry points and reasoning.`,
+  marketAnalysis: (context) => `
+## 1. MARKET ANALYSIS — Personalized Market Outlook
 
-  portfolioDiversification: (holdings) => `
-## 2. PORTFOLIO DIVERSIFICATION  
-Current holdings: ${holdings || 'None yet - starting fresh'}
+${context}
 
-Evaluate concentration risk and suggest diversification strategies:
-- 3 new sectors to consider
-- 2-3 specific stocks per sector
-- Asset allocation percentages
-- How each addition reduces portfolio risk`,
+Given the above investor situation, analyze the current Indian stock market:
+- What is the broad market doing (Nifty, Sensex, Bank Nifty) and how does it affect THIS investor?
+- For CONSERVATIVE portfolios: Is this a good time to deploy capital or stay defensive?
+- For AGGRESSIVE portfolios: What momentum sectors/themes are running? Where are the breakout opportunities?
+- Identify 3-5 specific opportunities RIGHT NOW that match each portfolio's risk profile
+- Key support/resistance levels on Nifty 50 and sector indices relevant to current holdings
+- Upcoming events (earnings season, RBI policy, FII activity) that need attention`,
 
-  riskManagement: (strategy) => `
-## 3. RISK MANAGEMENT
-Effective risk management for ${strategy} strategy:
-- Stop-loss placement rules (percentage-based)
-- Position sizing formula (% of portfolio per trade)
-- Diversification guidelines
-- Risk-to-reward ratios (minimum 1:2)
-Provide specific examples with INR amounts.`,
+  portfolioDiversification: (context) => `
+## 2. PORTFOLIO DIVERSIFICATION — Gap Analysis
 
-  technicalAnalysis: (stocks) => `
-## 4. TECHNICAL ANALYSIS
-Full technical analysis of: ${stocks || 'Top NSE stocks'}
+${context}
 
-For each stock:
-- Price action (support/resistance)
-- Volume patterns
-- Moving averages (50-day, 200-day)
-- RSI (overbought/oversold)
-- MACD (momentum)
-- Bollinger Bands
+Analyze concentration risk and diversification gaps for EACH portfolio above:
+- What sectors are over-represented or missing entirely?
+- For portfolios WITH holdings: Which sectors should be added to reduce correlation?
+- For EMPTY portfolios: What's the ideal starting allocation for their risk profile?
+- Suggest 3-4 specific stocks per portfolio that address their gaps
+- Cross-portfolio view: Are the family's investments collectively well-diversified?
+- Asset class gaps: Should any portfolio add MFs, ETFs, gold, or bonds alongside stocks?`,
 
-BUY/SELL/HOLD with entry/exit points.`,
+  riskManagement: (context) => `
+## 3. RISK MANAGEMENT — Portfolio-Specific Rules
 
-  economicIndicators: (stocks) => `
-## 5. ECONOMIC INDICATORS
-How key indicators influence ${stocks || 'Indian markets'}:
-- RBI interest rates
-- Inflation (CPI/WPI)
-- GDP growth
-- FII flows
-- USD-INR exchange rate
-- Crude oil prices
+${context}
 
-Positioning strategies for upcoming releases.`,
+Create risk management rules SPECIFIC to each portfolio:
+- CONSERVATIVE portfolios: Tighter stop-losses (5-8%), larger positions in quality, max 15% in any single stock
+- AGGRESSIVE portfolios: Wider stops (10-15%), smaller positions in speculative plays, trailing stop strategy
+- Position sizing formula for each portfolio based on their available capital
+- For existing holdings: Which positions are oversized or undersized for the risk profile?
+- Portfolio-level risk: Max drawdown scenarios for each portfolio
+- Emergency rules: When to go to cash (market crash triggers)
+Provide specific ₹ amounts, not just percentages.`,
 
-  valueInvesting: (companies) => `
-## 6. VALUE INVESTING
-Analyze ${companies || 'top NSE companies'} using value principles:
-- P/E ratio vs industry
-- P/B ratio
-- Debt-to-equity
-- ROE
-- Dividend yield
-- Free cash flow
-- Competitive moat
+  technicalAnalysis: (context) => `
+## 4. TECHNICAL ANALYSIS — Existing Holdings + Watchlist
 
-Undervalued/overvalued with buy/pass recommendations.`,
+${context}
 
-  marketSentiment: (stocks) => `
-## 7. MARKET SENTIMENT
-Assess sentiment for ${stocks || 'Indian markets'}:
-- News trends (bullish/bearish)
-- Analyst ratings
-- Social media sentiment
-- Put/call ratios
-- FII/DII activity
-- India VIX
+Provide technical analysis for:
+A) Every stock currently held in the portfolios above:
+   - Current trend (uptrend/downtrend/sideways)
+   - Key support and resistance levels
+   - RSI zone (oversold/neutral/overbought)
+   - Is it a HOLD, ADD MORE, or EXIT?
 
-How to use sentiment for timing.`,
+B) 3-5 new stocks on each risk tier that show strong technical setups:
+   - Breakout candidates with volume confirmation
+   - Oversold bounces in quality names
+   - Chart patterns forming (cup & handle, flags, etc.)
 
-  earningsReports: (companies) => `
-## 8. EARNINGS ANALYSIS
-Recent earnings for ${companies || 'major NSE companies'}:
-- Revenue growth (YoY, QoQ)
-- Net profit margins
-- EPS
-- Forward guidance
-- Management commentary
-- Segment performance
+For each: Entry zone, target, stop-loss, and time horizon.`,
 
-BEAT/MEET/MISS expectations. Price movement prediction.`,
+  economicIndicators: (context) => `
+## 5. ECONOMIC INDICATORS — Impact on This Investor
 
-  growthVsDividend: () => `
-## 9. GROWTH VS DIVIDEND
-Compare strategies:
+${context}
 
-**Growth Stocks** (Tech, Pharma):
-- High growth potential
-- Reinvest profits
-- Higher volatility
-- Long-term wealth building
+How do current economic conditions affect THIS investor's portfolios?
+- RBI interest rate stance → Impact on banking/NBFC holdings and bond allocation
+- Inflation trajectory → Which holdings benefit or suffer? Should commodities allocation change?
+- GDP growth outlook → Which portfolio sectors align with growth? Which are headwinds?
+- FII/DII flows → Are foreign investors buying or selling the sectors this investor holds?
+- USD/INR trend → Impact on IT holdings, import-dependent companies
+- Crude oil → Impact on OMCs, aviation, manufacturing holdings
+- For each indicator: Specific action items for conservative vs aggressive portfolios`,
 
-**Dividend Stocks** (Banks, Utilities):
-- Stable income
-- Regular payouts
-- Lower volatility
-- Income generation
+  valueInvesting: (context) => `
+## 6. VALUE INVESTING — What's Cheap For This Profile
 
-2-3 stocks per category with allocation %.`,
+${context}
 
-  globalEvents: (stocks) => `
-## 10. GLOBAL EVENTS
-How global events impact ${stocks || 'Indian markets'}:
-- US Federal Reserve policy
-- China economic data
-- Geopolitical tensions
-- Supply chain issues
-- Commodity prices
+Given each portfolio's risk profile and existing holdings:
+- For CONSERVATIVE portfolios: Find undervalued large-caps with P/E below sector average, high dividend yield, low debt-to-equity, strong ROE, wide moat. These should be core holdings.
+- For AGGRESSIVE portfolios: Find undervalued growth stories — high ROE, expanding margins, market share gainers that are temporarily cheap (fallen angels, sector rotations).
+- For each recommendation: P/E vs 5-year average, P/B, debt, ROE, dividend yield, free cash flow
+- Intrinsic value estimate vs current price for top 3 picks per portfolio
+- Identify any CURRENT holdings that have become overvalued and should be trimmed`,
 
-Hedging strategies:
-- Sector diversification
-- Gold/commodities
-- Cash reserves
-- Defensive stocks`
+  marketSentiment: (context) => `
+## 7. MARKET SENTIMENT — Timing Guidance
+
+${context}
+
+Current market sentiment analysis relevant to this investor:
+- Overall market mood: Fear/Greed indicator equivalent for Indian markets
+- FII vs DII battle: Who's buying, who's selling, and what it means
+- India VIX: Is volatility elevated or suppressed? What should each portfolio do?
+- Sector-specific sentiment for sectors held in the portfolios above
+- IPO market temperature: Is retail euphoria or caution the theme?
+- Mutual fund inflows/outflows: Are retail investors pumping or dumping?
+For each portfolio:
+- Should they be DEPLOYING capital now or WAITING?
+- If deploying: Lump sum or staggered over weeks?`,
+
+  earningsReports: (context) => `
+## 8. EARNINGS ANALYSIS — Holdings & Sector Review
+
+${context}
+
+For every stock currently held in the portfolios:
+- Most recent quarterly results: Revenue growth (YoY), PAT margins, EPS
+- Did it BEAT/MEET/MISS analyst expectations?
+- Management commentary highlights and forward guidance
+- What does this mean: HOLD / ADD MORE / EXIT?
+
+For the sectors relevant to empty portfolios (where capital needs to be deployed):
+- Which sectors delivered strong earnings this quarter?
+- Which companies in those sectors are worth entering?
+- Any earnings surprises (positive or negative) creating opportunities?`,
+
+  growthVsDividend: (context) => `
+## 9. GROWTH VS DIVIDEND STRATEGY — Personalized Allocation
+
+${context}
+
+Based on each portfolio's risk profile:
+
+**For CONSERVATIVE portfolios:**
+- Recommend 3-4 dividend stocks (yield > 2%, consistent payout history, blue-chip)
+- Suggest dividend-focused MFs
+- Calculate expected annual dividend income from current + recommended holdings
+- Build a "dividend income ladder" — monthly income from staggered payouts
+
+**For AGGRESSIVE portfolios:**
+- Recommend 3-4 pure growth stocks (revenue growing > 20% YoY, market disruptors)
+- Suggest growth-focused MFs (small/mid-cap, sectoral)
+- Expected capital appreciation scenario (1-year, 3-year)
+- Which current holdings are growth vs value? Is the mix right?
+
+**Cross-portfolio:** How do the portfolios complement each other as a family unit?`,
+
+  globalEvents: (context) => `
+## 10. GLOBAL MACRO & HEDGING — Protection Strategy
+
+${context}
+
+How global events impact THIS investor's specific holdings and future plans:
+- US Federal Reserve: Rate trajectory and impact on IT stocks, FII flows to India
+- China: Manufacturing data, any supply chain shifts benefiting Indian companies held
+- Geopolitical: India's trade deals, border situations, defense spending implications
+- Global commodities: Oil, gold, copper — impact on specific holdings
+- Currency moves: INR outlook and which portfolio positions benefit/suffer
+
+Hedging recommendations per portfolio:
+- CONSERVATIVE: Gold allocation (SGB/ETF), G-Sec exposure, cash reserves %
+- AGGRESSIVE: Sector hedges, defensive anchor stocks, put option awareness
+- Portfolio insurance: How much cash buffer should each portfolio maintain?
+- Rebalancing triggers: When to shift allocation between portfolios`
 };
 
 /**
@@ -297,32 +335,52 @@ router.get('/recommendations', async (req, res) => {
 
 /**
  * POST /api/ai/scan
- * EXISTING FUNCTIONALITY - PRESERVED
+ * CLAUDE-POWERED, PROFILE-AWARE MARKET SCAN
+ * Accepts optional portfolioId in body; defaults to first portfolio or generic scan
  */
 router.post('/scan', async (req, res) => {
   try {
-    const { baseAmount = 10000, perCategory = 5 } = req.body;
-    
-    logger.info(`Starting market scan - amount: ₹${baseAmount}`);
-    
-    const portfolio = await getSafePortfolioSummary();
-    
+    const userId = req.userId;
+    const { baseAmount = 10000, perCategory = 5, portfolioId } = req.body;
+
+    logger.info(`Starting AI market scan - amount: ₹${baseAmount}, portfolioId: ${portfolioId || 'auto'}`);
+
+    // Pull the full portfolio object (with holdings) for profile-aware scanning
+    let portfolioData = null;
+    if (portfolioId) {
+      portfolioData = await prisma.portfolio.findFirst({
+        where: { id: parseInt(portfolioId), userId },
+        include: { holdings: true }
+      });
+    } else if (userId) {
+      // Default to first active portfolio
+      portfolioData = await prisma.portfolio.findFirst({
+        where: { userId, isActive: true },
+        include: { holdings: true }
+      });
+    }
+
+    const investAmount = portfolioData
+      ? Math.max(parseFloat(portfolioData.availableCash || 0) * 0.7, baseAmount)
+      : baseAmount;
+
     const opportunities = await scanMarketForOpportunities({
-      targetCount: { 
-        high: perCategory, 
-        medium: perCategory, 
-        low: perCategory 
+      portfolio: portfolioData,
+      targetCount: {
+        high: perCategory,
+        medium: perCategory,
+        low: perCategory
       },
-      baseAmount: portfolio.reinvestmentCapacity || baseAmount
+      baseAmount: investAmount,
     });
-    
-    const total = 
-      opportunities.high.length + 
-      opportunities.medium.length + 
+
+    const total =
+      opportunities.high.length +
+      opportunities.medium.length +
       opportunities.low.length;
-    
+
     logger.info(`Scan complete: Found ${total} opportunities`);
-    
+
     res.json({
       success: true,
       opportunities,
@@ -331,16 +389,17 @@ router.post('/scan', async (req, res) => {
         highRisk: opportunities.high.length,
         mediumRisk: opportunities.medium.length,
         lowRisk: opportunities.low.length,
-        availableCapital: portfolio.reinvestmentCapacity || baseAmount
+        availableCapital: investAmount,
+        portfolioName: portfolioData?.name || 'General'
       },
       scannedAt: new Date().toISOString()
     });
-    
+
   } catch (error) {
     logger.error('Market scan error:', error);
-    res.status(500).json({ 
-      error: 'Market scan failed', 
-      message: error.message 
+    res.status(500).json({
+      error: 'Market scan failed',
+      message: error.message
     });
   }
 });
@@ -354,31 +413,41 @@ router.get('/portfolio-plan', async (req, res) => {
   try {
     const { portfolioId } = req.query;
     const userId = req.userId; // From auth middleware
-    
+
     logger.info(`Generating portfolio plan... (portfolioId: ${portfolioId || 'all'})`);
-    
-    // NEW: Pass portfolioId and userId to get portfolio-specific data
+
+    // Pull the full portfolio object with holdings for profile-aware scanning
+    let portfolioData = null;
+    if (portfolioId) {
+      portfolioData = await prisma.portfolio.findFirst({
+        where: { id: parseInt(portfolioId), userId },
+        include: { holdings: true }
+      });
+    }
+
+    // Also get the legacy summary for backward-compatible response shape
     const summary = await getSafePortfolioSummary(
       portfolioId ? parseInt(portfolioId) : null,
       userId
     );
-    
-    // NEW: Calculate reinvestment recommendation
+
+    // Calculate reinvestment recommendation
     const availableCash = summary.availableCash;
     const shouldReinvest = availableCash >= 2000;
     const recommendedAmount = shouldReinvest ? Math.floor(availableCash * 0.7) : 0;
     const bufferAmount = shouldReinvest ? availableCash - recommendedAmount : availableCash;
-    
+
     let reinvestmentReason;
     if (shouldReinvest) {
       reinvestmentReason = `You have ₹${availableCash.toLocaleString('en-IN')} available. Investing ₹${recommendedAmount.toLocaleString('en-IN')} (70%) while keeping ₹${bufferAmount.toLocaleString('en-IN')} as buffer for emergencies.`;
     } else {
       reinvestmentReason = `You have ₹${availableCash.toLocaleString('en-IN')} available. Build up to at least ₹2,000 before investing. Keep saving!`;
     }
-    
-    // Generate opportunities (only if should reinvest)
-    const opportunities = shouldReinvest 
+
+    // Generate opportunities with FULL portfolio context (only if should reinvest)
+    const opportunities = shouldReinvest
       ? await scanMarketForOpportunities({
+          portfolio: portfolioData,  // Pass the full portfolio for profile-aware scanning
           targetCount: { high: 3, medium: 3, low: 3 },
           baseAmount: recommendedAmount
         })
@@ -412,34 +481,29 @@ router.get('/portfolio-plan', async (req, res) => {
       try {
         logger.info('Calling Claude API...');
         
-        const prompt = `You are a friendly investment advisor. Analyze this portfolio plan:
+        const profileContext = portfolioData ? buildProfileBrief(portfolioData) : `Portfolio: ${summary.portfolioName || 'All Portfolios'}`;
 
-**Portfolio:** ${summary.portfolioName || 'All Portfolios'}
-${summary.ownerName ? `**Owner:** ${summary.ownerName}` : ''}
-${summary.broker ? `**Broker:** ${summary.broker}` : ''}
+        const prompt = `You are a friendly but expert investment advisor. Analyze this portfolio plan DEEPLY.
 
-**Current Status:**
-- Starting Capital: ₹${summary.startingCapital.toLocaleString('en-IN')}
-- Available Cash: ₹${availableCash.toLocaleString('en-IN')}
-- Currently Invested: ₹${summary.totalInvested.toLocaleString('en-IN')}
-- Current Value: ₹${summary.currentValue.toLocaleString('en-IN')}
-- P&L: ₹${summary.totalProfitLoss.toLocaleString('en-IN')} (${summary.profitLossPercent?.toFixed(2)}%)
-- Holdings: ${summary.totalStocks} stocks
+${profileContext}
 
-**Proposed Plan:**
-- Investment Amount: ₹${totalInvestment.toLocaleString('en-IN')}
-- Stocks: ${allStocks.map(s => s.symbol).join(', ')}
-- High Risk=${opportunities.high.length}, Medium Risk=${opportunities.medium.length}, Low Risk=${opportunities.low.length}
+**PROPOSED INVESTMENT PLAN:**
+- Deploy: ₹${totalInvestment.toLocaleString('en-IN')} into ${allStocks.length} stocks
+- Stocks: ${allStocks.map(s => `${s.symbol} (₹${s.suggestedAmount?.toLocaleString('en-IN') || '?'}, ${s.riskCategory} risk)`).join(', ')}
+- Allocation: High Risk ₹${opportunities.high.reduce((s, st) => s + (st.suggestedAmount || 0), 0).toLocaleString('en-IN')}, Medium Risk ₹${opportunities.medium.reduce((s, st) => s + (st.suggestedAmount || 0), 0).toLocaleString('en-IN')}, Low Risk ₹${opportunities.low.reduce((s, st) => s + (st.suggestedAmount || 0), 0).toLocaleString('en-IN')}
+
+Consider: Does this plan match the investor's risk profile (${portfolioData?.riskProfile || 'BALANCED'})?
+Is the allocation appropriate? Are there any red flags? What should they watch out for?
 
 Return ONLY JSON (no markdown):
 {
   "overallRating": "EXCELLENT|GOOD|MODERATE|RISKY",
   "confidence": 75,
-  "keyInsights": ["insight 1", "insight 2", "insight 3"],
-  "warnings": ["warning 1", "warning 2"],
-  "actionItems": ["action 1", "action 2"],
-  "personalizedAdvice": "2-3 sentences",
-  "riskAssessment": "1-2 sentences"
+  "keyInsights": ["insight specific to this investor", "insight 2", "insight 3"],
+  "warnings": ["warning specific to their situation", "warning 2"],
+  "actionItems": ["action 1 with specific stock/amount", "action 2"],
+  "personalizedAdvice": "2-3 sentences referencing their specific portfolio, broker, and risk profile",
+  "riskAssessment": "1-2 sentences on whether this plan matches their stated risk tolerance"
 }`;
 
         const message = await anthropic.messages.create({
@@ -524,45 +588,71 @@ Return ONLY JSON (no markdown):
 });
 
 /**
- * GET /api/ai/comprehensive-analysis
- * NEW: 10-SECTION COMPREHENSIVE ANALYSIS
+ * GET /api/ai/comprehensive-analysis?portfolioId=1
+ * 10-SECTION COMPREHENSIVE ANALYSIS — PROFILE-AWARE
+ *
+ * Without portfolioId: Analyzes ALL portfolios as a family unit
+ * With portfolioId: Focuses on that specific portfolio
  */
 router.get('/comprehensive-analysis', async (req, res) => {
   try {
-    logger.info('Generating 10-section comprehensive analysis...');
-    
-    const summary = await getSafePortfolioSummary();
-    const holdingsList = summary.holdings.length > 0
-      ? summary.holdings.map(h => `${h.symbol} (${h.quantity} shares @ ₹${h.avgPrice})`).join(', ')
-      : 'No holdings yet';
-    const stockSymbols = summary.holdings.map(h => h.symbol).join(', ') || 'NSE top stocks';
-    
-    const prompt = `You are an expert investment advisor. Provide comprehensive analysis.
+    const userId = req.userId;
+    const { portfolioId } = req.query;
 
-**PORTFOLIO:**
-- Capital: ₹${summary.totalValue || 10000}
-- Holdings: ${holdingsList}
-- P&L: ₹${summary.totalProfitLoss} (${summary.profitLossPercent?.toFixed(2)}%)
+    logger.info(`Generating comprehensive analysis (portfolioId: ${portfolioId || 'all'})...`);
 
-${COMPREHENSIVE_PROMPTS.marketAnalysis(summary.totalValue || 10000, stockSymbols)}
-${COMPREHENSIVE_PROMPTS.portfolioDiversification(holdingsList)}
-${COMPREHENSIVE_PROMPTS.riskManagement('balanced growth')}
-${COMPREHENSIVE_PROMPTS.technicalAnalysis(stockSymbols)}
-${COMPREHENSIVE_PROMPTS.economicIndicators(stockSymbols)}
-${COMPREHENSIVE_PROMPTS.valueInvesting(stockSymbols)}
-${COMPREHENSIVE_PROMPTS.marketSentiment(stockSymbols)}
-${COMPREHENSIVE_PROMPTS.earningsReports(stockSymbols)}
-${COMPREHENSIVE_PROMPTS.growthVsDividend()}
-${COMPREHENSIVE_PROMPTS.globalEvents(stockSymbols)}
+    // Pull full portfolio data with holdings
+    let portfolios;
+    if (portfolioId) {
+      portfolios = await prisma.portfolio.findMany({
+        where: { id: parseInt(portfolioId), userId },
+        include: { holdings: true }
+      });
+    } else {
+      portfolios = await prisma.portfolio.findMany({
+        where: { userId, isActive: true },
+        include: { holdings: true }
+      });
+    }
+
+    if (!portfolios || portfolios.length === 0) {
+      return res.status(404).json({ error: 'No portfolios found' });
+    }
+
+    // Build the context brief
+    const context = portfolioId
+      ? buildProfileBrief(portfolios[0])
+      : buildAllPortfoliosBrief(portfolios);
+
+    const prompt = `You are an expert investment advisor providing a comprehensive 10-section analysis.
+This analysis must be DEEPLY PERSONALIZED to the investor's actual situation — their specific holdings, capital, risk profiles, and portfolio goals.
+Do NOT give generic advice. Every recommendation must reference the actual portfolios and holdings described below.
+
+${context}
+
+Now provide all 10 sections of analysis:
+
+${COMPREHENSIVE_PROMPTS.marketAnalysis(context)}
+${COMPREHENSIVE_PROMPTS.portfolioDiversification(context)}
+${COMPREHENSIVE_PROMPTS.riskManagement(context)}
+${COMPREHENSIVE_PROMPTS.technicalAnalysis(context)}
+${COMPREHENSIVE_PROMPTS.economicIndicators(context)}
+${COMPREHENSIVE_PROMPTS.valueInvesting(context)}
+${COMPREHENSIVE_PROMPTS.marketSentiment(context)}
+${COMPREHENSIVE_PROMPTS.earningsReports(context)}
+${COMPREHENSIVE_PROMPTS.growthVsDividend(context)}
+${COMPREHENSIVE_PROMPTS.globalEvents(context)}
 
 **FORMAT:**
-- Clear headers with emojis
-- Specific stock tickers (CAPS)
-- Bullet points
+- Clear section headers with numbers and emojis
+- Specific stock tickers in CAPS (e.g., HDFCBANK, RELIANCE)
+- Reference each portfolio by its actual name and owner (e.g., "For [Owner]'s [Broker] portfolio...")
+- Bullet points for clarity
 - Confidence: HIGH 🟢 / MEDIUM 🟡 / LOW 🔴
-- Time: SHORT/MEDIUM/LONG
-- Risk: LOW/MODERATE/HIGH
-- Use ₹ for prices`;
+- Time horizon: SHORT / MEDIUM / LONG
+- Risk level: LOW / MODERATE / HIGH
+- All prices in ₹
+- Actionable: "Buy X at ₹Y" not "consider looking into X"`;
 
     const message = await anthropic.messages.create({
       model: 'claude-sonnet-4-20250514',
@@ -570,18 +660,19 @@ ${COMPREHENSIVE_PROMPTS.globalEvents(stockSymbols)}
       temperature: 0.7,
       messages: [{ role: 'user', content: prompt }]
     });
-    
+
     const analysis = message.content[0].text;
-    
-    logger.info(`Comprehensive analysis complete (${analysis.length} chars)`);
-    
+
+    logger.info(`Comprehensive analysis complete (${analysis.length} chars, ${portfolios.length} portfolios)`);
+
     res.json({
       success: true,
       analysis,
       generatedAt: new Date(),
-      sectionsCount: 10
+      sectionsCount: 10,
+      portfolioScope: portfolioId ? `Portfolio #${portfolioId}` : `All ${portfolios.length} portfolios`
     });
-    
+
   } catch (error) {
     logger.error('Comprehensive analysis error:', error);
     res.status(500).json({
@@ -661,6 +752,128 @@ router.post('/plan/update-capital', async (req, res) => {
       error: 'Failed to update capital',
       details: error.message 
     });
+  }
+});
+
+// ============================================
+// MULTI-ASSET RECOMMENDATIONS
+// ============================================
+
+/**
+ * POST /api/ai/multi-asset/scan
+ * Generate comprehensive multi-asset investment recommendations — PROFILE-AWARE
+ */
+router.post('/multi-asset/scan', async (req, res) => {
+  try {
+    const userId = req.userId;
+    const { portfolioId, riskProfile = 'BALANCED', capital = 100000, timeHorizon = 'MEDIUM' } = req.body;
+
+    logger.info(`Multi-asset scan: capital=₹${capital}, risk=${riskProfile}, horizon=${timeHorizon}, portfolioId=${portfolioId || 'auto'}`);
+
+    // Pull full portfolio object for profile-aware recommendations
+    let portfolioData = null;
+    if (portfolioId) {
+      portfolioData = await prisma.portfolio.findFirst({
+        where: { id: parseInt(portfolioId), userId },
+        include: { holdings: true }
+      });
+    } else if (userId) {
+      portfolioData = await prisma.portfolio.findFirst({
+        where: { userId, isActive: true },
+        include: { holdings: true }
+      });
+    }
+
+    const effectiveCapital = portfolioData
+      ? Math.max(parseFloat(portfolioData.availableCash || 0), capital)
+      : capital;
+
+    const result = await generateMultiAssetRecommendations({
+      portfolio: portfolioData,
+      capital: effectiveCapital,
+      riskProfile,
+      timeHorizon,
+    });
+
+    res.json(result);
+  } catch (error) {
+    logger.error('Multi-asset scan error:', error.message);
+    res.status(500).json({ error: 'Failed to generate multi-asset recommendations', message: error.message });
+  }
+});
+
+/**
+ * GET /api/ai/commodities?capital=X&riskProfile=Y&portfolioId=Z
+ * Get commodity-specific recommendations — PROFILE-AWARE
+ */
+router.get('/commodities', async (req, res) => {
+  try {
+    const userId = req.userId;
+    const { capital = 50000, riskProfile = 'BALANCED', portfolioId } = req.query;
+
+    logger.info(`Commodity recommendations: capital=₹${capital}, risk=${riskProfile}, portfolioId=${portfolioId || 'auto'}`);
+
+    // Pull full portfolio for profile context
+    let portfolioData = null;
+    if (portfolioId) {
+      portfolioData = await prisma.portfolio.findFirst({
+        where: { id: parseInt(portfolioId), userId },
+        include: { holdings: true }
+      });
+    } else if (userId) {
+      portfolioData = await prisma.portfolio.findFirst({
+        where: { userId, isActive: true },
+        include: { holdings: true }
+      });
+    }
+
+    const result = await getCommodityRecommendations({
+      portfolio: portfolioData,
+      capital: Number(capital),
+      riskProfile,
+    });
+    res.json({ success: true, ...result });
+  } catch (error) {
+    logger.error('Commodities endpoint error:', error.message);
+    res.status(500).json({ error: 'Failed to get commodity recommendations', message: error.message });
+  }
+});
+
+/**
+ * GET /api/ai/mutual-funds?capital=X&riskProfile=Y&timeHorizon=Z&portfolioId=W
+ * Get mutual fund recommendations — PROFILE-AWARE
+ */
+router.get('/mutual-funds', async (req, res) => {
+  try {
+    const userId = req.userId;
+    const { capital = 50000, riskProfile = 'BALANCED', timeHorizon = 'LONG', portfolioId } = req.query;
+
+    logger.info(`MF recommendations: capital=₹${capital}, risk=${riskProfile}, horizon=${timeHorizon}, portfolioId=${portfolioId || 'auto'}`);
+
+    // Pull full portfolio for profile context
+    let portfolioData = null;
+    if (portfolioId) {
+      portfolioData = await prisma.portfolio.findFirst({
+        where: { id: parseInt(portfolioId), userId },
+        include: { holdings: true }
+      });
+    } else if (userId) {
+      portfolioData = await prisma.portfolio.findFirst({
+        where: { userId, isActive: true },
+        include: { holdings: true }
+      });
+    }
+
+    const result = await getMutualFundRecommendations({
+      portfolio: portfolioData,
+      capital: Number(capital),
+      riskProfile,
+      timeHorizon,
+    });
+    res.json({ success: true, ...result });
+  } catch (error) {
+    logger.error('Mutual funds endpoint error:', error.message);
+    res.status(500).json({ error: 'Failed to get mutual fund recommendations', message: error.message });
   }
 });
 

@@ -1,9 +1,9 @@
 export default function Proposals() {
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h1 className="text-3xl font-bold">AI Proposals</h1>
-        <div className="flex gap-2">
+      <div className="flex flex-col sm:flex-row gap-3 sm:justify-between sm:items-center">
+        <h1 className="text-2xl sm:text-3xl font-bold">AI Proposals</h1>
+        <div className="flex gap-2 flex-wrap">
           <button className="btn btn-secondary">Pending</button>
           <button className="btn btn-secondary">Approved</button>
           <button className="btn btn-secondary">Rejected</button>

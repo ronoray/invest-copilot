@@ -121,28 +121,28 @@ export default function AIRecommendations() {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div className="bg-white rounded-xl p-4 border-2 border-slate-200 shadow-md">
             <p className="text-sm text-slate-600 mb-1 font-medium">Total Opportunities</p>
-            <p className="text-3xl font-bold text-slate-900">{summary.total}</p>
+            <p className="text-xl sm:text-3xl font-bold text-slate-900">{summary.total}</p>
           </div>
           <div className="bg-gradient-to-br from-red-50 to-orange-50 rounded-xl p-4 border-2 border-red-200 shadow-md">
             <p className="text-sm text-red-700 mb-1 flex items-center gap-1 font-medium">
               <Flame className="w-4 h-4" />
               High Risk
             </p>
-            <p className="text-3xl font-bold text-red-900">{summary.highRisk}</p>
+            <p className="text-xl sm:text-3xl font-bold text-red-900">{summary.highRisk}</p>
           </div>
           <div className="bg-gradient-to-br from-amber-50 to-yellow-50 rounded-xl p-4 border-2 border-amber-200 shadow-md">
             <p className="text-sm text-amber-700 mb-1 flex items-center gap-1 font-medium">
               <Zap className="w-4 h-4" />
               Medium Risk
             </p>
-            <p className="text-3xl font-bold text-amber-900">{summary.mediumRisk}</p>
+            <p className="text-xl sm:text-3xl font-bold text-amber-900">{summary.mediumRisk}</p>
           </div>
           <div className="bg-gradient-to-br from-emerald-50 to-teal-50 rounded-xl p-4 border-2 border-emerald-200 shadow-md">
             <p className="text-sm text-emerald-700 mb-1 flex items-center gap-1 font-medium">
               <Shield className="w-4 h-4" />
               Low Risk
             </p>
-            <p className="text-3xl font-bold text-emerald-900">{summary.lowRisk}</p>
+            <p className="text-xl sm:text-3xl font-bold text-emerald-900">{summary.lowRisk}</p>
           </div>
         </div>
       )}
@@ -176,19 +176,19 @@ export default function AIRecommendations() {
             >
               {/* Premium Header */}
               <div className={`bg-gradient-to-r ${getRiskColor(stock.riskCategory)} p-5 text-white`}>
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between flex-wrap gap-3">
                   <div className="flex items-center gap-3">
                     <div className="bg-white/20 p-2 rounded-lg backdrop-blur-sm">
                       {getRiskIcon(stock.riskCategory)}
                     </div>
                     <div>
-                      <h3 className="text-2xl font-bold">{stock.symbol}</h3>
+                      <h3 className="text-xl sm:text-2xl font-bold">{stock.symbol}</h3>
                       <p className="text-sm opacity-90">{riskInfo.subtitle}</p>
                     </div>
                   </div>
                   <div className="text-right">
                     <p className="text-sm opacity-90 font-medium">Current Price</p>
-                    <p className="text-3xl font-bold">₹{stock.price?.toFixed(2)}</p>
+                    <p className="text-xl sm:text-3xl font-bold">₹{stock.price?.toFixed(2)}</p>
                     <p className={`text-sm font-semibold ${stock.changePercent >= 0 ? 'text-green-200' : 'text-red-200'}`}>
                       {stock.changePercent >= 0 ? '+' : ''}{stock.changePercent?.toFixed(2)}% today
                     </p>

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Target, TrendingUp, DollarSign, PieChart, AlertCircle, CheckCircle, RefreshCw, ShoppingCart, Upload, X, Camera } from 'lucide-react';
 import CapitalChangeModal from '../components/CapitalChangeModal';
+import PortfolioCompletenessAlert from '../components/PortfolioCompletenessAlert';
 import { api } from '../utils/api';
 
 export default function YourPlan() {
@@ -220,7 +221,7 @@ export default function YourPlan() {
           </div>
           
           {/* Buttons */}
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             <button
               onClick={handleRefresh}
               disabled={loading}
@@ -270,6 +271,14 @@ export default function YourPlan() {
         )}
       </div>
 
+      {/* Portfolio Completeness Alert */}
+      {selectedPortfolio && (
+        <PortfolioCompletenessAlert
+          portfolio={selectedPortfolio}
+          linkToPortfolio={true}
+        />
+      )}
+
       {/* Money Snapshot */}
       {portfolio && (
         <div className="bg-white rounded-xl p-6 shadow-md border border-gray-200">
@@ -281,25 +290,25 @@ export default function YourPlan() {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
             <div className="bg-blue-50 rounded-lg p-4">
               <p className="text-sm text-gray-600 mb-1">Starting Capital</p>
-              <p className="text-2xl font-bold text-blue-900">
+              <p className="text-lg sm:text-2xl font-bold text-blue-900">
                 ₹{portfolio.startingCapital?.toLocaleString('en-IN')}
               </p>
             </div>
             <div className="bg-purple-50 rounded-lg p-4">
               <p className="text-sm text-gray-600 mb-1">Currently Invested</p>
-              <p className="text-2xl font-bold text-purple-900">
+              <p className="text-lg sm:text-2xl font-bold text-purple-900">
                 ₹{portfolio.totalInvested?.toLocaleString('en-IN')}
               </p>
             </div>
             <div className="bg-green-50 rounded-lg p-4">
               <p className="text-sm text-gray-600 mb-1">Available Cash</p>
-              <p className="text-2xl font-bold text-green-900">
+              <p className="text-lg sm:text-2xl font-bold text-green-900">
                 ₹{portfolio.availableCash?.toLocaleString('en-IN')}
               </p>
             </div>
             <div className="bg-yellow-50 rounded-lg p-4">
               <p className="text-sm text-gray-600 mb-1">Total P&L</p>
-              <p className={`text-2xl font-bold ${portfolio.totalPL >= 0 ? 'text-green-900' : 'text-red-900'}`}>
+              <p className={`text-lg sm:text-2xl font-bold ${portfolio.totalPL >= 0 ? 'text-green-900' : 'text-red-900'}`}>
                 {portfolio.totalPL >= 0 ? '+' : ''}₹{portfolio.totalPL?.toLocaleString('en-IN')}
               </p>
               <p className={`text-sm ${portfolio.totalPLPercent >= 0 ? 'text-green-600' : 'text-red-600'}`}>
@@ -440,7 +449,7 @@ export default function YourPlan() {
             <h2 className="text-xl font-semibold mb-4 text-gray-800">What to Buy Today</h2>
             <div className="space-y-3">
               {investmentPlan.stocks?.slice(0, 5).map((stock, index) => (
-                <div key={index} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
+                <div key={index} className="flex items-center justify-between flex-wrap gap-2 p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
                   <div className="flex items-center gap-4">
                     <div className={`w-2 h-2 rounded-full ${
                       stock.riskCategory === 'high' ? 'bg-red-500' :

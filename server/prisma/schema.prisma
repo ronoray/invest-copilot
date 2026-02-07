@@ -114,7 +114,13 @@ model Portfolio {
   
   // Risk Profile
   riskProfile     String   @default("BALANCED") // CONSERVATIVE, BALANCED, AGGRESSIVE
-  
+
+  // Investor Profile (for AI recommendations)
+  investmentGoal       String?  // RETIREMENT, WEALTH_BUILDING, INCOME, EDUCATION, EMERGENCY, SHORT_TERM_TRADING
+  investmentExperience String?  // BEGINNER, INTERMEDIATE, EXPERT
+  monthlyIncome        Float?   // Monthly income for SIP sizing
+  age                  Int?     // Investor age for risk calibration
+
   // Integration Status
   apiEnabled      Boolean  @default(false) // true for Upstox, false for SBI/HDFC
   syncEnabled     Boolean  @default(true)  // Enable auto-sync via API or screenshots

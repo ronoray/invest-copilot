@@ -46,12 +46,11 @@ backup*.sql
 DEPLOYED_SHA
 deployed.json
 
-# Migration files (temporary - added 2026-02-06)
+# Local docs & planning files
+docs/
+
+# Migration files (temporary)
 *_GUIDE.md
-MIGRATION_GUIDE.md
-QUICK_REFERENCE.md
-UPDATE_ENV_GUIDE.md
-SEEDING_GUIDE.md
 1_create_admin_user.js
 2_insert_portfolio_data.sql
 3_verify_all_data.sql
@@ -60,7 +59,4 @@ seed_admin.sql
 verify_database.sh
 complete_seed_data.sql
 INSERT_DATA_CORRECT.sql
-IMMEDIATE_TODO.md
-MASTER_IMPLEMENTATION.md
-YOURPLAN_IMPLEMENTATION_PLAN.md
 scan_migration_files.ps1

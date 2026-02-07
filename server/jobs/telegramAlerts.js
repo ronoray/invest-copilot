@@ -24,8 +24,16 @@ const anthropic = new Anthropic({
 // ============================================
 
 async function getPortfolioSummary(userId) {
+  // ✅ FIXED: Query holdings via Portfolio relationship
   const holdings = await prisma.holding.findMany({
-    where: { userId }
+    where: { 
+      portfolio: {
+        userId: userId  // NEW SCHEMA: Holding → Portfolio → User
+      }
+    },
+    include: {
+      portfolio: true  // Include portfolio data
+    }
   });
 
   let totalValue = 0;
@@ -35,18 +43,20 @@ async function getPortfolioSummary(userId) {
     const invested = h.quantity * h.avgPrice;
     const current = h.quantity * (h.currentPrice || h.avgPrice);
     const pl = current - invested;
-    const plPercent = (pl / invested) * 100;
+    const plPercent = invested > 0 ? (pl / invested) * 100 : 0;
 
     totalValue += current;
     totalInvested += invested;
 
     return {
       symbol: h.symbol,
+      exchange: h.exchange || 'NSE',
       quantity: h.quantity,
       avgPrice: h.avgPrice,
       currentPrice: h.currentPrice || h.avgPrice,
       pl: pl.toFixed(2),
-      plPercent: plPercent.toFixed(2)
+      plPercent: plPercent.toFixed(2),
+      portfolioName: h.portfolio.displayName  // Show which portfolio
     };
   });
 
@@ -55,10 +65,10 @@ async function getPortfolioSummary(userId) {
 
   return {
     holdings: summary,
-    totalValue,
-    totalInvested,
-    totalPL,
-    totalPLPercent
+    totalValue: totalValue.toFixed(2),
+    totalInvested: totalInvested.toFixed(2),
+    totalPL: totalPL.toFixed(2),
+    totalPLPercent: totalPLPercent.toFixed(2)
   };
 }
 
@@ -533,7 +543,7 @@ export function initTelegramAlerts() {
   logger.info('🚀 Initializing Telegram AI Alert System (Option B)...');
 
   // Price alerts every 5 minutes during market hours (9:00 AM - 3:30 PM IST)
-  cron.schedule('*/5 9-15 * * 1-5', async () => {
+  cron.schedule('0 9,11,13,15 * * 1-5', async () => {
     await checkPriceAlerts();
   }, {
     timezone: 'Asia/Kolkata'

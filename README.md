@@ -1,91 +1,81 @@
-# Investment Co-Pilot System
+# Investment Co-Pilot
 
 AI-powered investment assistant for Indian stock markets (NSE/BSE).
 
-**Windows Development Directory**: `C:\invest-copilot`  
+**Production**: https://invest.hungrytimes.in
+**Windows Dev Directory**: `C:\invest-copilot`
 **Production Directory**: `/opt/invest-copilot`
 
-## 🎯 Features
+## Features
 
-- **Portfolio Tracking**: Real-time portfolio monitoring with P&L calculations
-- **Market Data**: Live price updates via Alpha Vantage & NSE APIs
-- **Watchlist**: Price alerts and monitoring for stocks
-- **AI Recommendations**: (Phase 2) Claude-powered buy/sell proposals
-- **Automated Scanning**: 5-minute market scans during trading hours
-- **Clawdbot Integration**: (Phase 3) Telegram/WhatsApp notifications
+- **Multi-Portfolio Management**: Track multiple portfolios per broker/owner (SBI Securities, HDFC, Upstox) with individual capital management
+- **Real-Time Dashboard**: Portfolio overview with holdings table, P&L tracking, portfolio selector, market status (IST-based)
+- **AI Investment Plans**: Claude-powered portfolio analysis, buy/sell recommendations, risk-categorized allocation
+- **Upstox Trading**: Direct order placement via Upstox API for API-enabled portfolios
+- **Screenshot Trade Entry**: Upload brokerage screenshots, AI extracts trade data (Claude Vision), review/edit, confirm to save
+- **Tax Dashboard**: LTCG/STCG tracking, tax optimization opportunities, GST-compliant Excel export (4 sheets)
+- **Market Scanner**: Automated 5-minute scans during trading hours (9:15 AM - 3:30 PM IST)
+- **Telegram Alerts**: Morning/evening digests, price change alerts, buy/sell signals
+- **Watchlist**: Price alerts and monitoring
 
-## 🏗️ Tech Stack
+## Tech Stack
 
 **Backend:**
 - Node.js 20 + Express (Port 3100)
 - PostgreSQL 16 + Prisma ORM
-- Bull Queue for background jobs
-- Alpha Vantage API for market data
+- Anthropic Claude API (analysis + Vision)
+- Upstox API (trading)
+- Multer (file uploads) + ExcelJS (tax reports)
 
 **Frontend:**
 - React 18 + Vite (Dev Port 3101)
-- TailwindCSS
-- React Query
+- TailwindCSS + Lucide Icons
+- React Router 6
 - Recharts for visualizations
 
 **Infrastructure:**
 - Docker + Docker Compose
 - Traefik reverse proxy (shared with Hungry Times)
-- DigitalOcean Droplet (64.227.137.98)
+- DigitalOcean Droplet
 - Cloudflare DNS + SSL
 
-## 📊 Port Configuration
+## Port Configuration
 
-**Investment Co-Pilot:**
-- Backend API: 3100
-- Frontend Dev: 3101
-- PostgreSQL: 5432 (Docker internal)
+| Service | Port |
+|---------|------|
+| Backend API | 3100 |
+| Frontend Dev | 3101 |
+| PostgreSQL (Docker) | 5432 |
 
-**Hungry Times System (No conflicts):**
-- Backend: 5000
-- Ops Panel: 5173
-- Website: 5174
-- Reserved: 5175
-
-## 🚀 Quick Start (Local Development)
+## Quick Start (Local Development)
 
 ### Prerequisites
-
 - Node.js 20+
 - Docker & Docker Compose
 - Git
 
-### 1. Clone Repository
-
+### 1. Clone & Setup
 ```bash
 git clone <your-repo-url> C:\invest-copilot
 cd C:\invest-copilot
-```
-
-### 2. Setup Environment Variables
-
-```bash
 copy .env.example .env
 # Edit .env with your credentials
 ```
 
-Required variables:
+Required environment variables:
 ```env
 DB_PASSWORD=your_secure_password
-ALPHA_VANTAGE_KEY=your_api_key  # Get free at https://www.alphavantage.co
-CLAUDE_API_KEY=your_api_key     # Get at https://console.anthropic.com
+ALPHA_VANTAGE_KEY=your_api_key
+CLAUDE_API_KEY=your_api_key
 PORT=3100
 ```
 
-### 3. Start Database
-
+### 2. Start Database
 ```bash
 docker-compose up -d invest-postgres
 ```
 
-### 4. Install Dependencies & Run Migrations
-
-**Backend:**
+### 3. Backend
 ```bash
 cd server
 npm install
@@ -94,7 +84,7 @@ npx prisma generate
 npm run dev
 ```
 
-**Frontend:**
+### 4. Frontend
 ```bash
 cd client
 npm install
@@ -103,109 +93,108 @@ npm run dev
 
 Visit: http://localhost:3101
 
-## 📦 Production Deployment
+## Production Deployment
 
-### On Your Windows Machine
+Push to `main` triggers auto-deploy via GitHub webhook:
 
-1. Push to GitHub:
 ```bash
 git add .
-git commit -m "Initial setup"
+git commit -m "your changes"
 git push origin main
 ```
 
-### On Your Droplet (First Time)
+Deploy script: `deploy-invest.sh` (Docker rebuild + restart)
+Health check: `GET /api/health`
 
-```bash
-# Clone repository
-sudo mkdir -p /opt/invest-copilot
-cd /opt/invest-copilot
-sudo git clone <your-repo-url> .
-
-# Setup environment
-sudo cp .env.example .env
-sudo nano .env  # Add production credentials
-
-# Make scripts executable
-sudo chmod +x scripts/deploy.sh
-
-# Deploy
-sudo ./scripts/deploy.sh
-```
-
-### Subsequent Deployments
-
+### Manual Deploy
 ```bash
 ssh rono@64.227.137.98
 cd /opt/invest-copilot
 sudo ./scripts/deploy.sh
 ```
 
-The system will be available at: `https://invest.hungrytimes.in`
+## API Endpoints
 
-## 🗄️ Database Schema
+### Auth (`/api/auth`)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/login` | Login, returns JWT |
+| POST | `/register` | Register new user |
+| GET | `/me` | Current user info |
 
-Key tables:
-- `Holding` - Current portfolio
-- `Trade` - Execution history
-- `Watchlist` - Stocks to monitor
-- `Proposal` - AI recommendations
-- `MarketData` - 5-min price candles
-- `Alert` - Price notifications
-- `Journal` - Decision logs
+### Portfolio (`/api/portfolio`) — authenticated
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/?all=true` | List all portfolios (for dropdown) |
+| GET | `/` | All holdings with P&L summary + portfolio info |
+| GET | `/:portfolioId/holdings` | Holdings for specific portfolio |
+| POST | `/` | Add holding |
+| PUT | `/:id` | Update holding |
+| DELETE | `/:id` | Remove holding |
+| POST | `/sync` | Sync all prices |
+| POST | `/:id/update-capital` | Update portfolio capital |
 
-## 🔧 Configuration
+### AI (`/api/ai`) — authenticated
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/recommendations` | AI recommendations (high/medium/low) |
+| POST | `/scan` | Run market scan for opportunities |
+| GET | `/portfolio-plan?portfolioId=1` | AI investment plan |
+| GET | `/comprehensive-analysis` | 10-section deep analysis |
+| POST | `/parse-screenshot` | Upload screenshot, extract trades (Claude Vision) |
+| POST | `/confirm-screenshot-trade` | Confirm and save extracted trades |
 
-### Traefik Labels (Shared with Hungry Times)
+### Upstox (`/api/upstox`) — authenticated
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/place-order` | Place buy/sell order |
+| GET | `/order/:orderId` | Check order status |
+| DELETE | `/order/:orderId` | Cancel order |
+| GET | `/holdings` | Fetch live Upstox holdings |
 
-The docker-compose.yml includes Traefik labels for:
-- `invest.hungrytimes.in` → Frontend
-- `invest.hungrytimes.in/api` → Backend API
+### Tax (`/api/tax`) — authenticated
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/summary` | Tax breakdown (LTCG/STCG) |
+| POST | `/calculate` | Calculate tax for a trade |
+| GET | `/opportunities` | Tax optimization opportunities |
+| GET | `/ltcg-timer/:holdingId` | Time remaining to LTCG |
+| GET | `/export?year=2025` | Download Excel tax report |
 
-Both use the external `traefik-network` shared with your Hungry Times system.
+### Market (`/api/market`)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/price/:symbol` | Current price |
+| GET | `/intraday/:symbol` | 5-min candles |
+| GET | `/search?q=query` | Search stocks |
 
-### Market Scanner
+### Watchlist (`/api/watchlist`) — authenticated
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/` | Get watchlist |
+| POST | `/` | Add to watchlist |
+| DELETE | `/:id` | Remove item |
 
-Runs automatically every 5 minutes (9:15 AM - 3:30 PM IST):
-- Updates portfolio prices
-- Checks watchlist alerts
-- Scans for opportunities (Phase 2)
+## Database Schema
 
-## 📊 API Endpoints
+Key models (see `server/prisma/schema.prisma`):
 
-### Portfolio
-- `GET /api/portfolio` - Get all holdings with P&L
-- `POST /api/portfolio` - Add holding
-- `PUT /api/portfolio/:id` - Update holding
-- `DELETE /api/portfolio/:id` - Remove holding
-- `POST /api/portfolio/sync` - Sync all prices
+| Model | Description |
+|-------|-------------|
+| User | Auth, preferences, relations |
+| Portfolio | Broker, capital, risk profile |
+| Holding | Stock positions (per portfolio+symbol+exchange) |
+| Trade | Buy/sell history (MANUAL, API, SCREENSHOT) |
+| Proposal | AI recommendations |
+| UpstoxIntegration | Upstox API credentials |
+| UpstoxOrder | Order tracking |
+| TradeScreenshot | Screenshot uploads + AI extraction |
+| CapitalHistory | Capital change audit trail |
+| TelegramUser | Telegram bot users |
+| AlertPreference | Per-portfolio alert settings |
+| TaxRecord | Per-FY tax records |
 
-### Market Data
-- `GET /api/market/price/:symbol` - Current price
-- `GET /api/market/intraday/:symbol` - 5-min candles
-- `GET /api/market/search?q=query` - Search stocks
-
-### Watchlist
-- `GET /api/watchlist` - Get watchlist
-- `POST /api/watchlist` - Add to watchlist
-- `PUT /api/watchlist/:id` - Update item
-- `DELETE /api/watchlist/:id` - Remove item
-- `GET /api/watchlist/signals` - Check alerts
-
-### Proposals
-- `GET /api/proposals` - Get all proposals
-- `POST /api/proposals` - Create proposal
-- `PUT /api/proposals/:id/approve` - Approve
-- `PUT /api/proposals/:id/reject` - Reject
-
-## 🔐 Security
-
-- PostgreSQL credentials in `.env`
-- Cloudflare SSL termination (shared)
-- Traefik routing (shared)
-- No public ports exposed
-
-## 📝 Common Tasks
+## Common Tasks
 
 ### View Logs
 ```bash
@@ -228,69 +217,7 @@ docker-compose restart invest-api
 docker-compose exec invest-postgres pg_dump -U investuser investcopilot > backup.sql
 ```
 
-### Restore Database
-```bash
-docker-compose exec -T invest-postgres psql -U investuser investcopilot < backup.sql
-```
-
-## 🐛 Troubleshooting
-
-### API Not Starting
-```bash
-docker-compose logs invest-api
-# Check database connection
-docker-compose exec invest-postgres pg_isready
-```
-
-### Frontend Build Fails
-```bash
-cd C:\invest-copilot\client
-rmdir /s /q node_modules
-del package-lock.json
-npm install
-npm run build
-```
-
-### Port Conflicts
-```bash
-# Windows - Check what's using port 3100
-netstat -ano | findstr :3100
-
-# Linux - Check what's using port 3100
-lsof -i :3100
-```
-
-## 🎯 Roadmap
-
-**Phase 1 (Current):**
-- ✅ Portfolio tracking
-- ✅ Market data integration
-- ✅ Watchlist management
-- ✅ Basic UI
-- ✅ Docker deployment
-
-**Phase 2 (Next):**
-- [ ] AI-powered proposals (Claude API)
-- [ ] Technical indicators (RSI, MACD)
-- [ ] Telegram/WhatsApp notifications
-- [ ] Trade journal
-
-**Phase 3 (Future):**
-- [ ] SBI Securities API integration
-- [ ] Clawdbot integration
-- [ ] Advanced charting
-- [ ] Performance analytics
-- [ ] Multi-user support
-
-## 🔄 Integration with Hungry Times
-
-### Shared Infrastructure
-- **Traefik Network**: Both systems use `traefik-network`
-- **Reverse Proxy**: Shared Traefik container
-- **SSL**: Cloudflare SSL termination
-- **Droplet**: Same server (64.227.137.98)
-
-### Domain Structure
+## Domain Structure
 ```
 hungrytimes.in domain:
 ├── ops.hungrytimes.in      → Hungry Times Ops Panel
@@ -298,41 +225,20 @@ hungrytimes.in domain:
 └── invest.hungrytimes.in   → Investment Co-Pilot
 ```
 
-### Port Isolation
-The systems use completely different ports to avoid conflicts.
+## Completed Phases
 
-## 📄 License
+- **Phase 1**: Portfolio tracking, market data, watchlist, Docker deployment
+- **Phase 2**: Multi-portfolio architecture, capital management, AI portfolio plans
+- **Phase 3**: Telegram alerts, advanced market scanner
+- **Phase 4**: Upstox trading integration (place/cancel/status orders)
+- **Phase 5**: Screenshot trade entry via Claude Vision (upload, AI extract, editable review, confirm)
+- **Phase 6**: GST-compliant tax export (Excel with 4 sheets: All Trades, Portfolio Summary, Tax Summary, Quarterly)
 
-Personal project - All rights reserved
+## Author
 
-## 👤 Author
-
-Ronobir Ray (Rono)  
+Ronobir Ray (Rono)
 Kolkata, West Bengal, India
 
 ---
 
-**Built with ❤️ to complement the Hungry Times ecosystem**
-
-## 📚 Additional Documentation
-
-- `QUICKSTART.md` - Quick setup guide
-- `PROJECT_SUMMARY.md` - Detailed project overview
-- `.env.example` - Environment variables template
-
-## 🎓 Getting Started Checklist
-
-- [ ] Clone repo to `C:\invest-copilot`
-- [ ] Get Alpha Vantage API key
-- [ ] Setup `.env` file
-- [ ] Test locally (ports 3100/3101)
-- [ ] Push to GitHub
-- [ ] Deploy to droplet
-- [ ] Configure Cloudflare DNS
-- [ ] Add your actual SBI Securities holdings
-- [ ] Setup watchlist
-- [ ] Test market data sync
-
-**Ready to track your investments? Let's go! 📈**
-
-# Auto-deploy test - # CI/CD Test
+**Built to complement the Hungry Times ecosystem**

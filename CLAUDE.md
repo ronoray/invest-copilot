@@ -84,9 +84,12 @@ Core hierarchy: **User → Portfolio → Holdings/Trades**. Each user can have m
   - `marketData.js` - Alpha Vantage + NSE scraping for price data
   - `portfolioCalculator.js` - P&L and metrics computation
   - `authService.js` - JWT generation, password hashing, login logic
-  - `telegramBot.js` - Telegram bot setup and commands
+  - `telegramBot.js` - Telegram bot setup and commands (`/portfolios`, `/portfolio N`, `/recommend N`, `/multi N`, `/scan N`, `/price`, `/settings`, `/mute`, `/unmute`)
+  - `multiAssetRecommendations.js` - Multi-asset allocation via Claude (stocks, MFs, commodities, fixed income)
   - `prisma.js` - Shared Prisma client instance (import from here, don't create new instances)
-- **Jobs** (`server/jobs/`): Cron jobs via `node-cron` (IST timezone). Market scanner every 5 min during market hours; morning/evening Telegram alerts. Only active when `NODE_ENV=production` or `ENABLE_CRON=true`.
+- **Utils** (`server/utils/`):
+  - `marketHolidays.js` - NSE holiday calendar 2025-2026, `isTradingDay(date)`, `isMarketHoliday(date)`
+- **Jobs** (`server/jobs/`): Cron jobs via `node-cron` (IST timezone). Per-portfolio morning/evening/game-plan alerts with AI analysis; price monitoring during market hours. Skips NSE holidays automatically via `isTradingDay()`. Only active when `NODE_ENV=production` or `ENABLE_CRON=true`.
 - **Middleware** (`server/middleware/auth.js`): JWT verification and rate limiting
 
 ### Frontend Structure
@@ -160,5 +163,7 @@ Core hierarchy: **User → Portfolio → Holdings/Trades**. Each user can have m
 - Database schema changes require running `npx prisma migrate dev` then `npx prisma generate`
 - Docker Compose uses Traefik labels for routing; API is behind `/api` path prefix
 - Cron jobs use IST timezone (Indian Standard Time) for market hours alignment
+- Telegram alerts are per-portfolio: each portfolio gets its own AI analysis using `buildProfileBrief()` from `advancedScreener.js`
+- NSE market holidays (2025-2026) hardcoded in `server/utils/marketHolidays.js` — update annually from NSE calendar
 - File uploads go to `server/uploads/screenshots/` via multer
 - Dashboard and YourPlan follow same pattern: load portfolios → selector → load data for selected portfolio

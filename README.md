@@ -15,7 +15,8 @@ AI-powered investment assistant for Indian stock markets (NSE/BSE).
 - **Screenshot Trade Entry**: Upload brokerage screenshots, AI extracts trade data (Claude Vision), review/edit, confirm to save
 - **Tax Dashboard**: LTCG/STCG tracking, tax optimization opportunities, GST-compliant Excel export (4 sheets)
 - **Market Scanner**: Automated 5-minute scans during trading hours (9:15 AM - 3:30 PM IST)
-- **Telegram Alerts**: Morning/evening digests, price change alerts, buy/sell signals
+- **Telegram Alerts**: Per-portfolio morning/evening/game-plan digests with AI analysis, price alerts, buy/sell signals. Skips NSE market holidays automatically
+- **Telegram Bot Commands**: `/portfolios`, `/portfolio N`, `/recommend N`, `/multi N`, `/scan N` — interactive per-portfolio queries
 - **Watchlist**: Price alerts and monitoring
 
 ## Tech Stack
@@ -233,6 +234,8 @@ hungrytimes.in domain:
 - **Phase 4**: Upstox trading integration (place/cancel/status orders)
 - **Phase 5**: Screenshot trade entry via Claude Vision (upload, AI extract, editable review, confirm)
 - **Phase 6**: GST-compliant tax export (Excel with 4 sheets: All Trades, Portfolio Summary, Tax Summary, Quarterly)
+- **Phase 7**: Portfolio CRUD, profile completeness alerts, multi-asset recommendations
+- **Phase 8**: NSE market holiday calendar (2025-2026), per-portfolio Telegram alerts with AI profile context, new bot commands (`/portfolios`, `/portfolio N`, `/recommend N`, `/multi N`, `/scan N`), price alert bug fix
 
 ## Author
 

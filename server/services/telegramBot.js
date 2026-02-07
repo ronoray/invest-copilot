@@ -2,7 +2,8 @@ import TelegramBot from 'node-telegram-bot-api';
 import { PrismaClient } from '@prisma/client';
 import logger from './logger.js';
 import { getCurrentPrice } from './marketData.js';
-import { scanMarketForOpportunities } from './advancedScreener.js';
+import { scanMarketForOpportunities, buildProfileBrief } from './advancedScreener.js';
+import { generateMultiAssetRecommendations } from './multiAssetRecommendations.js';
 
 const prisma = new PrismaClient();
 
@@ -12,7 +13,7 @@ let bot = null;
 function getBot() {
   if (!bot && process.env.TELEGRAM_BOT_TOKEN) {
     try {
-      bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { 
+      bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, {
         polling: {
           interval: 1000,
           autoStart: true,
@@ -21,7 +22,7 @@ function getBot() {
           }
         }
       });
-      
+
       // Handle polling errors
       bot.on('polling_error', (error) => {
         logger.error('Telegram polling error:', error.message);
@@ -42,7 +43,11 @@ function getBot() {
 // ============================================
 
 function formatPrice(price) {
-  return `₹${price.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return `₹${parseFloat(price).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function formatINR(amount) {
+  return `₹${parseFloat(amount).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
 }
 
 function formatPercent(percent) {
@@ -57,18 +62,17 @@ function getRiskEmoji(category) {
 async function getOrCreateUser(telegramId, username, firstName) {
   try {
     let telegramUser = await prisma.telegramUser.findUnique({
-      where: { telegramId: telegramId.toString() }
+      where: { telegramId: telegramId.toString() },
+      include: { user: true }
     });
 
     if (!telegramUser) {
-      // First, check if there's an existing User (there should be from admin login)
       const existingUser = await prisma.user.findFirst();
-      
+
       if (!existingUser) {
         throw new Error('No user found in database. Please login via web first.');
       }
 
-      // Create TelegramUser linked to existing User
       telegramUser = await prisma.telegramUser.create({
         data: {
           telegramId: telegramId.toString(),
@@ -86,7 +90,8 @@ async function getOrCreateUser(telegramId, username, firstName) {
           user: {
             connect: { id: existingUser.id }
           }
-        }
+        },
+        include: { user: true }
       });
       logger.info(`New Telegram user created: ${firstName} (${telegramId}) linked to User ID ${existingUser.id}`);
     }
@@ -99,13 +104,36 @@ async function getOrCreateUser(telegramId, username, firstName) {
 }
 
 // ============================================
+// HELPER: Get user's portfolios (numbered)
+// ============================================
+
+async function getUserPortfolios(userId) {
+  return prisma.portfolio.findMany({
+    where: { userId, isActive: true },
+    include: { holdings: true },
+    orderBy: { createdAt: 'asc' }
+  });
+}
+
+async function getPortfolioByIndex(userId, index) {
+  const portfolios = await getUserPortfolios(userId);
+  if (index < 1 || index > portfolios.length) return null;
+  return portfolios[index - 1];
+}
+
+function portfolioLabel(p) {
+  const risk = p.riskProfile ? ` (${p.riskProfile})` : '';
+  return `${p.ownerName || p.name} - ${(p.broker || 'Unknown').replace(/_/g, ' ')}${risk}`;
+}
+
+// ============================================
 // BOT COMMANDS
 // ============================================
 
 export function initTelegramBot() {
   try {
     const botInstance = getBot();
-    
+
     if (!botInstance) {
       logger.warn('Telegram bot not initialized - missing TELEGRAM_BOT_TOKEN');
       return;
@@ -121,7 +149,7 @@ export function initTelegramBot() {
     botInstance.onText(/^\/start$/, async (msg) => {
       try {
         logger.info(`/start command from ${msg.from.id}`);
-        
+
         await getOrCreateUser(msg.from.id, msg.from.username, msg.from.first_name);
 
         const welcomeMsg = `👋 *Welcome to Investment Co-Pilot!*
@@ -129,14 +157,14 @@ export function initTelegramBot() {
 I'm your AI investment assistant.
 
 *Features:*
-✅ AI stock recommendations
+✅ Per-portfolio AI recommendations
 ✅ Real-time buy/sell alerts
-✅ Portfolio tracking
+✅ Multi-asset allocation advice
 ✅ Market analysis
 
 *Quick Start:*
+/portfolios - View all portfolios
 /scan - Find opportunities
-/portfolio - View holdings
 /help - All commands
 
 Let's build wealth! 💰`;
@@ -159,14 +187,21 @@ Let's build wealth! 💰`;
         const helpMsg = `📚 *Commands*
 
 *Market:*
-/scan - AI market scan
-/price [SYMBOL] - Get price
+/scan - Generic market scan
+/scan [N] - Scan tuned to portfolio #N
+/price [SYMBOL] - Get stock price
 
 *Portfolio:*
-/portfolio - View holdings
+/portfolios - List all portfolios
+/portfolio [N] - View portfolio #N details
+/portfolio - View all holdings (legacy)
+
+*AI Analysis:*
+/recommend [N] - AI stock picks for portfolio #N
+/multi [N] - Multi-asset allocation for portfolio #N
 
 *Settings:*
-/settings - Preferences
+/settings - Alert preferences
 /mute - Disable alerts
 /unmute - Enable alerts`;
 
@@ -177,26 +212,289 @@ Let's build wealth! 💰`;
       }
     });
 
-    // /scan
-    botInstance.onText(/^\/scan$/, async (msg) => {
+    // /portfolios — List all portfolios
+    botInstance.onText(/^\/portfolios$/, async (msg) => {
       try {
-        await botInstance.sendMessage(msg.chat.id, '🔍 Scanning market...');
+        const telegramUser = await getOrCreateUser(msg.from.id, msg.from.username, msg.from.first_name);
+        const portfolios = await getUserPortfolios(telegramUser.user.id);
+
+        if (portfolios.length === 0) {
+          await botInstance.sendMessage(msg.chat.id, '📭 No portfolios found. Create one on the web app first!');
+          return;
+        }
+
+        const numberEmojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣'];
+
+        const lines = portfolios.map((p, i) => {
+          const emoji = numberEmojis[i] || `${i + 1}.`;
+          const risk = p.riskProfile || 'Not set';
+          const capital = formatINR(parseFloat(p.startingCapital || 0));
+          const cash = formatINR(parseFloat(p.availableCash || 0));
+          const holdingCount = (p.holdings || []).length;
+          return `${emoji} *${p.ownerName || p.name}* - ${(p.broker || 'Unknown').replace(/_/g, ' ')}
+   ${risk} | Capital: ${capital} | Cash: ${cash}
+   ${holdingCount} holding${holdingCount !== 1 ? 's' : ''}`;
+        }).join('\n\n');
+
+        const portfoliosMsg = `💼 *YOUR PORTFOLIOS*
+━━━━━━━━━━━━━━━━━━━
+
+${lines}
+
+━━━━━━━━━━━━━━━━━━━
+Use /portfolio [N] for details
+Use /recommend [N] for AI picks`;
+
+        await botInstance.sendMessage(msg.chat.id, portfoliosMsg, { parse_mode: 'Markdown' });
+      } catch (error) {
+        logger.error('Portfolios command error:', error);
+        await botInstance.sendMessage(msg.chat.id, '❌ Failed to fetch portfolios').catch(() => {});
+      }
+    });
+
+    // /portfolio [N] — View specific portfolio details
+    botInstance.onText(/^\/portfolio (\d+)$/, async (msg, match) => {
+      try {
+        const telegramUser = await getOrCreateUser(msg.from.id, msg.from.username, msg.from.first_name);
+        const index = parseInt(match[1]);
+        const portfolio = await getPortfolioByIndex(telegramUser.user.id, index);
+
+        if (!portfolio) {
+          await botInstance.sendMessage(msg.chat.id, `❌ Portfolio #${index} not found. Use /portfolios to see your list.`);
+          return;
+        }
+
+        const risk = portfolio.riskProfile || 'Not set';
+        const goal = (portfolio.investmentGoal || 'Not set').replace(/_/g, ' ');
+        const experience = portfolio.investmentExperience || 'Not set';
+        const capital = formatINR(parseFloat(portfolio.startingCapital || 0));
+        const cash = formatINR(parseFloat(portfolio.availableCash || 0));
+
+        let totalValue = 0;
+        let totalInvested = 0;
+
+        const holdingLines = (portfolio.holdings || []).map(h => {
+          const invested = h.quantity * parseFloat(h.avgPrice);
+          const current = h.quantity * parseFloat(h.currentPrice || h.avgPrice);
+          const pl = current - invested;
+          const plPercent = invested > 0 ? (pl / invested) * 100 : 0;
+
+          totalValue += current;
+          totalInvested += invested;
+
+          return `*${h.symbol}*: ${h.quantity} @ ${formatPrice(h.avgPrice)}
+P&L: ${formatPrice(pl)} (${formatPercent(plPercent)})`;
+        }).join('\n\n');
+
+        const totalPL = totalValue - totalInvested;
+        const totalPLPercent = totalInvested > 0 ? (totalPL / totalInvested) * 100 : 0;
+
+        // Profile completeness check
+        const missingFields = [];
+        if (!portfolio.riskProfile) missingFields.push('risk profile');
+        if (!portfolio.investmentGoal) missingFields.push('investment goal');
+        if (!portfolio.investmentExperience) missingFields.push('experience level');
+        if (!portfolio.age) missingFields.push('age');
+        const completenessNote = missingFields.length > 0
+          ? `\n⚠️ _Missing: ${missingFields.join(', ')}. Update on web for better AI picks._`
+          : '';
+
+        const detailMsg = `💼 *${portfolio.ownerName || portfolio.name}* - ${(portfolio.broker || 'Unknown').replace(/_/g, ' ')}
+━━━━━━━━━━━━━━━━━━━
+Risk: ${risk} | Goal: ${goal}
+Experience: ${experience}
+Capital: ${capital} | Cash: ${cash}
+Value: ${formatPrice(totalValue)}
+P&L: ${formatPrice(totalPL)} (${formatPercent(totalPLPercent)})${completenessNote}
+
+━━━━━━━━━━━━━━━━━━━
+*Holdings (${(portfolio.holdings || []).length}):*
+
+${holdingLines || '(No holdings yet)'}`;
+
+        await botInstance.sendMessage(msg.chat.id, detailMsg, { parse_mode: 'Markdown' });
+      } catch (error) {
+        logger.error('Portfolio detail error:', error);
+        await botInstance.sendMessage(msg.chat.id, '❌ Failed to fetch portfolio details').catch(() => {});
+      }
+    });
+
+    // /portfolio (legacy — all holdings)
+    botInstance.onText(/^\/portfolio$/, async (msg) => {
+      try {
+        const telegramUser = await getOrCreateUser(msg.from.id, msg.from.username, msg.from.first_name);
+        const portfolios = await getUserPortfolios(telegramUser.user.id);
+        const allHoldings = portfolios.flatMap(p =>
+          (p.holdings || []).map(h => ({ ...h, portfolioName: p.ownerName || p.name }))
+        );
+
+        if (allHoldings.length === 0) {
+          await botInstance.sendMessage(msg.chat.id, '📭 Portfolio empty. Add some holdings first!');
+          return;
+        }
+
+        let totalValue = 0;
+        let totalInvested = 0;
+
+        const lines = allHoldings.map(h => {
+          const invested = h.quantity * parseFloat(h.avgPrice);
+          const current = h.quantity * parseFloat(h.currentPrice || h.avgPrice);
+          const pl = current - invested;
+          const plPercent = (pl / invested) * 100;
+
+          totalValue += current;
+          totalInvested += invested;
+
+          return `*${h.symbol}*: ${h.quantity} @ ${formatPrice(h.avgPrice)}\nP&L: ${formatPrice(pl)} (${formatPercent(plPercent)})`;
+        }).join('\n\n');
+
+        const totalPL = totalValue - totalInvested;
+        const totalPLPercent = totalInvested > 0 ? (totalPL / totalInvested) * 100 : 0;
+
+        const portfolioMsg = `💼 *ALL HOLDINGS*
+━━━━━━━━━━━━━━━━━━━
+Value: ${formatPrice(totalValue)}
+Invested: ${formatPrice(totalInvested)}
+P&L: ${formatPrice(totalPL)} (${formatPercent(totalPLPercent)})
+
+━━━━━━━━━━━━━━━━━━━
+${lines}
+
+━━━━━━━━━━━━━━━━━━━
+Use /portfolios for per-portfolio view`;
+
+        await botInstance.sendMessage(msg.chat.id, portfolioMsg, { parse_mode: 'Markdown' });
+      } catch (error) {
+        logger.error('Portfolio error:', error);
+        await botInstance.sendMessage(msg.chat.id, '❌ Failed to fetch portfolio').catch(() => {});
+      }
+    });
+
+    // /recommend [N] — AI recommendations for specific portfolio
+    botInstance.onText(/^\/recommend(?:\s+(\d+))?$/, async (msg, match) => {
+      try {
+        const telegramUser = await getOrCreateUser(msg.from.id, msg.from.username, msg.from.first_name);
+        const index = match[1] ? parseInt(match[1]) : null;
+
+        let portfolio = null;
+        if (index) {
+          portfolio = await getPortfolioByIndex(telegramUser.user.id, index);
+          if (!portfolio) {
+            await botInstance.sendMessage(msg.chat.id, `❌ Portfolio #${index} not found. Use /portfolios to see your list.`);
+            return;
+          }
+        }
+
+        const label = portfolio ? portfolioLabel(portfolio) : 'generic';
+        await botInstance.sendMessage(msg.chat.id, `🔍 Getting AI recommendations${portfolio ? ' for ' + (portfolio.ownerName || portfolio.name) : ''}...`);
 
         const opportunities = await scanMarketForOpportunities({
+          portfolio: portfolio || undefined,
           targetCount: { high: 3, medium: 3, low: 3 },
-          baseAmount: 10000
+          baseAmount: portfolio ? parseFloat(portfolio.availableCash || 10000) : 10000
         });
 
-        const scanMsg = `✅ *Scan Complete!*
+        const scanMsg = `✅ *AI Recommendations*${portfolio ? '\n📁 ' + label : ''}
 
-🔥 *High Risk (${opportunities.high.length}):*
-${opportunities.high.map(s => `• ${s.symbol} - ${formatPrice(s.price)}`).join('\n')}
+🔥 *High Risk (${(opportunities.high || []).length}):*
+${(opportunities.high || []).map(s => `• ${s.symbol} - ${formatPrice(s.price)} ${s.reason ? '— ' + s.reason : ''}`).join('\n') || '(none)'}
 
-⚡ *Medium Risk (${opportunities.medium.length}):*
-${opportunities.medium.map(s => `• ${s.symbol} - ${formatPrice(s.price)}`).join('\n')}
+⚡ *Medium Risk (${(opportunities.medium || []).length}):*
+${(opportunities.medium || []).map(s => `• ${s.symbol} - ${formatPrice(s.price)} ${s.reason ? '— ' + s.reason : ''}`).join('\n') || '(none)'}
 
-🛡️ *Low Risk (${opportunities.low.length}):*
-${opportunities.low.map(s => `• ${s.symbol} - ${formatPrice(s.price)}`).join('\n')}
+🛡️ *Low Risk (${(opportunities.low || []).length}):*
+${(opportunities.low || []).map(s => `• ${s.symbol} - ${formatPrice(s.price)} ${s.reason ? '— ' + s.reason : ''}`).join('\n') || '(none)'}
+
+Use /price [SYMBOL] for details!`;
+
+        await botInstance.sendMessage(msg.chat.id, scanMsg, { parse_mode: 'Markdown' });
+      } catch (error) {
+        logger.error('Recommend error:', error);
+        await botInstance.sendMessage(msg.chat.id, '❌ Recommendation failed').catch(() => {});
+      }
+    });
+
+    // /multi [N] — Multi-asset recommendations for a portfolio
+    botInstance.onText(/^\/multi(?:\s+(\d+))?$/, async (msg, match) => {
+      try {
+        const telegramUser = await getOrCreateUser(msg.from.id, msg.from.username, msg.from.first_name);
+        const index = match[1] ? parseInt(match[1]) : null;
+
+        let portfolio = null;
+        if (index) {
+          portfolio = await getPortfolioByIndex(telegramUser.user.id, index);
+          if (!portfolio) {
+            await botInstance.sendMessage(msg.chat.id, `❌ Portfolio #${index} not found. Use /portfolios to see your list.`);
+            return;
+          }
+        }
+
+        await botInstance.sendMessage(msg.chat.id, `📊 Generating multi-asset allocation${portfolio ? ' for ' + (portfolio.ownerName || portfolio.name) : ''}...`);
+
+        const result = await generateMultiAssetRecommendations({
+          portfolio: portfolio || undefined,
+          capital: portfolio ? parseFloat(portfolio.availableCash || 100000) : 100000,
+          riskProfile: portfolio?.riskProfile || 'BALANCED',
+          timeHorizon: 'MEDIUM'
+        });
+
+        // Format the multi-asset response
+        let responseMsg = `📊 *Multi-Asset Allocation*${portfolio ? '\n📁 ' + portfolioLabel(portfolio) : ''}\n`;
+
+        if (result.recommendations) {
+          // result.recommendations is the AI text
+          responseMsg += `\n${result.recommendations}`;
+        } else if (result.allocation) {
+          responseMsg += `\n${JSON.stringify(result.allocation, null, 2)}`;
+        } else {
+          responseMsg += `\n${typeof result === 'string' ? result : JSON.stringify(result)}`;
+        }
+
+        // Telegram has a 4096 char limit
+        if (responseMsg.length > 4000) {
+          responseMsg = responseMsg.substring(0, 3997) + '...';
+        }
+
+        await botInstance.sendMessage(msg.chat.id, responseMsg, { parse_mode: 'Markdown' });
+      } catch (error) {
+        logger.error('Multi-asset error:', error);
+        await botInstance.sendMessage(msg.chat.id, '❌ Multi-asset analysis failed').catch(() => {});
+      }
+    });
+
+    // /scan [N] — Market scan (optionally personalized to portfolio)
+    botInstance.onText(/^\/scan(?:\s+(\d+))?$/, async (msg, match) => {
+      try {
+        const telegramUser = await getOrCreateUser(msg.from.id, msg.from.username, msg.from.first_name);
+        const index = match[1] ? parseInt(match[1]) : null;
+
+        let portfolio = null;
+        if (index) {
+          portfolio = await getPortfolioByIndex(telegramUser.user.id, index);
+          if (!portfolio) {
+            await botInstance.sendMessage(msg.chat.id, `❌ Portfolio #${index} not found. Use /portfolios to see your list.`);
+            return;
+          }
+        }
+
+        await botInstance.sendMessage(msg.chat.id, `🔍 Scanning market${portfolio ? ' for ' + (portfolio.ownerName || portfolio.name) : ''}...`);
+
+        const opportunities = await scanMarketForOpportunities({
+          portfolio: portfolio || undefined,
+          targetCount: { high: 3, medium: 3, low: 3 },
+          baseAmount: portfolio ? parseFloat(portfolio.availableCash || 10000) : 10000
+        });
+
+        const scanMsg = `✅ *Scan Complete!*${portfolio ? '\n📁 ' + portfolioLabel(portfolio) : ''}
+
+🔥 *High Risk (${(opportunities.high || []).length}):*
+${(opportunities.high || []).map(s => `• ${s.symbol} - ${formatPrice(s.price)}`).join('\n') || '(none)'}
+
+⚡ *Medium Risk (${(opportunities.medium || []).length}):*
+${(opportunities.medium || []).map(s => `• ${s.symbol} - ${formatPrice(s.price)}`).join('\n') || '(none)'}
+
+🛡️ *Low Risk (${(opportunities.low || []).length}):*
+${(opportunities.low || []).map(s => `• ${s.symbol} - ${formatPrice(s.price)}`).join('\n') || '(none)'}
 
 Use /price [SYMBOL] for details!`;
 
@@ -213,7 +511,7 @@ Use /price [SYMBOL] for details!`;
         const symbol = match[1].toUpperCase();
 
         const priceData = await getCurrentPrice(symbol, 'NSE');
-        
+
         const priceMsg = `📊 *${symbol}*
 
 *Price:* ${formatPrice(priceData.price)}
@@ -223,50 +521,6 @@ Use /price [SYMBOL] for details!`;
       } catch (error) {
         logger.error('Price error:', error);
         await botInstance.sendMessage(msg.chat.id, `❌ Failed to get price for ${match[1]}`).catch(() => {});
-      }
-    });
-
-    // /portfolio
-    botInstance.onText(/^\/portfolio$/, async (msg) => {
-      try {
-        const holdings = await prisma.holding.findMany();
-        
-        if (holdings.length === 0) {
-          await botInstance.sendMessage(msg.chat.id, '📭 Portfolio empty. Add some holdings first!');
-          return;
-        }
-
-        let totalValue = 0;
-        let totalInvested = 0;
-
-        const lines = holdings.map(h => {
-          const invested = h.quantity * h.avgPrice;
-          const current = h.quantity * (h.currentPrice || h.avgPrice);
-          const pl = current - invested;
-          const plPercent = (pl / invested) * 100;
-
-          totalValue += current;
-          totalInvested += invested;
-
-          return `*${h.symbol}*: ${h.quantity} @ ${formatPrice(h.avgPrice)}\nP&L: ${formatPrice(pl)} (${formatPercent(plPercent)})`;
-        }).join('\n\n');
-
-        const totalPL = totalValue - totalInvested;
-        const totalPLPercent = (totalPL / totalInvested) * 100;
-
-        const portfolioMsg = `💼 *PORTFOLIO*
-━━━━━━━━━━━━━━━━━━━
-Value: ${formatPrice(totalValue)}
-Invested: ${formatPrice(totalInvested)}
-P&L: ${formatPrice(totalPL)} (${formatPercent(totalPLPercent)})
-
-━━━━━━━━━━━━━━━━━━━
-${lines}`;
-
-        await botInstance.sendMessage(msg.chat.id, portfolioMsg, { parse_mode: 'Markdown' });
-      } catch (error) {
-        logger.error('Portfolio error:', error);
-        await botInstance.sendMessage(msg.chat.id, '❌ Failed to fetch portfolio').catch(() => {});
       }
     });
 
@@ -325,7 +579,7 @@ Use /mute to disable all alerts`;
       }
     });
 
-    logger.info('✅ Telegram bot commands registered successfully');
+    logger.info('Telegram bot commands registered successfully');
   } catch (error) {
     logger.error('Failed to initialize Telegram bot:', error);
   }

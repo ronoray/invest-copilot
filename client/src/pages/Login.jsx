@@ -54,7 +54,7 @@ const Login = () => {
                 onChange={(e) => setEmail(e.target.value)}
                 required
                 className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                placeholder="admin@hungrytimes.in"
+                placeholder="you@example.com"
               />
             </div>
 
@@ -94,12 +94,6 @@ const Login = () => {
             </button>
           </form>
 
-          {/* Demo Credentials */}
-          <div className="mt-6 p-4 bg-blue-50 rounded-lg">
-            <p className="text-sm text-gray-600 font-medium mb-2">Demo Credentials:</p>
-            <p className="text-sm text-gray-700">Email: admin@hungrytimes.in</p>
-            <p className="text-sm text-gray-700">Password: Phoenix@Invest2026</p>
-          </div>
         </div>
 
         {/* Footer */}

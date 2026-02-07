@@ -1,8 +1,12 @@
 import express from 'express';
+import multer from 'multer';
+import { readFileSync, mkdirSync } from 'fs';
+import path from 'path';
 import { scanMarketForOpportunities } from '../services/advancedScreener.js';
 import prisma from '../services/prisma.js';
 import Anthropic from '@anthropic-ai/sdk';
 import logger from '../services/logger.js';
+import crypto from 'crypto';
 
 const router = express.Router();
 
@@ -657,6 +661,287 @@ router.post('/plan/update-capital', async (req, res) => {
       error: 'Failed to update capital',
       details: error.message 
     });
+  }
+});
+
+// ============================================
+// SCREENSHOT ANALYSIS (Claude Vision)
+// ============================================
+
+// Configure multer for screenshot uploads
+const uploadsDir = path.join(process.cwd(), 'uploads', 'screenshots');
+try { mkdirSync(uploadsDir, { recursive: true }); } catch (e) { /* exists */ }
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, uploadsDir),
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    cb(null, `screenshot-${Date.now()}-${Math.random().toString(36).substring(7)}${ext}`);
+  }
+});
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  fileFilter: (req, file, cb) => {
+    const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+    if (allowed.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only JPEG, PNG, WebP, and GIF images are allowed'));
+    }
+  }
+});
+
+/**
+ * POST /api/ai/parse-screenshot
+ * Upload a trade screenshot and extract trade data via Claude Vision
+ */
+router.post('/parse-screenshot', upload.single('screenshot'), async (req, res) => {
+  try {
+    const userId = req.userId;
+    const { portfolioId } = req.body;
+
+    if (!req.file) {
+      return res.status(400).json({ error: 'No screenshot uploaded' });
+    }
+
+    logger.info(`Processing screenshot: ${req.file.filename}`);
+
+    // Read image and compute hash
+    const imageBuffer = readFileSync(req.file.path);
+    const imageHash = crypto.createHash('sha256').update(imageBuffer).digest('hex');
+    const base64Image = imageBuffer.toString('base64');
+    const mediaType = req.file.mimetype;
+
+    // Check for duplicate
+    const existing = await prisma.tradeScreenshot.findUnique({
+      where: { imageHash }
+    });
+
+    if (existing && existing.isConfirmed) {
+      return res.status(409).json({
+        error: 'This screenshot has already been processed',
+        screenshotId: existing.id
+      });
+    }
+
+    // Send to Claude Vision API
+    const message = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1000,
+      messages: [{
+        role: 'user',
+        content: [
+          {
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: mediaType,
+              data: base64Image
+            }
+          },
+          {
+            type: 'text',
+            text: `Extract trade details from this brokerage screenshot. Return ONLY valid JSON:
+{
+  "symbol": "STOCK_SYMBOL (NSE format, e.g., HDFCBANK, RELIANCE)",
+  "quantity": 5,
+  "price": 1680.50,
+  "tradeType": "BUY or SELL",
+  "executedAt": "2025-01-15T10:30:00Z (ISO format, best guess if not visible)",
+  "broker": "detected broker name (e.g., Upstox, Zerodha, HDFC Securities)",
+  "fees": 15.50,
+  "confidence": 0.85,
+  "notes": "any additional context"
+}
+If multiple trades are visible, return an array. If you cannot extract data, return {"error": "reason"}.`
+          }
+        ]
+      }]
+    });
+
+    const responseText = message.content[0].text;
+    const jsonMatch = responseText.match(/[\[{][\s\S]*[\]}]/);
+
+    if (!jsonMatch) {
+      return res.status(422).json({ error: 'Could not extract trade data from screenshot' });
+    }
+
+    let extractedData = JSON.parse(jsonMatch[0]);
+
+    // Normalize to array
+    if (!Array.isArray(extractedData)) {
+      extractedData = [extractedData];
+    }
+
+    if (extractedData[0]?.error) {
+      return res.status(422).json({ error: extractedData[0].error });
+    }
+
+    // Save screenshot record
+    const firstTrade = extractedData[0];
+    const screenshot = await prisma.tradeScreenshot.upsert({
+      where: { imageHash },
+      update: {
+        extractedData: extractedData,
+        symbol: firstTrade.symbol,
+        quantity: firstTrade.quantity,
+        price: firstTrade.price,
+        tradeType: firstTrade.tradeType,
+        executedAt: firstTrade.executedAt ? new Date(firstTrade.executedAt) : null,
+        broker: firstTrade.broker,
+        confidence: firstTrade.confidence,
+        status: 'PROCESSED',
+        portfolioId: portfolioId ? parseInt(portfolioId) : null
+      },
+      create: {
+        userId,
+        portfolioId: portfolioId ? parseInt(portfolioId) : null,
+        imageUrl: `/uploads/screenshots/${req.file.filename}`,
+        imageHash,
+        extractedData: extractedData,
+        symbol: firstTrade.symbol,
+        quantity: firstTrade.quantity,
+        price: firstTrade.price,
+        tradeType: firstTrade.tradeType,
+        executedAt: firstTrade.executedAt ? new Date(firstTrade.executedAt) : null,
+        broker: firstTrade.broker,
+        confidence: firstTrade.confidence,
+        status: 'PROCESSED'
+      }
+    });
+
+    logger.info(`Screenshot processed: ${screenshot.id}, found ${extractedData.length} trade(s)`);
+
+    res.json({
+      success: true,
+      screenshotId: screenshot.id,
+      trades: extractedData,
+      confidence: firstTrade.confidence
+    });
+
+  } catch (error) {
+    logger.error('Screenshot parse error:', error.message);
+    res.status(500).json({ error: 'Failed to process screenshot' });
+  }
+});
+
+/**
+ * POST /api/ai/confirm-screenshot-trade
+ * Confirm extracted trade data and save to DB
+ */
+router.post('/confirm-screenshot-trade', async (req, res) => {
+  try {
+    const userId = req.userId;
+    const { screenshotId, portfolioId, trades } = req.body;
+
+    if (!screenshotId || !portfolioId || !trades || !Array.isArray(trades)) {
+      return res.status(400).json({ error: 'screenshotId, portfolioId, and trades array are required' });
+    }
+
+    // Verify screenshot exists
+    const screenshot = await prisma.tradeScreenshot.findFirst({
+      where: { id: screenshotId, userId }
+    });
+
+    if (!screenshot) {
+      return res.status(404).json({ error: 'Screenshot not found' });
+    }
+
+    // Verify portfolio belongs to user
+    const portfolio = await prisma.portfolio.findFirst({
+      where: { id: parseInt(portfolioId), userId }
+    });
+
+    if (!portfolio) {
+      return res.status(404).json({ error: 'Portfolio not found' });
+    }
+
+    const createdTrades = [];
+
+    for (const trade of trades) {
+      const { symbol, quantity, price, tradeType, executedAt, fees } = trade;
+
+      // Create trade record
+      const newTrade = await prisma.trade.create({
+        data: {
+          portfolioId: parseInt(portfolioId),
+          symbol: symbol.toUpperCase(),
+          exchange: 'NSE',
+          type: tradeType,
+          quantity: parseInt(quantity),
+          price: parseFloat(price),
+          fees: fees ? parseFloat(fees) : 0,
+          executedAt: executedAt ? new Date(executedAt) : new Date(),
+          source: 'SCREENSHOT',
+          screenshotId
+        }
+      });
+
+      // Update holdings
+      if (tradeType === 'BUY') {
+        const existing = await prisma.holding.findFirst({
+          where: { portfolioId: parseInt(portfolioId), symbol: symbol.toUpperCase(), exchange: 'NSE' }
+        });
+
+        if (existing) {
+          const totalQty = existing.quantity + parseInt(quantity);
+          const newAvg = ((Number(existing.avgPrice) * existing.quantity) + (parseFloat(price) * parseInt(quantity))) / totalQty;
+
+          await prisma.holding.update({
+            where: { id: existing.id },
+            data: { quantity: totalQty, avgPrice: newAvg }
+          });
+        } else {
+          await prisma.holding.create({
+            data: {
+              portfolioId: parseInt(portfolioId),
+              symbol: symbol.toUpperCase(),
+              exchange: 'NSE',
+              quantity: parseInt(quantity),
+              avgPrice: parseFloat(price),
+              currentPrice: parseFloat(price)
+            }
+          });
+        }
+      } else if (tradeType === 'SELL') {
+        const existing = await prisma.holding.findFirst({
+          where: { portfolioId: parseInt(portfolioId), symbol: symbol.toUpperCase(), exchange: 'NSE' }
+        });
+
+        if (existing) {
+          const newQty = existing.quantity - parseInt(quantity);
+          if (newQty <= 0) {
+            await prisma.holding.delete({ where: { id: existing.id } });
+          } else {
+            await prisma.holding.update({
+              where: { id: existing.id },
+              data: { quantity: newQty }
+            });
+          }
+        }
+      }
+
+      createdTrades.push(newTrade);
+    }
+
+    // Mark screenshot as confirmed
+    await prisma.tradeScreenshot.update({
+      where: { id: screenshotId },
+      data: { isConfirmed: true, confirmedAt: new Date(), portfolioId: parseInt(portfolioId) }
+    });
+
+    logger.info(`Screenshot ${screenshotId} confirmed: ${createdTrades.length} trades saved`);
+
+    res.json({
+      success: true,
+      trades: createdTrades
+    });
+
+  } catch (error) {
+    logger.error('Confirm screenshot error:', error.message);
+    res.status(500).json({ error: 'Failed to confirm trades' });
   }
 });
 

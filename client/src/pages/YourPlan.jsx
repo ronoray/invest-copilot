@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { Target, TrendingUp, DollarSign, PieChart, AlertCircle, CheckCircle, RefreshCw } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Target, TrendingUp, DollarSign, PieChart, AlertCircle, CheckCircle, RefreshCw, ShoppingCart, Upload, X, Camera } from 'lucide-react';
 import CapitalChangeModal from '../components/CapitalChangeModal';
 import { api } from '../utils/api';
 
@@ -15,6 +15,21 @@ export default function YourPlan() {
   
   // Capital management state
   const [showCapitalModal, setShowCapitalModal] = useState(false);
+
+  // Upstox order state
+  const [orderModal, setOrderModal] = useState(null); // { stock, action }
+  const [orderQuantity, setOrderQuantity] = useState(1);
+  const [orderLoading, setOrderLoading] = useState(false);
+  const [orderResult, setOrderResult] = useState(null);
+
+  // Screenshot upload state
+  const [showScreenshotModal, setShowScreenshotModal] = useState(false);
+  const [screenshotFile, setScreenshotFile] = useState(null);
+  const [screenshotPreview, setScreenshotPreview] = useState(null);
+  const [screenshotLoading, setScreenshotLoading] = useState(false);
+  const [screenshotResult, setScreenshotResult] = useState(null);
+  const [editedTrades, setEditedTrades] = useState([]); // editable copy of extracted trades
+  const fileInputRef = useRef(null);
 
   // Load portfolio list on mount
   useEffect(() => {
@@ -72,6 +87,84 @@ export default function YourPlan() {
     loadPlan();
     // Show success message
     alert(`✅ Capital updated! New capital: ₹${updatedPortfolio.startingCapital.toLocaleString('en-IN')}`);
+  };
+
+  // Upstox order handlers
+  const handlePlaceOrder = async () => {
+    if (!orderModal || orderQuantity <= 0) return;
+    setOrderLoading(true);
+    try {
+      const result = await api.post('/upstox/place-order', {
+        symbol: orderModal.stock.symbol,
+        transactionType: 'BUY',
+        orderType: 'MARKET',
+        quantity: orderQuantity,
+        portfolioId: selectedPortfolioId
+      });
+      setOrderResult(result);
+    } catch (err) {
+      setOrderResult({ error: err.message || 'Order failed' });
+    } finally {
+      setOrderLoading(false);
+    }
+  };
+
+  // Screenshot handlers
+  const handleScreenshotSelect = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setScreenshotFile(file);
+    setScreenshotPreview(URL.createObjectURL(file));
+    setScreenshotResult(null);
+  };
+
+  const handleScreenshotUpload = async () => {
+    if (!screenshotFile) return;
+    setScreenshotLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append('screenshot', screenshotFile);
+      if (selectedPortfolioId) formData.append('portfolioId', selectedPortfolioId);
+
+      const token = localStorage.getItem('accessToken');
+      const response = await fetch('/api/ai/parse-screenshot', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+        body: formData
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Upload failed');
+      setScreenshotResult(data);
+      // Copy extracted trades into editable state
+      setEditedTrades((data.trades || []).map(t => ({ ...t })));
+    } catch (err) {
+      setScreenshotResult({ error: err.message });
+    } finally {
+      setScreenshotLoading(false);
+    }
+  };
+
+  const handleConfirmScreenshotTrade = async () => {
+    if (!screenshotResult?.screenshotId || editedTrades.length === 0) return;
+    setScreenshotLoading(true);
+    try {
+      await api.post('/ai/confirm-screenshot-trade', {
+        screenshotId: screenshotResult.screenshotId,
+        portfolioId: selectedPortfolioId,
+        trades: editedTrades
+      });
+      alert('Trade(s) saved successfully!');
+      setShowScreenshotModal(false);
+      setScreenshotFile(null);
+      setScreenshotPreview(null);
+      setScreenshotResult(null);
+      setEditedTrades([]);
+      loadPlan(); // Refresh data
+    } catch (err) {
+      alert('Failed to save: ' + (err.message || 'Unknown error'));
+    } finally {
+      setScreenshotLoading(false);
+    }
   };
 
   // Find selected portfolio details
@@ -138,6 +231,15 @@ export default function YourPlan() {
               <span className="hidden md:inline">Refresh</span>
             </button>
             
+            <button
+              onClick={() => setShowScreenshotModal(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg transition-colors"
+              title="Upload trade screenshot"
+            >
+              <Camera className="w-5 h-5" />
+              <span className="hidden md:inline">Screenshot</span>
+            </button>
+
             <button
               onClick={() => setShowCapitalModal(true)}
               className="flex items-center gap-2 px-4 py-2 bg-white text-emerald-600 border border-white rounded-lg hover:bg-emerald-50 transition-colors"
@@ -350,9 +452,24 @@ export default function YourPlan() {
                       <p className="text-sm text-gray-600">₹{stock.price?.toFixed(2)}</p>
                     </div>
                   </div>
-                  <div className="text-right">
-                    <p className="font-bold text-indigo-600">₹{stock.suggestedAmount?.toLocaleString('en-IN')}</p>
-                    <p className="text-xs text-gray-500">{stock.riskCategory} risk</p>
+                  <div className="flex items-center gap-3">
+                    <div className="text-right">
+                      <p className="font-bold text-indigo-600">₹{stock.suggestedAmount?.toLocaleString('en-IN')}</p>
+                      <p className="text-xs text-gray-500">{stock.riskCategory} risk</p>
+                    </div>
+                    {selectedPortfolio?.apiEnabled && (
+                      <button
+                        onClick={() => {
+                          setOrderModal({ stock, action: 'BUY' });
+                          setOrderQuantity(Math.max(1, Math.floor((stock.suggestedAmount || 0) / (stock.price || 1))));
+                          setOrderResult(null);
+                        }}
+                        className="px-3 py-2 bg-green-600 hover:bg-green-700 text-white text-xs font-semibold rounded-lg transition-colors flex items-center gap-1"
+                      >
+                        <ShoppingCart className="w-3 h-3" />
+                        Buy
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}
@@ -373,6 +490,238 @@ export default function YourPlan() {
         portfolio={selectedPortfolio}
         onSuccess={handleCapitalUpdated}
       />
+
+      {/* Upstox Order Modal */}
+      {orderModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-xl font-bold text-gray-900">Buy via Upstox</h3>
+              <button onClick={() => { setOrderModal(null); setOrderResult(null); }} className="text-gray-400 hover:text-gray-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div className="bg-gray-50 rounded-lg p-4">
+                <p className="font-bold text-lg text-gray-900">{orderModal.stock.symbol}</p>
+                <p className="text-gray-600">₹{orderModal.stock.price?.toFixed(2)} per share</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Quantity</label>
+                <input
+                  type="number"
+                  min="1"
+                  value={orderQuantity}
+                  onChange={(e) => setOrderQuantity(Math.max(1, parseInt(e.target.value) || 1))}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500"
+                />
+              </div>
+
+              <div className="bg-green-50 rounded-lg p-3 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Estimated Cost:</span>
+                  <span className="font-bold text-green-700">₹{(orderQuantity * (orderModal.stock.price || 0)).toLocaleString('en-IN')}</span>
+                </div>
+              </div>
+
+              {orderResult && (
+                <div className={`rounded-lg p-3 text-sm ${orderResult.error ? 'bg-red-50 text-red-700' : 'bg-green-50 text-green-700'}`}>
+                  {orderResult.error ? `Error: ${orderResult.error}` : `Order placed! ID: ${orderResult.orderId}`}
+                </div>
+              )}
+
+              <div className="flex gap-3">
+                <button
+                  onClick={() => { setOrderModal(null); setOrderResult(null); }}
+                  className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handlePlaceOrder}
+                  disabled={orderLoading}
+                  className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  {orderLoading ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <ShoppingCart className="w-4 h-4" />
+                  )}
+                  {orderLoading ? 'Placing...' : 'Place Order'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Screenshot Upload Modal */}
+      {showScreenshotModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl p-6 w-full max-w-lg shadow-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-xl font-bold text-gray-900">Upload Trade Screenshot</h3>
+              <button onClick={() => { setShowScreenshotModal(false); setScreenshotFile(null); setScreenshotPreview(null); setScreenshotResult(null); }} className="text-gray-400 hover:text-gray-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              {/* File input */}
+              <div
+                onClick={() => fileInputRef.current?.click()}
+                className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition-colors"
+              >
+                {screenshotPreview ? (
+                  <img src={screenshotPreview} alt="Preview" className="max-h-48 mx-auto rounded-lg" />
+                ) : (
+                  <>
+                    <Upload className="w-10 h-10 mx-auto text-gray-400 mb-3" />
+                    <p className="text-gray-600">Click to upload screenshot</p>
+                    <p className="text-xs text-gray-400 mt-1">JPEG, PNG, WebP (max 10MB)</p>
+                  </>
+                )}
+              </div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/webp,image/gif"
+                onChange={handleScreenshotSelect}
+                className="hidden"
+              />
+
+              {/* Upload button */}
+              {screenshotFile && !screenshotResult && (
+                <button
+                  onClick={handleScreenshotUpload}
+                  disabled={screenshotLoading}
+                  className="w-full px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  {screenshotLoading ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      Analyzing with AI...
+                    </>
+                  ) : (
+                    <>
+                      <Camera className="w-4 h-4" />
+                      Extract Trade Data
+                    </>
+                  )}
+                </button>
+              )}
+
+              {/* Results — editable review */}
+              {screenshotResult && !screenshotResult.error && (
+                <div className="space-y-3">
+                  <div className="bg-green-50 rounded-lg p-4">
+                    <p className="font-semibold text-green-800 mb-1">Review Extracted Trade(s)</p>
+                    <p className="text-xs text-gray-500 mb-3">
+                      AI confidence: {Math.round((screenshotResult.confidence || 0) * 100)}%. Edit any incorrect values before confirming.
+                    </p>
+
+                    {editedTrades.map((t, i) => (
+                      <div key={i} className="bg-white rounded-lg p-4 mb-3 border border-green-200 space-y-3">
+                        {editedTrades.length > 1 && (
+                          <p className="text-xs font-semibold text-gray-400 uppercase">Trade {i + 1}</p>
+                        )}
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-xs font-medium text-gray-500 mb-1">Symbol</label>
+                            <input
+                              type="text"
+                              value={t.symbol || ''}
+                              onChange={(e) => {
+                                const updated = [...editedTrades];
+                                updated[i] = { ...updated[i], symbol: e.target.value.toUpperCase() };
+                                setEditedTrades(updated);
+                              }}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-semibold focus:ring-2 focus:ring-green-500 focus:border-green-500"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-500 mb-1">Type</label>
+                            <select
+                              value={t.tradeType || 'BUY'}
+                              onChange={(e) => {
+                                const updated = [...editedTrades];
+                                updated[i] = { ...updated[i], tradeType: e.target.value };
+                                setEditedTrades(updated);
+                              }}
+                              className={`w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-semibold focus:ring-2 focus:ring-green-500 focus:border-green-500 ${t.tradeType === 'BUY' ? 'text-green-700' : 'text-red-700'}`}
+                            >
+                              <option value="BUY">BUY</option>
+                              <option value="SELL">SELL</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-500 mb-1">Quantity</label>
+                            <input
+                              type="number"
+                              min="1"
+                              value={t.quantity || ''}
+                              onChange={(e) => {
+                                const updated = [...editedTrades];
+                                updated[i] = { ...updated[i], quantity: parseInt(e.target.value) || '' };
+                                setEditedTrades(updated);
+                              }}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-semibold focus:ring-2 focus:ring-green-500 focus:border-green-500"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-500 mb-1">Price (INR)</label>
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              value={t.price || ''}
+                              onChange={(e) => {
+                                const updated = [...editedTrades];
+                                updated[i] = { ...updated[i], price: parseFloat(e.target.value) || '' };
+                                setEditedTrades(updated);
+                              }}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-semibold focus:ring-2 focus:ring-green-500 focus:border-green-500"
+                            />
+                          </div>
+                        </div>
+                        {t.broker && <p className="text-xs text-gray-400">Detected broker: {t.broker}</p>}
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 text-sm text-yellow-800">
+                    Please verify the details above are correct. Confirming will add these trades to your portfolio.
+                  </div>
+
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => { setScreenshotResult(null); setScreenshotFile(null); setScreenshotPreview(null); setEditedTrades([]); }}
+                      className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
+                    >
+                      Discard
+                    </button>
+                    <button
+                      onClick={handleConfirmScreenshotTrade}
+                      disabled={screenshotLoading || editedTrades.some(t => !t.symbol || !t.quantity || !t.price)}
+                      className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 font-semibold"
+                    >
+                      {screenshotLoading ? 'Saving...' : 'Confirm & Add to Portfolio'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {screenshotResult?.error && (
+                <div className="bg-red-50 rounded-lg p-3 text-sm text-red-700">
+                  Error: {screenshotResult.error}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

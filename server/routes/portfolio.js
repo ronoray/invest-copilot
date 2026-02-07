@@ -59,6 +59,11 @@ router.get('/', async (req, res) => {
       });
     }
     const holdings = await prisma.holding.findMany({
+      include: {
+        portfolio: {
+          select: { id: true, name: true, ownerName: true, broker: true }
+        }
+      },
       orderBy: { symbol: 'asc' }
     });
 
@@ -67,10 +72,12 @@ router.get('/', async (req, res) => {
       const investedAmount = Number(h.avgPrice) * h.quantity;
       const currentValue = Number(h.currentPrice) * h.quantity;
       const unrealizedPL = currentValue - investedAmount;
-      const plPercent = (unrealizedPL / investedAmount) * 100;
+      const plPercent = investedAmount > 0 ? (unrealizedPL / investedAmount) * 100 : 0;
 
       return {
         id: h.id,
+        portfolioId: h.portfolioId,
+        portfolioName: h.portfolio?.name || 'Unknown',
         symbol: h.symbol,
         exchange: h.exchange,
         quantity: h.quantity,

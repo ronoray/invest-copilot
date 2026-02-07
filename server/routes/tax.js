@@ -2,6 +2,7 @@ import express from 'express';
 import { calculatePortfolioTax, calculateTaxOnTrade, monthsUntilLTCG } from '../services/taxCalculator.js';
 import { PrismaClient } from '@prisma/client';
 import logger from '../services/logger.js';
+import { generateTaxReport } from '../services/taxExportService.js';
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -145,6 +146,34 @@ router.get('/ltcg-timer/:holdingId', async (req, res) => {
   } catch (error) {
     logger.error('Error calculating LTCG timer:', error);
     res.status(500).json({ error: 'Failed to calculate timer' });
+  }
+});
+
+/**
+ * GET /api/tax/export?year=2025
+ * Download Excel tax report for a financial year
+ */
+router.get('/export', async (req, res) => {
+  try {
+    const userId = req.userId;
+    const { year } = req.query;
+
+    if (!year) {
+      return res.status(400).json({ error: 'year parameter is required (e.g., 2025 for FY 2025-26)' });
+    }
+
+    const workbook = await generateTaxReport(userId, year);
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename=TaxReport_FY${year}-${parseInt(year) + 1}.xlsx`);
+
+    await workbook.xlsx.write(res);
+    res.end();
+
+    logger.info(`Tax report downloaded for user ${userId}, FY ${year}`);
+  } catch (error) {
+    logger.error('Tax export error:', error);
+    res.status(500).json({ error: 'Failed to generate tax report' });
   }
 });
 

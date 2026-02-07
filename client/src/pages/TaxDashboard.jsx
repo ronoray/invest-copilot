@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Receipt, TrendingUp, Calendar, AlertCircle, CheckCircle, Target, FileText } from 'lucide-react';
+import { Receipt, TrendingUp, Calendar, AlertCircle, CheckCircle, Target, FileText, Download } from 'lucide-react';
 
 export default function TaxDashboard() {
   const [selectedYear, setSelectedYear] = useState('2025-26');
@@ -337,11 +337,31 @@ export default function TaxDashboard() {
 
       {/* Export Reports */}
       <div className="flex gap-4">
-        <button className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold py-3 px-6 rounded-lg transition-colors flex items-center justify-center gap-2 border-2 border-gray-300">
-          <FileText className="w-5 h-5" />
-          Download Tax Report (PDF)
+        <button
+          onClick={() => {
+            const year = selectedYear.split('-')[0];
+            const token = localStorage.getItem('accessToken');
+            const url = `/api/tax/export?year=${year}`;
+            fetch(url, { headers: { 'Authorization': `Bearer ${token}` } })
+              .then(res => {
+                if (!res.ok) throw new Error('Download failed');
+                return res.blob();
+              })
+              .then(blob => {
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = `TaxReport_FY${year}-${parseInt(year) + 1}.xlsx`;
+                a.click();
+                URL.revokeObjectURL(a.href);
+              })
+              .catch(err => alert('Download failed: ' + err.message));
+          }}
+          className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-3 px-6 rounded-lg transition-colors flex items-center justify-center gap-2"
+        >
+          <Download className="w-5 h-5" />
+          Download Tax Report (Excel)
         </button>
-        <button className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-3 px-6 rounded-lg transition-colors flex items-center justify-center gap-2">
+        <button className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold py-3 px-6 rounded-lg transition-colors flex items-center justify-center gap-2 border-2 border-gray-300">
           <Calendar className="w-5 h-5" />
           Year-End Tax Planning
         </button>

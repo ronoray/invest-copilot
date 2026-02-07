@@ -14,6 +14,7 @@ import watchlistRoutes from './routes/watchlist.js';
 import aiRoutes from './routes/ai.js';
 import taxRoutes from './routes/tax.js';
 import portfolioCalcRoutes from './routes/portfolioCalc.js';
+import upstoxRoutes from './routes/upstox.js';
 
 // Service imports
 import { scanMarket } from './jobs/marketScanner.js';
@@ -97,6 +98,7 @@ app.use('/api/proposals', authenticate, proposalRoutes);
 app.use('/api/watchlist', authenticate, watchlistRoutes);
 app.use('/api/ai', authenticate, aiRoutes);
 app.use('/api/tax', authenticate, taxRoutes);
+app.use('/api/upstox', authenticate, upstoxRoutes);
 app.post('/api/deploy/webhook', handleDeployWebhook);
 app.post('/api/deploy/trigger', authenticate, triggerManualDeploy);
 

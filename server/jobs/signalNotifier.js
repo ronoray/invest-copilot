@@ -1,14 +1,78 @@
 import cron from 'node-cron';
 import prisma from '../services/prisma.js';
 import { getBot } from '../services/telegramBot.js';
-import { expireOldSignals } from '../services/signalGenerator.js';
+import { generateTradeSignals, expireOldSignals } from '../services/signalGenerator.js';
 import { isTradingDay } from '../utils/marketHolidays.js';
 import logger from '../services/logger.js';
 
 /**
+ * Auto-generate trade signals for all active portfolios.
+ * Runs at 9:30 AM and 1:00 PM IST during market hours.
+ */
+async function generateSignalsForAllPortfolios() {
+  if (!isTradingDay(new Date())) return;
+
+  try {
+    // Get all active portfolios that have holdings
+    const portfolios = await prisma.portfolio.findMany({
+      where: { isActive: true },
+      include: {
+        holdings: true,
+        user: { include: { telegramUser: true } }
+      }
+    });
+
+    // Only generate for portfolios with linked Telegram users
+    const eligiblePortfolios = portfolios.filter(p =>
+      p.user?.telegramUser?.isActive && !p.user?.telegramUser?.isMuted
+    );
+
+    if (eligiblePortfolios.length === 0) {
+      logger.info('No eligible portfolios for signal generation');
+      return;
+    }
+
+    let totalSignals = 0;
+    for (const portfolio of eligiblePortfolios) {
+      try {
+        // Check if we already generated signals for this portfolio today
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const existingToday = await prisma.tradeSignal.count({
+          where: {
+            portfolioId: portfolio.id,
+            createdAt: { gte: today },
+            status: { notIn: ['EXPIRED'] }
+          }
+        });
+
+        // Skip if already have 3+ active signals today for this portfolio
+        if (existingToday >= 3) {
+          logger.info(`Portfolio ${portfolio.id} already has ${existingToday} signals today, skipping`);
+          continue;
+        }
+
+        const signals = await generateTradeSignals(portfolio.id);
+        totalSignals += signals.length;
+        logger.info(`Generated ${signals.length} signals for portfolio ${portfolio.id} (${portfolio.ownerName || portfolio.name})`);
+
+        // Small delay between portfolios to avoid API rate limits
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      } catch (error) {
+        logger.error(`Signal generation failed for portfolio ${portfolio.id}:`, error.message);
+      }
+    }
+
+    logger.info(`Signal generation complete: ${totalSignals} signals across ${eligiblePortfolios.length} portfolios`);
+  } catch (error) {
+    logger.error('Signal generation batch error:', error);
+  }
+}
+
+/**
  * Check for pending trade signals and send/resend to Telegram.
- * Signals are sent with inline buttons: ACK, Snooze 30m, Dismiss.
- * Re-sends every 30 minutes until acknowledged or dismissed.
+ * Signals are sent with inline buttons: Execute/ACK, Snooze 30m, Dismiss.
+ * Re-sends every 30 minutes until acknowledged, executed, or dismissed.
  */
 async function notifyPendingSignals() {
   if (!isTradingDay(new Date())) return;
@@ -68,13 +132,16 @@ async function notifyPendingSignals() {
         }
 
         const portfolioName = signal.portfolio.ownerName || signal.portfolio.name;
+        const brokerName = (signal.portfolio.broker || 'Unknown').replace(/_/g, ' ');
+        const riskProfile = signal.portfolio.riskProfile || '';
         const repeatNote = signal.notifyCount > 0 ? `\n⏰ _Reminder #${signal.notifyCount + 1}_` : '';
 
         const msgText = `${sideEmoji} *${signal.side} SIGNAL*
 ━━━━━━━━━━━━━━━━━━━
 *${signal.symbol}* (${signal.exchange})
 Qty: ${signal.quantity} | ${priceInfo}
-📁 ${portfolioName}
+
+📁 *${portfolioName}* — ${brokerName}${riskProfile ? ' (' + riskProfile + ')' : ''}
 
 Confidence: ${confidenceBar} ${signal.confidence}%
 ${signal.rationale || ''}${repeatNote}`;
@@ -135,20 +202,36 @@ ${signal.rationale || ''}${repeatNote}`;
 }
 
 /**
- * Initialize the signal notifier cron job.
- * Runs every 5 minutes during market hours (9:15 AM - 3:30 PM IST).
+ * Initialize the signal notifier cron jobs.
  */
 export function initSignalNotifier() {
   logger.info('Initializing signal notifier...');
 
-  // Every 5 minutes during market hours
+  // Generate signals at 9:30 AM and 1:00 PM IST (market open + midday)
+  cron.schedule('30 9 * * 1-5', async () => {
+    logger.info('Running morning signal generation...');
+    await generateSignalsForAllPortfolios();
+  }, {
+    timezone: 'Asia/Kolkata'
+  });
+
+  cron.schedule('0 13 * * 1-5', async () => {
+    logger.info('Running midday signal generation...');
+    await generateSignalsForAllPortfolios();
+  }, {
+    timezone: 'Asia/Kolkata'
+  });
+
+  // Notify pending signals every 5 minutes during market hours
   cron.schedule('*/5 9-15 * * 1-5', async () => {
     await notifyPendingSignals();
   }, {
     timezone: 'Asia/Kolkata'
   });
 
-  logger.info('Signal notifier initialized (every 5 min, 9 AM - 3:30 PM IST, Mon-Fri)');
+  logger.info('Signal notifier initialized:');
+  logger.info('  Signal generation: 9:30 AM + 1:00 PM IST');
+  logger.info('  Signal notifications: every 5 min, 9-3:30 PM IST');
 }
 
-export default { initSignalNotifier, notifyPendingSignals };
+export default { initSignalNotifier, notifyPendingSignals, generateSignalsForAllPortfolios };

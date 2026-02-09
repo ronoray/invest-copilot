@@ -79,15 +79,50 @@ async function saveAnalysis(userId, category, analysis, metadata = {}) {
     await prisma.aiAnalysis.create({
       data: {
         userId,
+        analysisType: category,
         category,
         analysis,
-        confidence: 0.85,
         metadata
       }
     });
     logger.info(`Saved analysis: ${category} for user ${userId}`);
   } catch (error) {
     logger.error(`Failed to save analysis ${category}:`, error.message);
+  }
+}
+
+// ============================================
+// HELPER: Send long message (split if > 4000 chars)
+// ============================================
+
+async function sendTelegramMessage(chatId, text, options = {}) {
+  const bot = getBot();
+  if (!bot) return;
+
+  if (text.length <= 4000) {
+    await bot.sendMessage(chatId, text, options);
+    return;
+  }
+
+  // Split on section dividers first, then by newlines
+  const parts = [];
+  let current = '';
+  const lines = text.split('\n');
+
+  for (const line of lines) {
+    if (current.length + line.length + 1 > 3900) {
+      if (current.trim()) parts.push(current.trim());
+      current = line;
+    } else {
+      current += (current ? '\n' : '') + line;
+    }
+  }
+  if (current.trim()) parts.push(current.trim());
+
+  for (let i = 0; i < parts.length; i++) {
+    const partText = parts.length > 1 ? `${parts[i]}\n\n_(${i + 1}/${parts.length})_` : parts[i];
+    await bot.sendMessage(chatId, partText, options);
+    if (i < parts.length - 1) await new Promise(r => setTimeout(r, 300));
   }
 }
 
@@ -183,7 +218,7 @@ ${sections.join('\n\n━━━━━━━━━━━━━━━━━━━\n
 ━━━━━━━━━━━━━━━━━━━
 Have a profitable day! 💰`;
 
-        await getBot()?.sendMessage(chatId, morningMsg, { parse_mode: 'Markdown' });
+        await sendTelegramMessage(chatId, morningMsg, { parse_mode: 'Markdown' });
         await new Promise(resolve => setTimeout(resolve, 500));
 
         logger.info(`Morning Deep Dive sent to ${telegramUser.telegramId}`);
@@ -264,7 +299,7 @@ ${sections.join('\n\n━━━━━━━━━━━━━━━━━━━\n
 ━━━━━━━━━━━━━━━━━━━
 Rest well! 😴`;
 
-        await getBot()?.sendMessage(chatId, eveningMsg, { parse_mode: 'Markdown' });
+        await sendTelegramMessage(chatId, eveningMsg, { parse_mode: 'Markdown' });
         await new Promise(resolve => setTimeout(resolve, 500));
 
         logger.info(`Evening Review sent to ${telegramUser.telegramId}`);
@@ -373,7 +408,7 @@ ${sections.join('\n\n━━━━━━━━━━━━━━━━━━━\n
 ━━━━━━━━━━━━━━━━━━━
 Sweet dreams! Tomorrow's another opportunity 🚀`;
 
-        await getBot()?.sendMessage(chatId, gameplanMsg, { parse_mode: 'Markdown' });
+        await sendTelegramMessage(chatId, gameplanMsg, { parse_mode: 'Markdown' });
         await new Promise(resolve => setTimeout(resolve, 500));
 
         logger.info(`Tomorrow's Game Plan sent to ${telegramUser.telegramId}`);

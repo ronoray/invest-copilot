@@ -3,8 +3,7 @@ import { PrismaClient } from '@prisma/client';
 import Anthropic from '@anthropic-ai/sdk';
 import { getCurrentPrice } from '../services/marketData.js';
 import { scanMarketForOpportunities, buildProfileBrief } from '../services/advancedScreener.js';
-import { sendAlert, broadcastMessage } from '../services/telegramBot.js';
-import bot from '../services/telegramBot.js';
+import { sendAlert, broadcastMessage, getBot } from '../services/telegramBot.js';
 import logger from '../services/logger.js';
 import { isTradingDay, isMarketHoliday } from '../utils/marketHolidays.js';
 
@@ -184,7 +183,7 @@ ${sections.join('\n\n━━━━━━━━━━━━━━━━━━━\n
 ━━━━━━━━━━━━━━━━━━━
 Have a profitable day! 💰`;
 
-        await bot.sendMessage(chatId, morningMsg, { parse_mode: 'Markdown' });
+        await getBot()?.sendMessage(chatId, morningMsg, { parse_mode: 'Markdown' });
         await new Promise(resolve => setTimeout(resolve, 500));
 
         logger.info(`Morning Deep Dive sent to ${telegramUser.telegramId}`);
@@ -265,7 +264,7 @@ ${sections.join('\n\n━━━━━━━━━━━━━━━━━━━\n
 ━━━━━━━━━━━━━━━━━━━
 Rest well! 😴`;
 
-        await bot.sendMessage(chatId, eveningMsg, { parse_mode: 'Markdown' });
+        await getBot()?.sendMessage(chatId, eveningMsg, { parse_mode: 'Markdown' });
         await new Promise(resolve => setTimeout(resolve, 500));
 
         logger.info(`Evening Review sent to ${telegramUser.telegramId}`);
@@ -374,7 +373,7 @@ ${sections.join('\n\n━━━━━━━━━━━━━━━━━━━\n
 ━━━━━━━━━━━━━━━━━━━
 Sweet dreams! Tomorrow's another opportunity 🚀`;
 
-        await bot.sendMessage(chatId, gameplanMsg, { parse_mode: 'Markdown' });
+        await getBot()?.sendMessage(chatId, gameplanMsg, { parse_mode: 'Markdown' });
         await new Promise(resolve => setTimeout(resolve, 500));
 
         logger.info(`Tomorrow's Game Plan sent to ${telegramUser.telegramId}`);
@@ -434,7 +433,7 @@ Target: ₹${holding.targetPrice}
 Consider booking profit! 💰`;
 
           const chatId = parseInt(holding.portfolio.user.telegramUser.telegramId);
-          await bot.sendMessage(chatId, alertMsg, { parse_mode: 'Markdown' });
+          await getBot()?.sendMessage(chatId, alertMsg, { parse_mode: 'Markdown' });
         }
 
         // Stop loss
@@ -448,7 +447,7 @@ Stop Loss: ₹${holding.stopLoss}
 Exit now to limit losses! ⚠️`;
 
           const chatId = parseInt(holding.portfolio.user.telegramUser.telegramId);
-          await bot.sendMessage(chatId, alertMsg, { parse_mode: 'Markdown' });
+          await getBot()?.sendMessage(chatId, alertMsg, { parse_mode: 'Markdown' });
         }
 
         await new Promise(resolve => setTimeout(resolve, 500));

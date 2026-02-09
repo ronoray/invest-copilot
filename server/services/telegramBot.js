@@ -631,4 +631,5 @@ export async function broadcastMessage(message) {
   }
 }
 
+export { getBot };
 export default getBot();

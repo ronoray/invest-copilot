@@ -38,7 +38,10 @@ async function notifyPendingSignals() {
         portfolio: {
           include: {
             user: {
-              include: { telegramUser: true }
+              include: {
+                telegramUser: true,
+                upstoxIntegration: true
+              }
             }
           }
         }
@@ -76,13 +79,25 @@ Qty: ${signal.quantity} | ${priceInfo}
 Confidence: ${confidenceBar} ${signal.confidence}%
 ${signal.rationale || ''}${repeatNote}`;
 
-        const inlineKeyboard = {
-          reply_markup: {
-            inline_keyboard: [[
+        // Check if user has Upstox integration for Execute button
+        const upstoxIntegration = signal.portfolio?.user?.upstoxIntegration;
+        const hasUpstox = upstoxIntegration?.isConnected && upstoxIntegration?.accessToken;
+
+        const buttons = hasUpstox
+          ? [
+              { text: '🚀 Execute', callback_data: `sig_exec_${signal.id}` },
+              { text: '⏰ Snooze 30m', callback_data: `sig_snooze_${signal.id}` },
+              { text: '❌ Dismiss', callback_data: `sig_dismiss_${signal.id}` }
+            ]
+          : [
               { text: '✅ ACK', callback_data: `sig_ack_${signal.id}` },
               { text: '⏰ Snooze 30m', callback_data: `sig_snooze_${signal.id}` },
               { text: '❌ Dismiss', callback_data: `sig_dismiss_${signal.id}` }
-            ]]
+            ];
+
+        const inlineKeyboard = {
+          reply_markup: {
+            inline_keyboard: [buttons]
           }
         };
 

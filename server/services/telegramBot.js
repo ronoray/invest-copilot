@@ -4,6 +4,7 @@ import logger from './logger.js';
 import { getCurrentPrice } from './marketData.js';
 import { scanMarketForOpportunities, buildProfileBrief } from './advancedScreener.js';
 import { generateMultiAssetRecommendations } from './multiAssetRecommendations.js';
+import { placeOrder } from './upstoxService.js';
 
 const prisma = new PrismaClient();
 
@@ -124,6 +125,142 @@ async function getPortfolioByIndex(userId, index) {
 function portfolioLabel(p) {
   const risk = p.riskProfile ? ` (${p.riskProfile})` : '';
   return `${p.ownerName || p.name} - ${(p.broker || 'Unknown').replace(/_/g, ' ')}${risk}`;
+}
+
+// ============================================
+// EXECUTE SIGNAL VIA UPSTOX
+// ============================================
+
+async function handleExecuteSignal(botInstance, query, signalId) {
+  const chatId = query.message.chat.id;
+  const messageId = query.message.message_id;
+
+  try {
+    // Load signal with portfolio and user's Upstox integration
+    const signal = await prisma.tradeSignal.findUnique({
+      where: { id: signalId },
+      include: {
+        portfolio: {
+          include: {
+            user: {
+              include: { upstoxIntegration: true }
+            }
+          }
+        }
+      }
+    });
+
+    if (!signal) {
+      await botInstance.answerCallbackQuery(query.id, { text: 'Signal not found' });
+      return;
+    }
+
+    if (signal.status === 'EXECUTED') {
+      await botInstance.answerCallbackQuery(query.id, { text: 'Already executed' });
+      return;
+    }
+
+    if (signal.status === 'DISMISSED' || signal.status === 'EXPIRED') {
+      await botInstance.answerCallbackQuery(query.id, { text: `Signal is ${signal.status.toLowerCase()}` });
+      return;
+    }
+
+    const userId = signal.portfolio?.user?.id;
+    const upstox = signal.portfolio?.user?.upstoxIntegration;
+
+    if (!upstox || !upstox.isConnected || !upstox.accessToken) {
+      await botInstance.answerCallbackQuery(query.id, { text: 'Upstox not connected' });
+      return;
+    }
+
+    // Show processing state
+    await botInstance.answerCallbackQuery(query.id, { text: 'Placing order...' });
+    await botInstance.editMessageReplyMarkup(
+      { inline_keyboard: [[{ text: '⏳ Placing order...', callback_data: 'noop' }]] },
+      { chat_id: chatId, message_id: messageId }
+    );
+
+    // Map signal trigger type to Upstox order params
+    let orderType = 'MARKET';
+    let price = 0;
+    let triggerPrice = 0;
+
+    if (signal.triggerType === 'LIMIT' && signal.triggerPrice) {
+      orderType = 'LIMIT';
+      price = parseFloat(signal.triggerPrice);
+    } else if (signal.triggerType === 'ZONE' && signal.triggerLow) {
+      // ZONE → LIMIT at lower bound
+      orderType = 'LIMIT';
+      price = parseFloat(signal.triggerLow);
+    }
+
+    const orderParams = {
+      symbol: signal.symbol,
+      exchange: `${signal.exchange}_EQ`,
+      transactionType: signal.side, // BUY or SELL
+      orderType,
+      quantity: signal.quantity,
+      price,
+      triggerPrice,
+      portfolioId: signal.portfolioId
+    };
+
+    logger.info(`Executing signal #${signalId} via Upstox:`, orderParams);
+
+    const result = await placeOrder(userId, orderParams);
+
+    // Update signal status and link to order
+    await prisma.tradeSignal.update({
+      where: { id: signalId },
+      data: {
+        status: 'EXECUTED',
+        upstoxOrderId: result.dbOrderId
+      }
+    });
+
+    // Create ack record
+    await prisma.signalAck.create({
+      data: {
+        signalId,
+        action: 'EXECUTE',
+        note: `Upstox order ${result.orderId} placed via Telegram by ${query.from.first_name || query.from.id}`
+      }
+    });
+
+    // Update message with success
+    const successText = `🚀 *Order Placed!*\n${signal.side} ${signal.quantity}x ${signal.symbol}\nOrder ID: \`${result.orderId}\``;
+    try {
+      await botInstance.editMessageReplyMarkup(
+        { inline_keyboard: [[{ text: `🚀 Executed — ${result.orderId}`, callback_data: 'noop' }]] },
+        { chat_id: chatId, message_id: messageId }
+      );
+    } catch (editErr) {
+      logger.warn('Could not edit signal message after execute:', editErr.message);
+    }
+
+    // Send confirmation as separate message
+    await botInstance.sendMessage(chatId, successText, { parse_mode: 'Markdown' });
+
+    logger.info(`Signal #${signalId} executed: Upstox order ${result.orderId}`);
+  } catch (error) {
+    logger.error(`Failed to execute signal #${signalId}:`, error);
+
+    // Show error on the button
+    try {
+      await botInstance.editMessageReplyMarkup(
+        { inline_keyboard: [[
+          { text: '❌ Order Failed — Retry?', callback_data: `sig_exec_${signalId}` },
+          { text: '🚫 Dismiss', callback_data: `sig_dismiss_${signalId}` }
+        ]] },
+        { chat_id: chatId, message_id: messageId }
+      );
+    } catch (editErr) {
+      logger.warn('Could not edit message after execute failure:', editErr.message);
+    }
+
+    const errorMsg = error.message || 'Unknown error';
+    await botInstance.sendMessage(chatId, `❌ *Order Failed*\nSignal #${signalId}: ${errorMsg}`, { parse_mode: 'Markdown' });
+  }
 }
 
 // ============================================
@@ -590,12 +727,18 @@ Use /mute to disable all alerts`;
         if (!data || !data.startsWith('sig_')) return;
 
         const parts = data.split('_');
-        // Format: sig_ack_123, sig_snooze_123, sig_dismiss_123
+        // Format: sig_ack_123, sig_snooze_123, sig_dismiss_123, sig_exec_123
         if (parts.length < 3) return;
 
-        const action = parts[1]; // ack, snooze, dismiss
+        const action = parts[1]; // ack, snooze, dismiss, exec
         const signalId = parseInt(parts[2]);
         if (!signalId) return;
+
+        // Handle Execute action separately (places Upstox order)
+        if (action === 'exec') {
+          await handleExecuteSignal(botInstance, query, signalId);
+          return;
+        }
 
         const actionMap = {
           'ack': { status: 'ACKED', dbAction: 'ACK', label: 'Acknowledged' },

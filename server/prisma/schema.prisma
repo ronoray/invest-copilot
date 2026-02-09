@@ -615,11 +615,14 @@ model TradeSignal {
   confidence      Int      @default(50) // 0-100
   rationale       String?  @db.Text
 
-  status          String   @default("PENDING") // PENDING, ACKED, SNOOZED, DISMISSED, EXPIRED
+  status          String   @default("PENDING") // PENDING, ACKED, SNOOZED, DISMISSED, EXPIRED, EXECUTED
 
   // Telegram notification tracking
   lastNotifiedAt  DateTime?
   notifyCount     Int      @default(0)
+
+  // Upstox execution link
+  upstoxOrderId   Int?     // Links to UpstoxOrder when executed via Telegram
 
   expiresAt       DateTime? // End of trading day
 
@@ -632,6 +635,7 @@ model TradeSignal {
   @@index([portfolioId, status])
   @@index([status, lastNotifiedAt])
   @@index([createdAt])
+  @@index([upstoxOrderId])
 }
 
 // ============================================
@@ -641,7 +645,7 @@ model TradeSignal {
 model SignalAck {
   id          Int      @id @default(autoincrement())
   signalId    Int
-  action      String   // ACK, SNOOZE_30M, DISMISS
+  action      String   // ACK, SNOOZE_30M, DISMISS, EXECUTE
   note        String?
   createdAt   DateTime @default(now())
 

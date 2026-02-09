@@ -579,6 +579,74 @@ Use /mute to disable all alerts`;
       }
     });
 
+    // ============================================
+    // CALLBACK QUERIES (Inline Button Handlers)
+    // Signal ACK/SNOOZE/DISMISS buttons
+    // ============================================
+
+    botInstance.on('callback_query', async (query) => {
+      try {
+        const data = query.data;
+        if (!data || !data.startsWith('sig_')) return;
+
+        const parts = data.split('_');
+        // Format: sig_ack_123, sig_snooze_123, sig_dismiss_123
+        if (parts.length < 3) return;
+
+        const action = parts[1]; // ack, snooze, dismiss
+        const signalId = parseInt(parts[2]);
+        if (!signalId) return;
+
+        const actionMap = {
+          'ack': { status: 'ACKED', dbAction: 'ACK', label: 'Acknowledged' },
+          'snooze': { status: 'SNOOZED', dbAction: 'SNOOZE_30M', label: 'Snoozed 30m' },
+          'dismiss': { status: 'DISMISSED', dbAction: 'DISMISS', label: 'Dismissed' }
+        };
+
+        const mapped = actionMap[action];
+        if (!mapped) return;
+
+        // Update signal status
+        await prisma.tradeSignal.update({
+          where: { id: signalId },
+          data: { status: mapped.status }
+        });
+
+        // Create ack record
+        await prisma.signalAck.create({
+          data: {
+            signalId,
+            action: mapped.dbAction,
+            note: `Via Telegram by ${query.from.first_name || query.from.id}`
+          }
+        });
+
+        // Answer the callback (removes loading spinner on button)
+        await botInstance.answerCallbackQuery(query.id, {
+          text: `Signal ${mapped.label}`
+        });
+
+        // Edit the original message to show it's been handled
+        const emoji = action === 'ack' ? '✅' : action === 'snooze' ? '⏰' : '❌';
+        try {
+          await botInstance.editMessageReplyMarkup(
+            { inline_keyboard: [[{ text: `${emoji} ${mapped.label}`, callback_data: 'noop' }]] },
+            { chat_id: query.message.chat.id, message_id: query.message.message_id }
+          );
+        } catch (editErr) {
+          // Message might be too old to edit, that's OK
+          logger.warn('Could not edit signal message:', editErr.message);
+        }
+      } catch (error) {
+        logger.error('Callback query error:', error);
+        try {
+          await botInstance.answerCallbackQuery(query.id, { text: 'Error processing action' });
+        } catch (e) {
+          // ignore
+        }
+      }
+    });
+
     logger.info('Telegram bot commands registered successfully');
   } catch (error) {
     logger.error('Failed to initialize Telegram bot:', error);

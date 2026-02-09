@@ -138,7 +138,9 @@ model Portfolio {
   proposals           Proposal[]
   alertPreferences    AlertPreference?
   capitalHistory      CapitalHistory[]  // Track capital changes
-  
+  dailyTargets        DailyTarget[]
+  tradeSignals        TradeSignal[]
+
   @@index([userId, isActive])
   @@index([broker])
   @@index([userId, name])
@@ -555,8 +557,95 @@ model AuditLog {
   createdAt DateTime @default(now())
   
   user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
-  
+
   @@index([userId, createdAt])
   @@index([action])
   @@index([createdAt])
+}
+
+// ============================================
+// DAILY TARGET (Per Portfolio Per Day)
+// ============================================
+
+model DailyTarget {
+  id              Int      @id @default(autoincrement())
+  portfolioId     Int
+  date            DateTime @db.Date
+
+  // AI-computed target
+  aiTarget        Float    @default(0)
+  aiRationale     String?  @db.Text
+  aiConfidence    Int?     // 0-100
+  aiUpdatedAt     DateTime?
+
+  // User-set target (optional override)
+  userTarget      Float?
+  userUpdatedAt   DateTime?
+
+  // Actual earnings (user-entered)
+  earnedActual    Float    @default(0)
+  earnedUpdatedAt DateTime?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  portfolio       Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+
+  @@unique([portfolioId, date])
+  @@index([portfolioId, date])
+}
+
+// ============================================
+// TRADE SIGNALS (AI-generated BUY/SELL)
+// ============================================
+
+model TradeSignal {
+  id              Int      @id @default(autoincrement())
+  portfolioId     Int
+
+  symbol          String
+  exchange        String   @default("NSE")
+  side            String   // BUY, SELL
+  quantity        Int
+  triggerType     String   @default("MARKET") // MARKET, LIMIT, ZONE
+  triggerPrice    Float?
+  triggerLow      Float?
+  triggerHigh     Float?
+
+  confidence      Int      @default(50) // 0-100
+  rationale       String?  @db.Text
+
+  status          String   @default("PENDING") // PENDING, ACKED, SNOOZED, DISMISSED, EXPIRED
+
+  // Telegram notification tracking
+  lastNotifiedAt  DateTime?
+  notifyCount     Int      @default(0)
+
+  expiresAt       DateTime? // End of trading day
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  portfolio       Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+  acknowledgements SignalAck[]
+
+  @@index([portfolioId, status])
+  @@index([status, lastNotifiedAt])
+  @@index([createdAt])
+}
+
+// ============================================
+// SIGNAL ACKNOWLEDGEMENT LOG
+// ============================================
+
+model SignalAck {
+  id          Int      @id @default(autoincrement())
+  signalId    Int
+  action      String   // ACK, SNOOZE_30M, DISMISS
+  note        String?
+  createdAt   DateTime @default(now())
+
+  signal      TradeSignal @relation(fields: [signalId], references: [id], onDelete: Cascade)
+
+  @@index([signalId])
 }

@@ -15,11 +15,14 @@ import aiRoutes from './routes/ai.js';
 import taxRoutes from './routes/tax.js';
 import portfolioCalcRoutes from './routes/portfolioCalc.js';
 import upstoxRoutes from './routes/upstox.js';
+import dailyTargetRoutes from './routes/dailyTarget.js';
+import signalRoutes from './routes/signals.js';
 
 // Service imports
 import { scanMarket } from './jobs/marketScanner.js';
 import { initTelegramBot } from './services/telegramBot.js';
 import { initTelegramAlerts } from './jobs/telegramAlerts.js';
+import { initSignalNotifier } from './jobs/signalNotifier.js';
 import logger from './services/logger.js';
 import { hashPassword } from './services/authService.js';
 
@@ -99,6 +102,8 @@ app.use('/api/watchlist', authenticate, watchlistRoutes);
 app.use('/api/ai', authenticate, aiRoutes);
 app.use('/api/tax', authenticate, taxRoutes);
 app.use('/api/upstox', authenticate, upstoxRoutes);
+app.use('/api/daily-target', authenticate, dailyTargetRoutes);
+app.use('/api/signals', authenticate, signalRoutes);
 app.post('/api/deploy/webhook', handleDeployWebhook);
 app.post('/api/deploy/trigger', authenticate, triggerManualDeploy);
 
@@ -130,6 +135,7 @@ if (process.env.NODE_ENV !== 'test' && process.env.TELEGRAM_BOT_TOKEN) {
   try {
     initTelegramBot();
     initTelegramAlerts();
+    initSignalNotifier();
     logger.info('Telegram bot integrated');
   } catch (error) {
     logger.error('Telegram bot initialization error:', error);

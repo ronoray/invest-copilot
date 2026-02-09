@@ -1,5 +1,9 @@
 FROM node:20-slim
 
+# Set timezone to IST (all date logic depends on this)
+ENV TZ=Asia/Kolkata
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
 # Install OpenSSL for Prisma
 RUN apt-get update -y && apt-get install -y openssl
 

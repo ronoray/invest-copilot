@@ -45,6 +45,7 @@ async function notifyPendingSignals() {
       }
     });
 
+    let sentCount = 0;
     for (const signal of signals) {
       const telegramUser = signal.portfolio?.user?.telegramUser;
       if (!telegramUser || !telegramUser.isActive || telegramUser.isMuted) continue;
@@ -101,14 +102,17 @@ ${signal.rationale || ''}${repeatNote}`;
           }
         });
 
+        sentCount++;
         await new Promise(resolve => setTimeout(resolve, 300));
       } catch (error) {
         logger.error(`Failed to notify signal ${signal.id}:`, error.message);
       }
     }
 
-    if (signals.length > 0) {
-      logger.info(`Notified ${signals.length} pending trade signals`);
+    if (sentCount > 0) {
+      logger.info(`Sent ${sentCount}/${signals.length} trade signal notifications`);
+    } else if (signals.length > 0) {
+      logger.warn(`Found ${signals.length} pending signals but sent 0 (no linked Telegram users)`);
     }
   } catch (error) {
     logger.error('Signal notification error:', error);

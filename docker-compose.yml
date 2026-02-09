@@ -28,6 +28,9 @@ services:
     container_name: invest-api
     restart: unless-stopped
     environment:
+      # Timezone (CRITICAL: all date logic assumes IST)
+      TZ: Asia/Kolkata
+
       # Server
       NODE_ENV: production
       PORT: 3100

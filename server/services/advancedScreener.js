@@ -253,10 +253,12 @@ Return ONLY valid JSON (no markdown):
     return { high, medium, low };
 
   } catch (error) {
-    logger.error('Claude stock scan error:', error.message);
+    const errDetail = error?.error?.message || error?.message || JSON.stringify(error);
+    logger.error(`Claude stock scan error: ${errDetail}`);
+    if (error?.status) logger.error(`Claude API status: ${error.status}`);
 
-    // Fallback: return empty results rather than crashing
-    return { high: [], medium: [], low: [] };
+    // Re-throw so the caller knows the scan failed (not just "0 results")
+    throw new Error(`AI scan failed: ${errDetail}`);
   }
 }
 

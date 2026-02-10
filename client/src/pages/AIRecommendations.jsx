@@ -6,6 +6,7 @@ export default function AIRecommendations() {
   const [loading, setLoading] = useState(false);
   const [opportunities, setOpportunities] = useState({ high: [], medium: [], low: [] });
   const [summary, setSummary] = useState(null);
+  const [scanError, setScanError] = useState(null);
   const [activeFilter, setActiveFilter] = useState('all');
 
   useEffect(() => {
@@ -26,18 +27,20 @@ export default function AIRecommendations() {
 
   const handleScan = async () => {
     setLoading(true);
+    setScanError(null);
     try {
-      const data = await api.post('/ai/scan', { 
-        perCategory: 5, 
-        baseAmount: 10000 
+      const data = await api.post('/ai/scan', {
+        perCategory: 5,
+        baseAmount: 10000
       });
-      
+
       if (data.opportunities) {
         setOpportunities(data.opportunities);
         setSummary(data.summary);
       }
     } catch (error) {
       console.error('Scan failed:', error);
+      setScanError(error.message || 'Market scan failed. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -272,13 +275,22 @@ export default function AIRecommendations() {
       {filteredStocks.length === 0 && !loading && (
         <div className="bg-gradient-to-br from-slate-50 to-slate-100 rounded-xl p-12 text-center border-2 border-slate-200 shadow-lg">
           <Lightbulb className="w-16 h-16 text-slate-300 mx-auto mb-4" />
-          <p className="text-slate-700 text-lg font-semibold mb-2">No opportunities yet</p>
-          <p className="text-slate-500 text-sm mb-5">Run a deep market scan to find investment opportunities</p>
-          <button 
+          {scanError ? (
+            <>
+              <p className="text-red-600 text-lg font-semibold mb-2">Scan Failed</p>
+              <p className="text-red-500 text-sm mb-5">{scanError}</p>
+            </>
+          ) : (
+            <>
+              <p className="text-slate-700 text-lg font-semibold mb-2">No opportunities yet</p>
+              <p className="text-slate-500 text-sm mb-5">Run a deep market scan to find investment opportunities</p>
+            </>
+          )}
+          <button
             onClick={handleScan}
             className="bg-slate-700 hover:bg-slate-600 text-white font-semibold py-3 px-8 rounded-lg transition-all shadow-md"
           >
-            Start Deep Scan
+            {scanError ? 'Retry Scan' : 'Start Deep Scan'}
           </button>
         </div>
       )}

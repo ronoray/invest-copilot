@@ -1,8 +1,30 @@
 import express from 'express';
-import { placeOrder, getOrderStatus, cancelOrder, getHoldings } from '../services/upstoxService.js';
+import { placeOrder, getOrderStatus, cancelOrder, getHoldings, getAuthorizationUrl, exchangeCodeForToken } from '../services/upstoxService.js';
 import logger from '../services/logger.js';
 
 const router = express.Router();
+
+// ============================================
+// PUBLIC ROUTES (no JWT required — Upstox redirects here)
+// ============================================
+
+// These are mounted at /api/upstox/callback BEFORE the authenticate middleware
+// See index.js for routing setup
+
+/**
+ * GET /api/upstox/authorize
+ * Get the Upstox OAuth login URL (authenticated — needs JWT)
+ */
+router.get('/authorize', async (req, res) => {
+  try {
+    const userId = req.userId;
+    const authUrl = await getAuthorizationUrl(userId);
+    res.json({ authUrl });
+  } catch (error) {
+    logger.error('Upstox authorize error:', error.message);
+    res.status(500).json({ error: error.message || 'Failed to generate auth URL' });
+  }
+});
 
 /**
  * POST /api/upstox/place-order

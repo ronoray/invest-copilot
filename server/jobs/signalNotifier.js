@@ -2,8 +2,48 @@ import cron from 'node-cron';
 import prisma from '../services/prisma.js';
 import { getBot } from '../services/telegramBot.js';
 import { generateTradeSignals, expireOldSignals } from '../services/signalGenerator.js';
+import { isTokenValid, getAuthorizationUrl } from '../services/upstoxService.js';
 import { isTradingDay } from '../utils/marketHolidays.js';
 import logger from '../services/logger.js';
+
+/**
+ * Check if Upstox token is expired and send a reminder to re-authenticate.
+ * Runs once in the morning before signal generation.
+ */
+async function remindUpstoxAuth() {
+  try {
+    const bot = getBot();
+    if (!bot) return;
+
+    // Find users with Upstox integration
+    const integrations = await prisma.upstoxIntegration.findMany({
+      where: { isConnected: true },
+      include: { user: { include: { telegramUser: true } } }
+    });
+
+    for (const integration of integrations) {
+      const telegramUser = integration.user?.telegramUser;
+      if (!telegramUser || !telegramUser.isActive || telegramUser.isMuted) continue;
+
+      const valid = await isTokenValid(integration.userId);
+      if (valid) continue;
+
+      try {
+        const authUrl = await getAuthorizationUrl(integration.userId);
+        const chatId = parseInt(telegramUser.telegramId);
+        await bot.sendMessage(chatId,
+          `🔐 *Upstox Token Expired*\n\nYour daily token has expired. Please re-authenticate to enable Execute buttons on trade signals:\n\n[Login to Upstox](${authUrl})\n\nOr use /auth anytime.`,
+          { parse_mode: 'Markdown', disable_web_page_preview: true }
+        );
+        logger.info(`Sent Upstox re-auth reminder to ${telegramUser.telegramId}`);
+      } catch (err) {
+        logger.error(`Failed to send Upstox auth reminder:`, err.message);
+      }
+    }
+  } catch (error) {
+    logger.error('Upstox auth reminder error:', error);
+  }
+}
 
 /**
  * Auto-generate trade signals for all active portfolios.
@@ -146,9 +186,10 @@ Qty: ${signal.quantity} | ${priceInfo}
 Confidence: ${confidenceBar} ${signal.confidence}%
 ${signal.rationale || ''}${repeatNote}`;
 
-        // Check if user has Upstox integration for Execute button
+        // Check if this portfolio's broker is Upstox AND user has valid Upstox integration
+        const isUpstoxBroker = signal.portfolio?.broker === 'UPSTOX';
         const upstoxIntegration = signal.portfolio?.user?.upstoxIntegration;
-        const hasUpstox = upstoxIntegration?.isConnected && upstoxIntegration?.accessToken;
+        const hasUpstox = isUpstoxBroker && upstoxIntegration?.isConnected && upstoxIntegration?.accessToken;
 
         const buttons = hasUpstox
           ? [
@@ -206,6 +247,14 @@ ${signal.rationale || ''}${repeatNote}`;
  */
 export function initSignalNotifier() {
   logger.info('Initializing signal notifier...');
+
+  // Remind to re-auth Upstox at 9:15 AM if token expired
+  cron.schedule('15 9 * * 1-5', async () => {
+    if (!isTradingDay(new Date())) return;
+    await remindUpstoxAuth();
+  }, {
+    timezone: 'Asia/Kolkata'
+  });
 
   // Generate signals at 9:30 AM and 1:00 PM IST (market open + midday)
   cron.schedule('30 9 * * 1-5', async () => {

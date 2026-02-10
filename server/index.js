@@ -15,6 +15,7 @@ import aiRoutes from './routes/ai.js';
 import taxRoutes from './routes/tax.js';
 import portfolioCalcRoutes from './routes/portfolioCalc.js';
 import upstoxRoutes from './routes/upstox.js';
+import upstoxCallbackRoutes from './routes/upstoxCallback.js';
 import dailyTargetRoutes from './routes/dailyTarget.js';
 import signalRoutes from './routes/signals.js';
 
@@ -92,6 +93,7 @@ app.get('/api/health', (req, res) => {
 
 // Public routes
 app.use('/api/auth', authRoutes);
+app.use('/api/upstox', upstoxCallbackRoutes); // OAuth callback (public, no JWT)
 
 // Protected routes (require authentication)
 app.use('/api/portfolio', authenticate, portfolioRoutes);

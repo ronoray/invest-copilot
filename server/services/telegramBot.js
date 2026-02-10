@@ -4,7 +4,7 @@ import logger from './logger.js';
 import { getCurrentPrice } from './marketData.js';
 import { scanMarketForOpportunities, buildProfileBrief } from './advancedScreener.js';
 import { generateMultiAssetRecommendations } from './multiAssetRecommendations.js';
-import { placeOrder } from './upstoxService.js';
+import { placeOrder, getAuthorizationUrl, isTokenValid } from './upstoxService.js';
 
 const prisma = new PrismaClient();
 
@@ -336,6 +336,9 @@ Let's build wealth! 💰`;
 *AI Analysis:*
 /recommend [N] - AI stock picks for portfolio #N
 /multi [N] - Multi-asset allocation for portfolio #N
+
+*Trading:*
+/auth - Login to Upstox (daily refresh)
 
 *Settings:*
 /settings - Alert preferences
@@ -713,6 +716,43 @@ Use /mute to disable all alerts`;
       } catch (error) {
         logger.error('Unmute error:', error);
         await botInstance.sendMessage(msg.chat.id, '❌ Failed to unmute').catch(() => {});
+      }
+    });
+
+    // /auth — Get Upstox login link to refresh token
+    botInstance.onText(/^\/auth$/, async (msg) => {
+      try {
+        const telegramUser = await getOrCreateUser(msg.from.id, msg.from.username, msg.from.first_name);
+        const userId = telegramUser.user.id;
+
+        // Check if user has Upstox integration
+        const integration = await prisma.upstoxIntegration.findUnique({
+          where: { userId }
+        });
+
+        if (!integration || !integration.apiKey) {
+          await botInstance.sendMessage(msg.chat.id,
+            '❌ No Upstox API key configured. Set it up in the web app first.',
+            { parse_mode: 'Markdown' });
+          return;
+        }
+
+        // Check if token is still valid
+        const valid = await isTokenValid(userId);
+        if (valid) {
+          await botInstance.sendMessage(msg.chat.id,
+            '✅ Upstox token is still valid! No need to re-authenticate.',
+            { parse_mode: 'Markdown' });
+          return;
+        }
+
+        const authUrl = await getAuthorizationUrl(userId);
+        await botInstance.sendMessage(msg.chat.id,
+          `🔐 *Upstox Authentication Required*\n\nYour token has expired. Click below to login:\n\n[Login to Upstox](${authUrl})\n\nAfter login, you'll be redirected back and your token will be refreshed automatically.`,
+          { parse_mode: 'Markdown', disable_web_page_preview: true });
+      } catch (error) {
+        logger.error('Auth command error:', error);
+        await botInstance.sendMessage(msg.chat.id, '❌ Failed to generate auth link').catch(() => {});
       }
     });
 

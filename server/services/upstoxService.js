@@ -182,6 +182,83 @@ export async function cancelOrder(userId, orderId) {
 }
 
 /**
+ * Get the Upstox OAuth authorization URL for a user.
+ */
+export async function getAuthorizationUrl(userId) {
+  const integration = await prisma.upstoxIntegration.findUnique({
+    where: { userId }
+  });
+
+  if (!integration || !integration.apiKey) {
+    throw new Error('Upstox API key not configured. Set it up in the web app first.');
+  }
+
+  const redirectUri = `${process.env.BACKEND_URL}/upstox/callback`;
+  const authUrl = `https://api.upstox.com/v2/login/authorization/dialog?client_id=${integration.apiKey}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&state=${userId}`;
+
+  return authUrl;
+}
+
+/**
+ * Exchange authorization code for access token.
+ */
+export async function exchangeCodeForToken(code, userId) {
+  const integration = await prisma.upstoxIntegration.findUnique({
+    where: { userId }
+  });
+
+  if (!integration) {
+    throw new Error('Upstox integration not found for this user.');
+  }
+
+  const redirectUri = `${process.env.BACKEND_URL}/upstox/callback`;
+
+  const response = await axios.post('https://api.upstox.com/v2/login/authorization/token', {
+    code,
+    client_id: integration.apiKey,
+    client_secret: integration.apiSecret,
+    redirect_uri: redirectUri,
+    grant_type: 'authorization_code'
+  }, {
+    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }
+  });
+
+  const tokenData = response.data;
+
+  // Upstox v2 tokens expire at end of trading day (~3:30 PM IST next day to be safe)
+  const expiresAt = new Date();
+  expiresAt.setHours(23, 59, 59, 0); // End of today
+
+  await prisma.upstoxIntegration.update({
+    where: { userId },
+    data: {
+      accessToken: tokenData.access_token,
+      refreshToken: tokenData.refresh_token || null,
+      tokenExpiresAt: expiresAt,
+      isConnected: true,
+      lastSyncAt: new Date()
+    }
+  });
+
+  logger.info(`Upstox token refreshed for user ${userId}, expires: ${expiresAt.toISOString()}`);
+
+  return { success: true, expiresAt };
+}
+
+/**
+ * Check if user's Upstox token is valid (not expired).
+ */
+export async function isTokenValid(userId) {
+  const integration = await prisma.upstoxIntegration.findUnique({
+    where: { userId }
+  });
+
+  if (!integration || !integration.isConnected || !integration.accessToken) return false;
+  if (integration.tokenExpiresAt && new Date() > new Date(integration.tokenExpiresAt)) return false;
+  return true;
+}
+
+/**
  * Get live holdings from Upstox
  */
 export async function getHoldings(userId) {

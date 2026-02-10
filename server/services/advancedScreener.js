@@ -204,10 +204,18 @@ Return ONLY valid JSON (no markdown):
   try {
     const message = await anthropic.messages.create({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 4000,
+      max_tokens: 8192,
       temperature: 0.7,
       messages: [{ role: 'user', content: prompt }],
     });
+
+    if (message.stop_reason === 'max_tokens') {
+      logger.warn(`Claude scan response truncated (${message.usage?.output_tokens} tokens used). Retrying with fewer stocks...`);
+      // Retry with fewer stocks if truncated
+      if (totalStocks > 6) {
+        return scanMarketForOpportunities({ portfolio, targetCount: { high: 2, medium: 2, low: 2 }, baseAmount, fetchRealPrices });
+      }
+    }
 
     const responseText = message.content[0].text;
     const jsonMatch = responseText.match(/\{[\s\S]*\}/);

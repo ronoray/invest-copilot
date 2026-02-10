@@ -1,8 +1,80 @@
 import axios from 'axios';
+import { createGunzip } from 'zlib';
+import { pipeline } from 'stream/promises';
+import { Readable } from 'stream';
 import prisma from './prisma.js';
 import logger from './logger.js';
 
 const UPSTOX_BASE_URL = 'https://api.upstox.com/v2';
+
+// In-memory instrument cache: trading_symbol → instrument_key
+let instrumentCache = new Map();
+let instrumentCacheDate = null;
+
+/**
+ * Download and cache Upstox instrument list (NSE equities).
+ * Refreshes once per day. Maps trading symbols to instrument keys.
+ */
+async function loadInstrumentCache() {
+  const today = new Date().toDateString();
+  if (instrumentCacheDate === today && instrumentCache.size > 0) {
+    return; // Already loaded today
+  }
+
+  logger.info('Downloading Upstox NSE instruments list...');
+  try {
+    const response = await axios.get(
+      'https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz',
+      { responseType: 'arraybuffer', timeout: 30000 }
+    );
+
+    // Decompress gzip
+    const chunks = [];
+    const gunzip = createGunzip();
+    const readable = Readable.from(Buffer.from(response.data));
+    gunzip.on('data', chunk => chunks.push(chunk));
+    await pipeline(readable, gunzip);
+
+    const instruments = JSON.parse(Buffer.concat(chunks).toString());
+    const newCache = new Map();
+
+    for (const inst of instruments) {
+      // Only cache equities (segment NSE_EQ, instrument_type EQ)
+      if (inst.segment === 'NSE_EQ' && inst.instrument_type === 'EQ' && inst.trading_symbol && inst.instrument_key) {
+        newCache.set(inst.trading_symbol, inst.instrument_key);
+      }
+    }
+
+    instrumentCache = newCache;
+    instrumentCacheDate = today;
+    logger.info(`Upstox instruments cached: ${newCache.size} NSE equities`);
+  } catch (err) {
+    logger.error(`Failed to load Upstox instruments: ${err.message}`);
+    // Don't wipe existing cache on failure
+  }
+}
+
+/**
+ * Resolve a trading symbol (e.g. "INFY") to an Upstox instrument key (e.g. "NSE_EQ|INE009A01021")
+ */
+async function resolveInstrumentKey(symbol, exchange = 'NSE_EQ') {
+  if (exchange !== 'NSE_EQ') {
+    // For non-NSE, fall back to old format (may need BSE cache later)
+    return `${exchange}|${symbol}`;
+  }
+
+  await loadInstrumentCache();
+
+  const key = instrumentCache.get(symbol);
+  if (key) return key;
+
+  // Try common variations (some symbols have -EQ suffix)
+  const eqKey = instrumentCache.get(`${symbol}-EQ`);
+  if (eqKey) return eqKey;
+
+  logger.warn(`Instrument key not found for ${symbol}, falling back to ${exchange}|${symbol}`);
+  return `${exchange}|${symbol}`;
+}
 
 /**
  * Get Upstox integration for a user
@@ -63,8 +135,8 @@ export async function placeOrder(userId, orderParams) {
     portfolioId = null
   } = orderParams;
 
-  // Construct instrument key (Upstox format)
-  const instrumentKey = `${exchange}|${symbol}`;
+  // Resolve trading symbol to Upstox instrument key (ISIN-based)
+  const instrumentKey = await resolveInstrumentKey(symbol, exchange);
 
   const orderData = {
     quantity,

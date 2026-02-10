@@ -50,9 +50,11 @@ router.get('/auth/upstox/callback', async (req, res) => {
     const frontendUrl = process.env.FRONTEND_URL || 'https://invest.hungrytimes.in';
     res.redirect(`${frontendUrl}?upstox_auth=success`);
   } catch (error) {
-    logger.error('Upstox callback error:', error.message);
+    const errMsg = error.response?.data?.message || error.response?.data?.error || error.message || 'Unknown error';
+    const errDetail = error.response?.data ? JSON.stringify(error.response.data) : error.message;
+    logger.error('Upstox callback error:', errDetail);
     const frontendUrl = process.env.FRONTEND_URL || 'https://invest.hungrytimes.in';
-    res.redirect(`${frontendUrl}?upstox_auth=failed&error=${encodeURIComponent(error.message)}`);
+    res.redirect(`${frontendUrl}?upstox_auth=failed&error=${encodeURIComponent(errMsg)}`);
   }
 });
 

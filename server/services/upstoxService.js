@@ -216,15 +216,26 @@ export async function exchangeCodeForToken(code, userId) {
   const frontendUrl = process.env.FRONTEND_URL || 'https://invest.hungrytimes.in';
   const redirectUri = `${frontendUrl}/auth/upstox/callback`;
 
-  const response = await axios.post('https://api.upstox.com/v2/login/authorization/token', {
-    code,
-    client_id: integration.apiKey,
-    client_secret: integration.apiSecret,
-    redirect_uri: redirectUri,
-    grant_type: 'authorization_code'
-  }, {
-    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }
-  });
+  // Upstox requires x-www-form-urlencoded for token exchange
+  const params = new URLSearchParams();
+  params.append('code', code);
+  params.append('client_id', integration.apiKey);
+  params.append('client_secret', integration.apiSecret);
+  params.append('redirect_uri', redirectUri);
+  params.append('grant_type', 'authorization_code');
+
+  logger.info(`Exchanging Upstox code for token (user ${userId}, redirect: ${redirectUri})`);
+
+  let response;
+  try {
+    response = await axios.post('https://api.upstox.com/v2/login/authorization/token', params.toString(), {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' }
+    });
+  } catch (axiosErr) {
+    const detail = axiosErr.response?.data ? JSON.stringify(axiosErr.response.data) : axiosErr.message;
+    logger.error(`Upstox token exchange failed: ${detail}`);
+    throw new Error(axiosErr.response?.data?.message || axiosErr.response?.data?.error || 'Token exchange failed');
+  }
 
   const tokenData = response.data;
 

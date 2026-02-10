@@ -93,7 +93,7 @@ app.get('/api/health', (req, res) => {
 
 // Public routes
 app.use('/api/auth', authRoutes);
-app.use('/api/upstox', upstoxCallbackRoutes); // OAuth callback (public, no JWT)
+app.use('/', upstoxCallbackRoutes); // Upstox OAuth callback + webhooks (public, no JWT)
 
 // Protected routes (require authentication)
 app.use('/api/portfolio', authenticate, portfolioRoutes);

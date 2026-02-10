@@ -146,6 +146,11 @@ services:
       - "traefik.http.services.invest-api.loadbalancer.server.port=3100"
       # Middleware for API (optional)
       - "traefik.http.middlewares.invest-api-stripprefix.stripprefix.prefixes=/api"
+      # Upstox OAuth callback + webhooks (routed to backend, not frontend)
+      - "traefik.http.routers.invest-upstox.rule=Host(`invest.hungrytimes.in`) && (PathPrefix(`/auth/upstox`) || PathPrefix(`/webhook/upstox`))"
+      - "traefik.http.routers.invest-upstox.entrypoints=websecure"
+      - "traefik.http.routers.invest-upstox.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.invest-upstox.service=invest-api"
 
   # Frontend
   invest-web:

@@ -193,7 +193,9 @@ export async function getAuthorizationUrl(userId) {
     throw new Error('Upstox API key not configured. Set it up in the web app first.');
   }
 
-  const redirectUri = `${process.env.BACKEND_URL}/upstox/callback`;
+  // Must match the redirect URL registered in Upstox Developer Console
+  const frontendUrl = process.env.FRONTEND_URL || 'https://invest.hungrytimes.in';
+  const redirectUri = `${frontendUrl}/auth/upstox/callback`;
   const authUrl = `https://api.upstox.com/v2/login/authorization/dialog?client_id=${integration.apiKey}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&state=${userId}`;
 
   return authUrl;
@@ -211,7 +213,8 @@ export async function exchangeCodeForToken(code, userId) {
     throw new Error('Upstox integration not found for this user.');
   }
 
-  const redirectUri = `${process.env.BACKEND_URL}/upstox/callback`;
+  const frontendUrl = process.env.FRONTEND_URL || 'https://invest.hungrytimes.in';
+  const redirectUri = `${frontendUrl}/auth/upstox/callback`;
 
   const response = await axios.post('https://api.upstox.com/v2/login/authorization/token', {
     code,

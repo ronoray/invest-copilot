@@ -3,7 +3,7 @@
 // Replaces the old hardcoded mock screener with real AI analysis
 
 import Anthropic from '@anthropic-ai/sdk';
-import { getCurrentPrice } from './marketData.js';
+import { getCurrentPrice, fetchMarketContext, MARKET_DATA_ANTI_HALLUCINATION_PROMPT } from './marketData.js';
 import logger from './logger.js';
 
 const anthropic = new Anthropic({
@@ -136,7 +136,18 @@ export async function scanMarketForOpportunities(options = {}) {
 
   const existingSymbols = (portfolio?.holdings || []).map(h => h.symbol).join(', ');
 
+  // Fetch real market data for AI context
+  let marketContext = '';
+  try {
+    marketContext = await fetchMarketContext(portfolio?.holdings || []);
+  } catch (e) {
+    logger.warn('Could not fetch market context for scan:', e.message);
+  }
+
   const prompt = `You are an expert Indian stock market advisor. Analyze the current market conditions and provide specific stock recommendations tailored to this investor's profile.
+
+${marketContext}
+${MARKET_DATA_ANTI_HALLUCINATION_PROMPT}
 
 ${profileBrief}
 

@@ -4,6 +4,7 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { buildProfileBrief } from './advancedScreener.js';
+import { fetchMarketContext, MARKET_DATA_ANTI_HALLUCINATION_PROMPT } from './marketData.js';
 import logger from './logger.js';
 
 const anthropic = new Anthropic({
@@ -72,7 +73,18 @@ export async function generateMultiAssetRecommendations(options = {}) {
 
     const existingSymbols = (portfolio?.holdings || []).map(h => h.symbol).join(', ');
 
+    // Fetch real market data
+    let marketContext = '';
+    try {
+      marketContext = await fetchMarketContext(portfolio?.holdings || []);
+    } catch (e) {
+      logger.warn('Could not fetch market context for multi-asset:', e.message);
+    }
+
     const prompt = `You are an expert Indian financial advisor creating a COMPREHENSIVE multi-asset investment portfolio.
+
+${marketContext}
+${MARKET_DATA_ANTI_HALLUCINATION_PROMPT}
 
 ${profileBrief}
 

@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import prisma from './prisma.js';
 import { buildProfileBrief } from './advancedScreener.js';
+import { fetchMarketContext, MARKET_DATA_ANTI_HALLUCINATION_PROMPT } from './marketData.js';
 import logger from './logger.js';
 
 const anthropic = new Anthropic({
@@ -14,7 +15,7 @@ const anthropic = new Anthropic({
  * @param {number} portfolioId
  * @returns {Promise<Array>} Created TradeSignal records
  */
-export async function generateTradeSignals(portfolioId) {
+export async function generateTradeSignals(portfolioId, extraContext = '') {
   const portfolio = await prisma.portfolio.findUnique({
     where: { id: portfolioId },
     include: { holdings: true }
@@ -38,12 +39,24 @@ export async function generateTradeSignals(portfolioId) {
     ? `Today's earning target: ${dailyTarget.aiTarget} INR. Earned so far: ${dailyTarget.earnedActual} INR. Gap: ${dailyTarget.aiTarget - dailyTarget.earnedActual} INR.`
     : 'No daily target set yet.';
 
+  // Fetch real market data for AI context
+  let marketContext = '';
+  try {
+    marketContext = await fetchMarketContext(portfolio.holdings || []);
+  } catch (e) {
+    logger.warn('Could not fetch market context for signal generation:', e.message);
+  }
+
   const prompt = `You are an expert Indian stock market trader. Generate specific, actionable trade signals for this investor.
+
+${marketContext}
+${MARKET_DATA_ANTI_HALLUCINATION_PROMPT}
 
 ${profileBrief}
 
 Available Cash: ${cash.toLocaleString('en-IN')} INR
 ${targetContext}
+${extraContext ? '\n' + extraContext : ''}
 
 Generate trade signals (BUY and/or SELL) that:
 1. Are realistic and executable on NSE/BSE today

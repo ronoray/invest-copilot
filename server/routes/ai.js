@@ -3,6 +3,7 @@ import multer from 'multer';
 import { readFileSync, mkdirSync } from 'fs';
 import path from 'path';
 import { scanMarketForOpportunities, buildProfileBrief, buildAllPortfoliosBrief } from '../services/advancedScreener.js';
+import { fetchMarketContext, MARKET_DATA_ANTI_HALLUCINATION_PROMPT } from '../services/marketData.js';
 import prisma from '../services/prisma.js';
 import Anthropic from '@anthropic-ai/sdk';
 import logger from '../services/logger.js';
@@ -624,9 +625,21 @@ router.get('/comprehensive-analysis', async (req, res) => {
       ? buildProfileBrief(portfolios[0])
       : buildAllPortfoliosBrief(portfolios);
 
+    // Fetch real market data for comprehensive analysis
+    const allHoldings = portfolios.flatMap(p => p.holdings || []);
+    let marketContext = '';
+    try {
+      marketContext = await fetchMarketContext(allHoldings);
+    } catch (e) {
+      logger.warn('Could not fetch market context for comprehensive analysis:', e.message);
+    }
+
     const prompt = `You are an expert investment advisor providing a comprehensive 10-section analysis.
 This analysis must be DEEPLY PERSONALIZED to the investor's actual situation — their specific holdings, capital, risk profiles, and portfolio goals.
 Do NOT give generic advice. Every recommendation must reference the actual portfolios and holdings described below.
+
+${marketContext}
+${MARKET_DATA_ANTI_HALLUCINATION_PROMPT}
 
 ${context}
 

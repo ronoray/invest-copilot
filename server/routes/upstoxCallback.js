@@ -1,10 +1,8 @@
 import express from 'express';
 import { exchangeCodeForToken } from '../services/upstoxService.js';
 import { getBot } from '../services/telegramBot.js';
-import { PrismaClient } from '@prisma/client';
+import prisma from '../services/prisma.js';
 import logger from '../services/logger.js';
-
-const prisma = new PrismaClient();
 const router = express.Router();
 
 /**
@@ -183,6 +181,70 @@ router.post('/webhook/upstox/orders', async (req, res) => {
           }
         } catch (tgErr) {
           logger.warn('Could not send order update notification:', tgErr.message);
+        }
+
+        // Fix 1: Roll back linked TradeSignal on rejection/cancellation
+        if (status === 'rejected' || status === 'cancelled') {
+          try {
+            const linkedSignal = await prisma.tradeSignal.findFirst({
+              where: { upstoxOrderId: order.id }
+            });
+
+            if (linkedSignal) {
+              // Reset signal to PENDING so it can be re-sent with Execute button
+              await prisma.tradeSignal.update({
+                where: { id: linkedSignal.id },
+                data: {
+                  status: 'PENDING',
+                  upstoxOrderId: null,
+                  lastNotifiedAt: null
+                }
+              });
+
+              // Record rollback
+              await prisma.signalAck.create({
+                data: {
+                  signalId: linkedSignal.id,
+                  userId: order.integration?.userId,
+                  action: 'ROLLBACK',
+                  note: `Order ${status}: ${orderData.status_message || 'No reason provided'}`
+                }
+              });
+
+              logger.info(`ROLLBACK: Signal ${linkedSignal.id} reset to PENDING after order ${status} (${orderData.status_message || ''})`);
+
+              // Re-send signal with Execute/Snooze/Dismiss buttons
+              const telegramUser = order?.integration?.user?.telegramUser;
+              if (telegramUser) {
+                const bot = getBot();
+                if (bot) {
+                  const chatId = parseInt(telegramUser.telegramId);
+                  const reason = orderData.status_message || 'Unknown reason';
+                  const sideEmoji = linkedSignal.side === 'BUY' ? '🟢' : '🔴';
+
+                  const rollbackMsg = `⚠️ *ORDER ${status.toUpperCase()} — Signal Restored*
+━━━━━━━━━━━━━━━━━━━
+${sideEmoji} *${linkedSignal.side} ${linkedSignal.quantity}x ${linkedSignal.symbol}*
+Reason: _${reason}_
+
+Signal has been restored. You can try again:`;
+
+                  await bot.sendMessage(chatId, rollbackMsg, {
+                    parse_mode: 'Markdown',
+                    reply_markup: {
+                      inline_keyboard: [[
+                        { text: '🚀 Execute', callback_data: `sig_exec_${linkedSignal.id}` },
+                        { text: '⏰ Snooze 30m', callback_data: `sig_snooze_${linkedSignal.id}` },
+                        { text: '❌ Dismiss', callback_data: `sig_dismiss_${linkedSignal.id}` }
+                      ]]
+                    }
+                  });
+                }
+              }
+            }
+          } catch (rollbackErr) {
+            logger.error(`Signal rollback failed for order ${orderId}:`, rollbackErr.message);
+          }
         }
       }
     }

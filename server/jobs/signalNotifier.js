@@ -2,7 +2,7 @@ import cron from 'node-cron';
 import prisma from '../services/prisma.js';
 import { getBot } from '../services/telegramBot.js';
 import { generateTradeSignals, expireOldSignals } from '../services/signalGenerator.js';
-import { isTokenValid, getAuthorizationUrl } from '../services/upstoxService.js';
+import { isTokenValid, getAuthorizationUrl, getHoldings } from '../services/upstoxService.js';
 import { isTradingDay } from '../utils/marketHolidays.js';
 import logger from '../services/logger.js';
 
@@ -92,7 +92,60 @@ async function generateSignalsForAllPortfolios() {
           continue;
         }
 
-        const signals = await generateTradeSignals(portfolio.id);
+        // Fix 2: Verify previous EXECUTED signals against actual Upstox holdings
+        let extraContext = '';
+        if (portfolio.broker === 'UPSTOX') {
+          try {
+            const threeDaysAgo = new Date();
+            threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
+
+            const executedSignals = await prisma.tradeSignal.findMany({
+              where: {
+                portfolioId: portfolio.id,
+                status: 'EXECUTED',
+                side: 'BUY',
+                createdAt: { gte: threeDaysAgo }
+              }
+            });
+
+            if (executedSignals.length > 0) {
+              try {
+                const upstoxHoldings = await getHoldings(portfolio.user.id);
+                const upstoxSymbols = new Set(
+                  (upstoxHoldings || []).map(h => (h.tradingsymbol || h.trading_symbol || '').toUpperCase())
+                );
+
+                const unfilled = executedSignals.filter(s => !upstoxSymbols.has(s.symbol.toUpperCase()));
+
+                if (unfilled.length > 0) {
+                  const unfilledNames = unfilled.map(s => s.symbol).join(', ');
+                  extraContext = `\n⚠️ UNFILLED SIGNALS: Previous BUY signals for ${unfilledNames} were marked EXECUTED but are NOT in actual Upstox holdings. These trades may have failed. Do NOT generate new signals for these symbols unless you have a strong reason.`;
+
+                  logger.info(`Unfilled signals detected for portfolio ${portfolio.id}: ${unfilledNames}`);
+
+                  // Alert user via Telegram
+                  const telegramUser = portfolio.user?.telegramUser;
+                  if (telegramUser) {
+                    const bot = getBot();
+                    if (bot) {
+                      await bot.sendMessage(
+                        parseInt(telegramUser.telegramId),
+                        `⚠️ *Unfilled Signals Detected*\n\nPrevious BUY signals for *${unfilledNames}* were executed but trades did not complete in Upstox. Please check your order history.`,
+                        { parse_mode: 'Markdown' }
+                      );
+                    }
+                  }
+                }
+              } catch (holdingsErr) {
+                logger.warn(`Could not fetch Upstox holdings for verification (user ${portfolio.user.id}):`, holdingsErr.message);
+              }
+            }
+          } catch (verifyErr) {
+            logger.error(`Holdings verification failed for portfolio ${portfolio.id}:`, verifyErr.message);
+          }
+        }
+
+        const signals = await generateTradeSignals(portfolio.id, extraContext);
         totalSignals += signals.length;
         logger.info(`Generated ${signals.length} signals for portfolio ${portfolio.id} (${portfolio.ownerName || portfolio.name})`);
 

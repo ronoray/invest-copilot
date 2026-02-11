@@ -231,6 +231,79 @@ export async function searchSymbols(query) {
   }
 }
 
+// ============================================
+// Market Context for AI Prompts
+// ============================================
+
+const marketContextCache = new Map();
+const CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
+
+/**
+ * Fetch real market data to inject into AI prompts.
+ * Uses NIFTYBEES as Nifty 50 proxy + top holdings by invested value.
+ * Results are cached for 15 minutes to avoid Alpha Vantage rate limits.
+ *
+ * @param {Array} holdings - Portfolio holdings array
+ * @returns {Promise<string>} Formatted market context text
+ */
+export async function fetchMarketContext(holdings = []) {
+  // Build cache key from sorted symbols
+  const topHoldings = [...holdings]
+    .sort((a, b) => (b.quantity * parseFloat(b.avgPrice)) - (a.quantity * parseFloat(a.avgPrice)))
+    .slice(0, 3);
+  const symbols = ['NIFTYBEES', ...topHoldings.map(h => h.symbol)];
+  const cacheKey = symbols.sort().join(',');
+
+  // Check cache
+  const cached = marketContextCache.get(cacheKey);
+  if (cached && (Date.now() - cached.timestamp) < CACHE_TTL_MS) {
+    return cached.text;
+  }
+
+  const now = new Date();
+  const timeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' });
+  const lines = [`=== REAL-TIME MARKET DATA (fetched at ${timeStr} IST) ===`];
+
+  // Fetch NIFTYBEES as Nifty proxy
+  try {
+    const nifty = await getCurrentPrice('NIFTYBEES', 'NSE');
+    lines.push(`NIFTYBEES (Nifty 50 ETF proxy): Rs ${nifty.price.toFixed(2)} (${nifty.changePercent >= 0 ? '+' : ''}${nifty.changePercent.toFixed(2)}%)`);
+  } catch (e) {
+    lines.push('NIFTYBEES: Data unavailable');
+  }
+
+  // Fetch top holdings prices
+  for (const h of topHoldings) {
+    try {
+      await sleep(12000); // Alpha Vantage rate limit
+      const data = await getCurrentPrice(h.symbol, h.exchange || 'NSE');
+      lines.push(`${h.symbol}: Rs ${data.price.toFixed(2)} (${data.changePercent >= 0 ? '+' : ''}${data.changePercent.toFixed(2)}%)`);
+    } catch (e) {
+      lines.push(`${h.symbol}: Data unavailable`);
+    }
+  }
+
+  lines.push('=== END MARKET DATA ===');
+  const text = lines.join('\n');
+
+  // Cache result
+  marketContextCache.set(cacheKey, { text, timestamp: Date.now() });
+
+  return text;
+}
+
+/**
+ * Anti-hallucination instruction block for AI prompts.
+ */
+export const MARKET_DATA_ANTI_HALLUCINATION_PROMPT = `
+CRITICAL INSTRUCTIONS:
+- You have been provided REAL-TIME market data above. Use ONLY this data for price references.
+- NEVER say "I don't have access to real-time data" or similar disclaimers.
+- NEVER recommend checking Moneycontrol, NSE website, or any external source.
+- If data for a specific stock is not provided, say "price data not available for [symbol]".
+- Do NOT fabricate or estimate prices. Use ONLY the prices provided above.
+`;
+
 // Utility
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));

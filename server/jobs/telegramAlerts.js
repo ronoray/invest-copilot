@@ -1,13 +1,11 @@
 import cron from 'node-cron';
-import { PrismaClient } from '@prisma/client';
+import prisma from '../services/prisma.js';
 import Anthropic from '@anthropic-ai/sdk';
-import { getCurrentPrice } from '../services/marketData.js';
+import { getCurrentPrice, fetchMarketContext, MARKET_DATA_ANTI_HALLUCINATION_PROMPT } from '../services/marketData.js';
 import { scanMarketForOpportunities, buildProfileBrief } from '../services/advancedScreener.js';
 import { sendAlert, broadcastMessage, getBot } from '../services/telegramBot.js';
 import logger from '../services/logger.js';
 import { isTradingDay, isMarketHoliday } from '../utils/marketHolidays.js';
-
-const prisma = new PrismaClient();
 
 // Initialize Claude
 const anthropic = new Anthropic({
@@ -159,9 +157,20 @@ async function sendMorningDeepDive() {
       include: { user: true }
     });
 
+    // Fetch market data once for shared context
+    let sharedMarketData = '';
+    try {
+      sharedMarketData = await fetchMarketContext([]);
+    } catch (e) {
+      logger.warn('Could not fetch market context for morning overview:', e.message);
+    }
+
     // Shared market overview (1 API call for all users)
     const marketOverview = await getAIAnalysis(
-      `Give a brief Indian stock market overview for today:
+      `${sharedMarketData}
+${MARKET_DATA_ANTI_HALLUCINATION_PROMPT}
+
+Give a brief Indian stock market overview for today:
 1. Nifty/Sensex trend and key levels
 2. Strong/weak sectors
 3. ONE key thing investors should watch today
@@ -184,8 +193,19 @@ Under 120 words. Be specific with numbers.`, 500
             .map(h => `${h.symbol}: ${h.quantity} @ ${parseFloat(h.avgPrice).toFixed(0)} (${((h.quantity * parseFloat(h.currentPrice || h.avgPrice) - h.quantity * parseFloat(h.avgPrice)) / (h.quantity * parseFloat(h.avgPrice)) * 100).toFixed(1)}%)`)
             .join(', ');
 
+          // Fetch portfolio-specific market data
+          let portfolioMarketData = '';
+          try {
+            portfolioMarketData = await fetchMarketContext(portfolio.holdings || []);
+          } catch (e) {
+            logger.warn(`Could not fetch market context for portfolio ${portfolio.id}:`, e.message);
+          }
+
           // Per-portfolio analysis (diversification + risk, profile-aware)
-          const analysisPrompt = `${profileBrief}
+          const analysisPrompt = `${portfolioMarketData}
+${MARKET_DATA_ANTI_HALLUCINATION_PROMPT}
+
+${profileBrief}
 
 Based on this investor profile and the market today, provide:
 
@@ -271,7 +291,18 @@ async function sendEveningReview() {
           const top3 = (portfolio.holdings || []).slice(0, 3);
           const top3Text = top3.map(h => `${h.symbol} (${h.quantity} @ ${parseFloat(h.currentPrice || h.avgPrice).toFixed(0)})`).join(', ');
 
-          const analysisPrompt = `${profileBrief}
+          // Fetch portfolio-specific market data for evening
+          let eveningMarketData = '';
+          try {
+            eveningMarketData = await fetchMarketContext(portfolio.holdings || []);
+          } catch (e) {
+            logger.warn(`Could not fetch evening market context for portfolio ${portfolio.id}:`, e.message);
+          }
+
+          const analysisPrompt = `${eveningMarketData}
+${MARKET_DATA_ANTI_HALLUCINATION_PROMPT}
+
+${profileBrief}
 
 Evening review for this portfolio. Top holdings: ${top3Text}.
 
@@ -337,9 +368,20 @@ async function sendTomorrowGamePlan() {
       include: { user: true }
     });
 
+    // Fetch shared market data for game plan
+    let gameplanMarketData = '';
+    try {
+      gameplanMarketData = await fetchMarketContext([]);
+    } catch (e) {
+      logger.warn('Could not fetch market context for game plan:', e.message);
+    }
+
     // Shared global overview
     const globalOverview = await getAIAnalysis(
-      `Brief global events check for Indian market investors:
+      `${gameplanMarketData}
+${MARKET_DATA_ANTI_HALLUCINATION_PROMPT}
+
+Brief global events check for Indian market investors:
 1. Major global news affecting markets
 2. US Fed, oil prices, geopolitical impact
 3. ONE key global trend for tomorrow
@@ -359,8 +401,19 @@ Under 100 words.`, 400
           const profileBrief = buildProfileBrief(portfolio);
           const holdingSymbols = (portfolio.holdings || []).map(h => h.symbol).join(', ');
 
+          // Fetch portfolio-specific market data for game plan
+          let portfolioGameplanData = '';
+          try {
+            portfolioGameplanData = await fetchMarketContext(portfolio.holdings || []);
+          } catch (e) {
+            logger.warn(`Could not fetch game plan market context for portfolio ${portfolio.id}:`, e.message);
+          }
+
           // Per-portfolio strategy analysis
-          const strategyPrompt = `${profileBrief}
+          const strategyPrompt = `${portfolioGameplanData}
+${MARKET_DATA_ANTI_HALLUCINATION_PROMPT}
+
+${profileBrief}
 
 Tomorrow's game plan for this portfolio. Holdings: ${holdingSymbols || 'None yet'}.
 
@@ -498,6 +551,146 @@ Exit now to limit losses! ⚠️`;
 }
 
 // ============================================
+// DAILY TARGET INCOME TRACKING (Fix 3)
+// ============================================
+
+async function checkDailyTargetProgress() {
+  if (!isTradingDay(new Date())) return;
+
+  try {
+    logger.info('Checking daily target progress...');
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Find all portfolios with a DailyTarget for today
+    const targets = await prisma.dailyTarget.findMany({
+      where: { date: today },
+      include: {
+        portfolio: {
+          include: {
+            holdings: true,
+            user: {
+              include: { telegramUser: true }
+            }
+          }
+        }
+      }
+    });
+
+    if (targets.length === 0) {
+      logger.info('No daily targets set for today');
+      return;
+    }
+
+    const now = new Date();
+    const hours = now.getHours();
+    const marketCloseHour = 15; // 3 PM IST
+    const minutesLeft = (marketCloseHour * 60 + 30) - (hours * 60 + now.getMinutes());
+
+    for (const target of targets) {
+      const portfolio = target.portfolio;
+      if (!portfolio?.user?.telegramUser?.isActive || portfolio.user.telegramUser.isMuted) continue;
+
+      try {
+        // Fetch live prices for top 3 holdings by invested value
+        const sortedHoldings = [...(portfolio.holdings || [])]
+          .sort((a, b) => (b.quantity * parseFloat(b.avgPrice)) - (a.quantity * parseFloat(a.avgPrice)))
+          .slice(0, 3);
+
+        let intradayPL = 0;
+        const holdingUpdates = [];
+
+        for (const h of sortedHoldings) {
+          try {
+            const priceData = await getCurrentPrice(h.symbol, h.exchange || 'NSE');
+            if (priceData?.price) {
+              const storedPrice = parseFloat(h.currentPrice || h.avgPrice);
+              const pl = (priceData.price - storedPrice) * h.quantity;
+              intradayPL += pl;
+              holdingUpdates.push(`${h.symbol}: ${pl >= 0 ? '+' : ''}₹${pl.toFixed(0)}`);
+            }
+            await new Promise(r => setTimeout(r, 12000)); // Rate limit
+          } catch (e) {
+            logger.warn(`Price fetch failed for ${h.symbol} in target check:`, e.message);
+          }
+        }
+
+        // Update DailyTarget
+        await prisma.dailyTarget.update({
+          where: { id: target.id },
+          data: {
+            earnedActual: intradayPL,
+            earnedUpdatedAt: new Date()
+          }
+        });
+
+        const effectiveTarget = parseFloat(target.userTarget || target.aiTarget || 0);
+        const gap = effectiveTarget - intradayPL;
+
+        // Only send alert if behind target
+        if (gap <= 0) {
+          logger.info(`Portfolio ${portfolio.id}: Target met (earned ${intradayPL.toFixed(0)} vs target ${effectiveTarget})`);
+          continue;
+        }
+
+        // Find pending/unfollowed signals for this portfolio
+        const pendingSignals = await prisma.tradeSignal.findMany({
+          where: {
+            portfolioId: portfolio.id,
+            status: { in: ['PENDING', 'SNOOZED'] },
+            createdAt: { gte: today }
+          }
+        });
+
+        const signalsList = pendingSignals.length > 0
+          ? pendingSignals.map(s => `• ${s.side} ${s.quantity}x ${s.symbol} (${s.confidence}% confidence)`).join('\n')
+          : 'No pending signals';
+
+        // Time urgency message
+        let urgency = '';
+        if (minutesLeft <= 90) {
+          urgency = '🔥 *Market closes in less than 90 minutes!*';
+        } else if (minutesLeft <= 180) {
+          urgency = '⏰ *Less than 3 hours to market close*';
+        }
+
+        const chatId = parseInt(portfolio.user.telegramUser.telegramId);
+        const { totalValue } = getPortfolioValueSummary(portfolio);
+
+        const alertMsg = `💰 *DAILY TARGET CHECK*
+━━━━━━━━━━━━━━━━━━━
+📁 *${portfolioLabel(portfolio)}*
+
+🎯 Target: ₹${effectiveTarget.toFixed(0)}
+📊 Earned: ${intradayPL >= 0 ? '+' : ''}₹${intradayPL.toFixed(0)}
+🔻 Gap: ₹${gap.toFixed(0)}
+${urgency ? '\n' + urgency : ''}
+
+*Top Holdings P&L:*
+${holdingUpdates.join('\n') || 'No data'}
+
+*Pending Signals:*
+${signalsList}
+
+${pendingSignals.length > 0 ? '👆 Act on pending signals to close the gap!' : '⚡ Consider running /scan for new opportunities'}`;
+
+        await sendTelegramMessage(chatId, alertMsg, { parse_mode: 'Markdown' });
+        logger.info(`Daily target alert sent for portfolio ${portfolio.id}: gap ₹${gap.toFixed(0)}`);
+
+        await new Promise(r => setTimeout(r, 500));
+      } catch (err) {
+        logger.error(`Daily target check failed for portfolio ${portfolio.id}:`, err.message);
+      }
+    }
+
+    logger.info(`Daily target progress check complete (${targets.length} targets)`);
+  } catch (error) {
+    logger.error('Daily target progress error:', error);
+  }
+}
+
+// ============================================
 // HELPER: Format INR
 // ============================================
 
@@ -540,9 +733,17 @@ export function initTelegramAlerts() {
     timezone: 'Asia/Kolkata'
   });
 
+  // Daily Target Income Check — hourly during market hours (10 AM - 3 PM IST)
+  cron.schedule('0 10,11,12,13,14,15 * * 1-5', async () => {
+    await checkDailyTargetProgress();
+  }, {
+    timezone: 'Asia/Kolkata'
+  });
+
   logger.info('Telegram AI Alert System initialized');
   logger.info('Schedule:');
   logger.info('  9:00 AM - Morning Deep Dive (per-portfolio market + diversification + risk)');
+  logger.info('  10-3 PM - Daily Target Income Check (hourly)');
   logger.info('  6:00 PM - Evening Review (per-portfolio technical + value + sentiment)');
   logger.info('  9:00 PM - Game Plan (per-portfolio strategy + personalized watchlist)');
   logger.info('  Skips NSE market holidays automatically');
@@ -550,6 +751,7 @@ export function initTelegramAlerts() {
 
 export default {
   checkPriceAlerts,
+  checkDailyTargetProgress,
   sendMorningDeepDive,
   sendEveningReview,
   sendTomorrowGamePlan,

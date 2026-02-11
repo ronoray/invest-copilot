@@ -173,13 +173,13 @@ async function sendMorningDeepDive() {
 ${sharedMarketData}
 ${MARKET_DATA_INSTRUCTION}
 
-MORNING MARKET BRIEF — deliver this like a senior analyst's morning note to a trading desk:
+MORNING BATTLE PLAN — this portfolio is MY responsibility. I need to set up today for maximum profit.
 
-1. MARKET STRUCTURE: Where is Nifty positioned? Key levels where institutional money sits (support/resistance). Is the trend intact or breaking?
-2. SECTOR ROTATION: Which sectors are smart money rotating INTO and OUT OF today? Name specific sectors with conviction
-3. THE ONE THING: What's the single most important thing that will move markets today? (earnings, policy, global event, technical level)
+1. MARKET STRUCTURE: Where is Nifty RIGHT NOW? Key levels where I expect institutional support/resistance. Is the trend my friend today or do I need to be defensive?
+2. SECTOR ROTATION: Where is smart money flowing? I need to position my portfolios AHEAD of the move, not after it. Name specific sectors
+3. TODAY'S PRIORITY: The single most important action I need my investor to take before 10 AM. Be specific — stock, price, size
 
-Be direct and specific. Use actual price levels. No disclaimers. Under 150 words.`, 600
+This is not a newspaper report. This is MY game plan for making money today. Under 150 words.`, 600
     );
 
     for (const telegramUser of users) {
@@ -223,16 +223,17 @@ ${scorecard}
 
 ${profileBrief}
 
-MORNING PORTFOLIO BRIEF — I need your honest assessment as my chief analyst:
+THIS PORTFOLIO IS MY RESPONSIBILITY. Here's my morning assessment:
 
-1. PORTFOLIO HEALTH CHECK: Grade this portfolio A-F. Where is it over-concentrated? What sector/stock is the biggest risk RIGHT NOW? Don't sugarcoat it
-2. TODAY'S PLAYS: Given current market structure, which of these holdings have the best setup for today? Any that should be exited before they get worse?
-3. NEW OPPORTUNITIES: Name 2-3 specific stocks (with entry prices) that this portfolio NEEDS but doesn't have. Scan across ALL sectors — large, mid, small caps. Explain the thesis for each in one sentence
-4. RISK ORDERS: Exact stop-loss levels for every holding. If I should trail a stop, say how much
+1. PORTFOLIO GRADE (A-F): Be brutally honest. If it's a C, say it's a C and say exactly what drags it down. Concentration risk? Weak holdings? Missing sectors?
+2. IMMEDIATE ACTIONS: What do I need the investor to execute BEFORE 10 AM? List specific orders: BUY/SELL, symbol, quantity, price. These are not suggestions — these are instructions from the portfolio manager
+3. UNDERWATER POSITIONS: Any holding that's losing money — what's my recovery plan? Hold and average down? Cut and rotate? Specific price levels and replacement stocks
+4. NEW OPPORTUNITIES I'M TRACKING: 2-3 stocks from my full market scan that this portfolio NEEDS. Entry price, target, stop-loss, position size in ₹. Don't just name blue chips — find the best risk-reward across ALL market caps
+5. RISK ORDERS: Stop-loss for EVERY holding. If I'm wrong about any position, I need to know exactly where I admit defeat
 
-${scorecard ? 'ACCOUNTABILITY: Review your previous calls above. If any went wrong, address it directly — what happened and what\'s the recovery move?' : ''}
+${scorecard ? 'MY TRACK RECORD: I own every call above. For losses: here\'s what I got wrong and here\'s EXACTLY how I\'m recovering the money. For wins: should we add more or book profit?' : ''}
 
-Be direct, opinionated, and specific with ₹ amounts. Under 300 words.`;
+I cannot allow this portfolio to fail. Every word must serve that goal. Under 350 words.`;
 
           const analysis = await getAIAnalysis(analysisPrompt, 800);
           await saveAnalysis(telegramUser.user.id, 'MORNING_ANALYSIS', analysis, { time: 'morning', portfolioId: portfolio.id });
@@ -243,20 +244,20 @@ Be direct, opinionated, and specific with ₹ amounts. Under 300 words.`;
           sections.push(`${header}${snapshot}\n\n${analysis}`);
         }
 
-        const morningMsg = `☀️ *MORNING DEEP DIVE*
+        const morningMsg = `☀️ *MORNING BATTLE PLAN*
 ━━━━━━━━━━━━━━━━━━━
 
-*🎯 MARKET OVERVIEW*
+*🎯 MY MARKET READ*
 
 ${marketOverview}
 
 ━━━━━━━━━━━━━━━━━━━
-*📊 PORTFOLIO ANALYSIS*
+*📊 PORTFOLIO ORDERS*
 
 ${sections.join('\n\n━━━━━━━━━━━━━━━━━━━\n\n')}
 
 ━━━━━━━━━━━━━━━━━━━
-Have a profitable day! 💰`;
+I've set today's plan. Execute the actions above. I'm tracking everything.`;
 
         await sendTelegramMessage(chatId, morningMsg, { parse_mode: 'Markdown' });
         await new Promise(resolve => setTimeout(resolve, 500));
@@ -336,16 +337,19 @@ ${eveningScorecard}
 
 ${profileBrief}
 
-EVENING PORTFOLIO REVIEW — grade today's action and set up tomorrow:
+EVENING P&L REPORT — I own today's results. Here's my honest assessment:
 
-1. REPORT CARD: Grade each holding's price action today (A-F). Which showed strength? Which showed weakness? Any thesis broken today?
-2. CONVICTION UPDATE: For each holding — has anything changed structurally? Update your BUY/HOLD/EXIT stance with specific reasoning. If I should add more to a winner, say exactly how much
-3. VALUATION REALITY CHECK: For the top holdings, what's the fair value based on fundamentals (PE, PEG, EV/EBITDA relative to sector)? Are any dangerously overvalued?
-4. TOMORROW'S SETUP: Based on today's close, what's the likely opening? Any overnight risks? Position sizing adjustments needed?
+1. TODAY'S DAMAGE/GAIN REPORT: Calculate today's estimated P&L. If we lost money, I take responsibility. Specifically: which of MY recommended holdings or signals contributed to the loss? Which made money? Net P&L estimate in ₹
+2. HOLDING-BY-HOLDING VERDICT: For EVERY position — grade A-F, and my updated call:
+   - HOLD: thesis intact, I'm confident, here's why
+   - ADD MORE: it's working, increase position by ₹X at ₹Y
+   - EXIT TOMORROW: thesis is broken, I got this wrong. Exit at open, here's what replaces it
+3. LOSS RECOVERY (if applicable): If we're down today, here's my SPECIFIC plan to recover the ₹ amount by [day]. Stock X at price Y, expected move Z. I don't accept losses without a recovery trade
+4. TOMORROW'S SETUP: Based on today's close and global cues, what am I expecting? Am I positioned correctly or do I need to adjust overnight exposure?
 
-${eveningScorecard ? 'ACCOUNTABILITY: Review your signal history above. Own the wins AND the losses. For losses, propose specific recovery actions.' : ''}
+${eveningScorecard ? 'MY SCORECARD: I track every call I make. Wins get compounded, losses get recovered. Here\'s my updated track record and what I\'m changing in my approach if I\'m losing.' : ''}
 
-Be specific with price targets. No generic observations. Under 350 words.`;
+This is MY portfolio to protect and grow. If we had a bad day, the evening review is where I course-correct — not where I make excuses. Under 400 words.`;
 
           const analysis = await getAIAnalysis(analysisPrompt, 1000);
           await saveAnalysis(telegramUser.user.id, 'EVENING_REVIEW', analysis, { time: 'evening', portfolioId: portfolio.id });
@@ -356,13 +360,13 @@ Be specific with price targets. No generic observations. Under 350 words.`;
           sections.push(`${header}${snapshot}\n\n${analysis}`);
         }
 
-        const eveningMsg = `🌙 *EVENING PORTFOLIO REVIEW*
+        const eveningMsg = `🌙 *EVENING P&L REPORT*
 ━━━━━━━━━━━━━━━━━━━
 
 ${sections.join('\n\n━━━━━━━━━━━━━━━━━━━\n\n')}
 
 ━━━━━━━━━━━━━━━━━━━
-Rest well! 😴`;
+I've reviewed everything. Losses will be recovered. Wins will be compounded. Tomorrow's plan is being prepared.`;
 
         await sendTelegramMessage(chatId, eveningMsg, { parse_mode: 'Markdown' });
         await new Promise(resolve => setTimeout(resolve, 500));
@@ -417,13 +421,13 @@ async function sendTomorrowGamePlan() {
 ${gameplanMarketData}
 ${MARKET_DATA_INSTRUCTION}
 
-GLOBAL MACRO BRIEF — as a macro strategist, connect the dots for Indian market positioning:
+GLOBAL MACRO — I need to position my portfolios correctly for tomorrow. Connect the dots:
 
-1. GLOBAL FLOWS: Where is institutional money moving globally? US yields, DXY, emerging market flows — what does it mean for Indian equities tomorrow?
-2. COMMODITY CHAIN: Crude, gold, copper — how do current levels impact Indian sectors? (OMCs, metals, IT, pharma)
-3. THE MACRO TRADE: One specific macro thesis for tomorrow. Example: "Weak DXY + falling crude = NBFC rally, position in BAJFINANCE"
+1. MONEY FLOWS: Where is global institutional money moving tonight? US yields, DXY, EM flows — and EXACTLY what it means for my Indian equity positions tomorrow morning
+2. COMMODITY IMPACT: Crude, gold, copper at current levels — which of my portfolio sectors benefit or suffer? Specific stocks affected
+3. MY MACRO TRADE FOR TOMORROW: One specific, actionable thesis with a stock pick. Not "markets may be volatile" — "Weak DXY + falling crude = NBFC tailwind, I'm adding BAJFINANCE at ₹7,200 tomorrow"
 
-No generic "markets are uncertain" — take a position. Under 120 words.`, 500
+I don't report the news — I position ahead of it. Under 120 words.`, 500
     );
 
     for (const telegramUser of users) {
@@ -464,20 +468,18 @@ ${gameplanScorecard}
 
 ${profileBrief}
 
-TOMORROW'S GAME PLAN — prepare this portfolio for battle:
+TOMORROW'S BATTLE PLAN — I will not let this portfolio underperform.
 
-1. OVERNIGHT EXPOSURE: Given today's close and global cues, should we be fully invested, partially hedged, or raising cash? Specific % recommendation
-2. EARNINGS & EVENTS: Any holdings with upcoming earnings, results, or corporate actions? Pre-position strategy for each
-3. SECTOR ROTATION: Which sectors are gaining momentum? Should this portfolio rotate out of any current sector into a stronger one? Name specific stocks to swap
-4. THE TOP 3 ACTIONS FOR TOMORROW (in priority order):
-   - Action 1: [BUY/SELL/HOLD/ADD] [STOCK] at [PRICE] because [thesis]
-   - Action 2: ...
-   - Action 3: ...
-5. MULTI-ASSET CHECK: Should any capital move to gold, MFs, or fixed income right now? Specific instruments and amounts
+1. TOMORROW'S ₹ TARGET: Set a specific rupee target for tomorrow based on current positions and planned trades. Example: "Target ₹3,500 from: ₹1,200 INFY swing + ₹1,300 BAJFINANCE momentum + ₹1,000 new NTPC entry"
+2. PRE-MARKET ORDERS: Exactly what I need the investor to execute at open. Symbol, quantity, price, order type. These are not "considerations" — these are my instructions as portfolio manager
+3. OVERNIGHT RISK: What global events could gap us down? How am I hedged? If I'm NOT hedged, say why I'm comfortable with the exposure
+4. SECTOR ROTATION TRADES: If momentum is shifting, I need to rotate AHEAD of the crowd. Specific exit + entry: "Sell X at ₹Y, buy Z at ₹W. Reason: sector momentum shifting from A to B"
+5. MULTI-ASSET DEPLOYMENT: Should any cash move to gold (which SGB/ETF?), MFs (which scheme?), or fixed income (which instrument?) right now? Specific ₹ amounts
+6. WEEKLY PROGRESS CHECK: Are we on track for our weekly/monthly target? If behind, what's the specific acceleration plan?
 
-${gameplanScorecard ? 'TRACK RECORD: Review your calls above. Adjust tomorrow\'s strategy based on what worked and what didn\'t.' : ''}
+${gameplanScorecard ? 'MY TRACK RECORD: I own every call. If my win rate is below 60%, I\'m tightening my criteria tomorrow. If I\'m in the red, every recommendation must include a recovery component.' : ''}
 
-Be specific, bold, and actionable. Under 250 words.`;
+This is not a suggestion list — it's a business plan for tomorrow's profits. I am accountable for these numbers. Under 300 words.`;
 
           const strategyAnalysis = await getAIAnalysis(strategyPrompt, 700);
           await saveAnalysis(telegramUser.user.id, 'GAME_PLAN', strategyAnalysis, { time: 'night', portfolioId: portfolio.id });
@@ -502,20 +504,20 @@ Be specific, bold, and actionable. Under 250 words.`;
           sections.push(`${header}${strategyAnalysis}${watchlistText}`);
         }
 
-        const gameplanMsg = `🎯 *TOMORROW'S GAME PLAN*
+        const gameplanMsg = `🎯 *TOMORROW'S BATTLE PLAN*
 ━━━━━━━━━━━━━━━━━━━
 
-*🌍 GLOBAL OVERVIEW*
+*🌍 MY MACRO POSITIONING*
 
 ${globalOverview}
 
 ━━━━━━━━━━━━━━━━━━━
-*📊 PORTFOLIO STRATEGIES*
+*📊 PORTFOLIO BATTLE ORDERS*
 
 ${sections.join('\n\n━━━━━━━━━━━━━━━━━━━\n\n')}
 
 ━━━━━━━━━━━━━━━━━━━
-Sweet dreams! Tomorrow's another opportunity 🚀`;
+Tomorrow's plan is set. I'll be tracking from market open. Execute the actions above — I'm accountable for these calls.`;
 
         await sendTelegramMessage(chatId, gameplanMsg, { parse_mode: 'Markdown' });
         await new Promise(resolve => setTimeout(resolve, 500));
@@ -684,9 +686,22 @@ async function checkDailyTargetProgress() {
         const effectiveTarget = parseFloat(target.userTarget || target.aiTarget || 0);
         const gap = effectiveTarget - intradayPL;
 
-        // Only send alert if behind target
+        // Target met — celebrate and push for more
         if (gap <= 0) {
           logger.info(`Portfolio ${portfolio.id}: Target met (earned ${intradayPL.toFixed(0)} vs target ${effectiveTarget})`);
+          const chatId = parseInt(portfolio.user.telegramUser.telegramId);
+          const surplus = Math.abs(gap);
+          const targetMetMsg = `✅ *TARGET HIT — WE DID IT*
+━━━━━━━━━━━━━━━━━━━
+📁 *${portfolioLabel(portfolio)}*
+
+🎯 Target: ₹${effectiveTarget.toFixed(0)}
+📊 Earned: +₹${intradayPL.toFixed(0)}${surplus > 0 ? ` (₹${surplus.toFixed(0)} ABOVE target)` : ''}
+
+${holdingUpdates.join('\n')}
+
+My analysis delivered today. ${surplus > 100 ? `The surplus of ₹${surplus.toFixed(0)} builds our buffer for tougher days.` : 'Let\'s keep this momentum going.'} I\'m already planning tomorrow's targets.`;
+          await sendTelegramMessage(chatId, targetMetMsg, { parse_mode: 'Markdown' });
           continue;
         }
 
@@ -714,22 +729,23 @@ async function checkDailyTargetProgress() {
         const chatId = parseInt(portfolio.user.telegramUser.telegramId);
         const { totalValue } = getPortfolioValueSummary(portfolio);
 
-        const alertMsg = `💰 *DAILY TARGET CHECK*
+        const pctAchieved = effectiveTarget > 0 ? ((intradayPL / effectiveTarget) * 100).toFixed(0) : 0;
+
+        const alertMsg = `🚨 *I'M TRACKING YOUR TARGET*
 ━━━━━━━━━━━━━━━━━━━
 📁 *${portfolioLabel(portfolio)}*
 
-🎯 Target: ₹${effectiveTarget.toFixed(0)}
-📊 Earned: ${intradayPL >= 0 ? '+' : ''}₹${intradayPL.toFixed(0)}
-🔻 Gap: ₹${gap.toFixed(0)}
+🎯 Today's Target: ₹${effectiveTarget.toFixed(0)}
+📊 Current P&L: ${intradayPL >= 0 ? '+' : ''}₹${intradayPL.toFixed(0)} (${pctAchieved}% achieved)
+🔻 *Gap: ₹${gap.toFixed(0)} — I need to close this*
 ${urgency ? '\n' + urgency : ''}
 
-*Top Holdings P&L:*
-${holdingUpdates.join('\n') || 'No data'}
+*Position P&L:*
+${holdingUpdates.join('\n') || 'No data available'}
 
-*Pending Signals:*
-${signalsList}
+${pendingSignals.length > 0 ? `*MY PENDING SIGNALS (EXECUTE THESE):*\n${signalsList}\n\nI generated these signals for a reason. Each one is designed to help close the ₹${gap.toFixed(0)} gap. Execute them NOW.` : `*No pending signals.* I need to generate new opportunities. Use /scan and I will find the trades to close this gap.`}
 
-${pendingSignals.length > 0 ? '👆 Act on pending signals to close the gap!' : '⚡ Consider running /scan for new opportunities'}`;
+${minutesLeft <= 90 ? 'We are running out of time. Every minute counts. Act on the signals above or tell me to scan for alternatives.' : `We have ${Math.floor(minutesLeft / 60)}h ${minutesLeft % 60}m until close. That is enough time to recover — but only if you act.`}`;
 
         await sendTelegramMessage(chatId, alertMsg, { parse_mode: 'Markdown' });
         logger.info(`Daily target alert sent for portfolio ${portfolio.id}: gap ₹${gap.toFixed(0)}`);

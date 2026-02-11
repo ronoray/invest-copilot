@@ -369,27 +369,53 @@ router.get('/portfolio-plan', async (req, res) => {
         
         const profileContext = portfolioData ? buildProfileBrief(portfolioData) : `Portfolio: ${summary.portfolioName || 'All Portfolios'}`;
 
-        const prompt = `You are a friendly but expert investment advisor. Analyze this portfolio plan DEEPLY.
+        // Fetch real market data and accountability scorecard
+        let marketContext = '';
+        try {
+          const holdings = portfolioData?.holdings || [];
+          marketContext = await fetchMarketContext(holdings);
+        } catch (e) {
+          logger.warn('Could not fetch market context for plan:', e.message);
+        }
+
+        let scorecard = '';
+        try {
+          if (portfolioData?.id) {
+            scorecard = await buildAccountabilityScorecard(portfolioData.id);
+          }
+        } catch (e) {
+          logger.warn('Could not build scorecard for plan:', e.message);
+        }
+
+        const prompt = `${ANALYST_IDENTITY}
+
+${marketContext}
+${MARKET_DATA_INSTRUCTION}
+
+${scorecard}
 
 ${profileContext}
 
-**PROPOSED INVESTMENT PLAN:**
+**PROPOSED INVESTMENT PLAN — YOUR CALL, YOUR RESPONSIBILITY:**
 - Deploy: ₹${totalInvestment.toLocaleString('en-IN')} into ${allStocks.length} stocks
 - Stocks: ${allStocks.map(s => `${s.symbol} (₹${s.suggestedAmount?.toLocaleString('en-IN') || '?'}, ${s.riskCategory} risk)`).join(', ')}
 - Allocation: High Risk ₹${opportunities.high.reduce((s, st) => s + (st.suggestedAmount || 0), 0).toLocaleString('en-IN')}, Medium Risk ₹${opportunities.medium.reduce((s, st) => s + (st.suggestedAmount || 0), 0).toLocaleString('en-IN')}, Low Risk ₹${opportunities.low.reduce((s, st) => s + (st.suggestedAmount || 0), 0).toLocaleString('en-IN')}
 
-Consider: Does this plan match the investor's risk profile (${portfolioData?.riskProfile || 'BALANCED'})?
-Is the allocation appropriate? Are there any red flags? What should they watch out for?
+This is YOUR plan for YOUR client's money. You own every rupee of this allocation.
+- Does this plan match the investor's risk profile (${portfolioData?.riskProfile || 'BALANCED'})? If not, say so bluntly.
+- Which picks have the weakest conviction? Would you stake your reputation on each one?
+- Reference your previous signal track record (above) — if you've had recent failures, acknowledge them and explain how this plan avoids repeating those mistakes.
+- Be specific: "HDFCBANK is a HOLD at ₹1,650 because..." not "consider diversifying."
 
 Return ONLY JSON (no markdown):
 {
   "overallRating": "EXCELLENT|GOOD|MODERATE|RISKY",
   "confidence": 75,
-  "keyInsights": ["insight specific to this investor", "insight 2", "insight 3"],
-  "warnings": ["warning specific to their situation", "warning 2"],
-  "actionItems": ["action 1 with specific stock/amount", "action 2"],
-  "personalizedAdvice": "2-3 sentences referencing their specific portfolio, broker, and risk profile",
-  "riskAssessment": "1-2 sentences on whether this plan matches their stated risk tolerance"
+  "keyInsights": ["insight specific to this investor with ₹ amounts", "insight 2", "insight 3"],
+  "warnings": ["warning referencing specific stocks or positions", "warning 2"],
+  "actionItems": ["specific action: BUY/SELL SYMBOL at ₹X, qty Y", "action 2"],
+  "personalizedAdvice": "2-3 sentences referencing their specific portfolio, capital, broker, and risk profile — own your recommendation",
+  "riskAssessment": "1-2 sentences on whether this plan matches their stated risk tolerance, with specific adjustments if it doesn't"
 }`;
 
         const message = await anthropic.messages.create({

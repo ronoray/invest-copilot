@@ -4,7 +4,7 @@ import logger from './logger.js';
 import { getCurrentPrice } from './marketData.js';
 import { scanMarketForOpportunities, buildProfileBrief } from './advancedScreener.js';
 import { generateMultiAssetRecommendations } from './multiAssetRecommendations.js';
-import { placeOrder, getAuthorizationUrl, isTokenValid } from './upstoxService.js';
+import { placeOrder, getOrderStatus, getAuthorizationUrl, isTokenValid } from './upstoxService.js';
 
 const prisma = new PrismaClient();
 
@@ -128,6 +128,92 @@ function portfolioLabel(p) {
 }
 
 // ============================================
+// ORDER POLLING AFTER PLACEMENT
+// ============================================
+
+const TERMINAL_STATUSES = ['complete', 'traded', 'rejected', 'cancelled'];
+const SETTLED_SUCCESS = ['complete', 'traded'];
+const SETTLED_FAILURE = ['rejected', 'cancelled'];
+
+async function pollOrderUntilSettled(botInstance, chatId, userId, signalId, signal, orderId, dbOrderId) {
+  const maxAttempts = 5;
+  const intervalMs = 3000;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, intervalMs));
+
+    try {
+      const status = await getOrderStatus(userId, orderId);
+      const orderStatus = (status.status || '').toLowerCase();
+
+      logger.info(`Poll attempt ${attempt}/${maxAttempts} for order ${orderId}: ${orderStatus}`);
+
+      if (SETTLED_SUCCESS.includes(orderStatus)) {
+        // Order confirmed — mark signal EXECUTED
+        await prisma.tradeSignal.update({
+          where: { id: signalId },
+          data: { status: 'EXECUTED' }
+        });
+
+        const avgPrice = status.averagePrice ? ` @ ${formatPrice(status.averagePrice)}` : '';
+        const successMsg = `✅ *ORDER CONFIRMED*\n\n${signal.side} ${signal.quantity}x *${signal.symbol}*${avgPrice}\nOrder ID: \`${orderId}\`\n\n_Exchange confirmed. Position is live._`;
+
+        try {
+          await botInstance.editMessageReplyMarkup(
+            { inline_keyboard: [[{ text: `✅ Confirmed — ${orderId}`, callback_data: 'noop' }]] },
+            { chat_id: chatId, message_id: signal._messageId }
+          );
+        } catch (e) { /* message may be old */ }
+
+        await botInstance.sendMessage(chatId, successMsg, { parse_mode: 'Markdown' });
+        logger.info(`Signal #${signalId} confirmed: order ${orderId} = ${orderStatus}`);
+        return;
+      }
+
+      if (SETTLED_FAILURE.includes(orderStatus)) {
+        // Order rejected — roll back signal
+        await prisma.tradeSignal.update({
+          where: { id: signalId },
+          data: { status: 'PENDING', upstoxOrderId: null, lastNotifiedAt: null }
+        });
+
+        const reason = status.message || 'Unknown reason';
+        const failureMsg = `🔴 *ORDER FAILED — THIS IS MY FAILURE*\n\n${signal.side} ${signal.symbol} @ ${formatPrice(signal.triggerPrice || signal.triggerLow || 0)} was *${orderStatus.toUpperCase()}*\nReason: _${reason}_\n\nI recommended a price the exchange rejected. I own this mistake.\nSignal reset — choose how to proceed:`;
+
+        try {
+          await botInstance.editMessageReplyMarkup(
+            { inline_keyboard: [[{ text: `🔴 ${orderStatus.toUpperCase()} — reset`, callback_data: 'noop' }]] },
+            { chat_id: chatId, message_id: signal._messageId }
+          );
+        } catch (e) { /* message may be old */ }
+
+        await botInstance.sendMessage(chatId, failureMsg, {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [[
+              { text: '🔄 Retry as MARKET', callback_data: `sig_mkt_${signalId}` },
+              { text: '⏰ Snooze 1hr', callback_data: `sig_snooze_${signalId}` },
+              { text: '🚫 Dismiss', callback_data: `sig_dismiss_${signalId}` }
+            ]]
+          }
+        });
+        logger.warn(`Signal #${signalId} rolled back: order ${orderId} = ${orderStatus} — ${reason}`);
+        return;
+      }
+    } catch (pollErr) {
+      logger.warn(`Poll attempt ${attempt} failed for order ${orderId}: ${pollErr.message}`);
+    }
+  }
+
+  // Timeout — still pending after all attempts
+  await botInstance.sendMessage(chatId,
+    `⏳ *Order Pending*\n\n${signal.side} ${signal.quantity}x *${signal.symbol}*\nOrder ID: \`${orderId}\`\n\n_Exchange hasn't confirmed yet. I'll keep monitoring and alert you when it settles._`,
+    { parse_mode: 'Markdown' }
+  );
+  logger.info(`Signal #${signalId} order ${orderId} still pending after ${maxAttempts} polls — cron will follow up`);
+}
+
+// ============================================
 // EXECUTE SIGNAL VIA UPSTOX
 // ============================================
 
@@ -155,8 +241,8 @@ async function handleExecuteSignal(botInstance, query, signalId) {
       return;
     }
 
-    if (signal.status === 'EXECUTED') {
-      await botInstance.answerCallbackQuery(query.id, { text: 'Already executed' });
+    if (signal.status === 'EXECUTED' || signal.status === 'PLACING') {
+      await botInstance.answerCallbackQuery(query.id, { text: signal.status === 'PLACING' ? 'Order is being verified...' : 'Already executed' });
       return;
     }
 
@@ -238,11 +324,11 @@ async function handleExecuteSignal(botInstance, query, signalId) {
 
     const result = await placeOrder(userId, orderParams);
 
-    // Update signal status and link to order
+    // Mark as PLACING (not EXECUTED yet — wait for exchange confirmation)
     await prisma.tradeSignal.update({
       where: { id: signalId },
       data: {
-        status: 'EXECUTED',
+        status: 'PLACING',
         upstoxOrderId: result.dbOrderId
       }
     });
@@ -256,21 +342,27 @@ async function handleExecuteSignal(botInstance, query, signalId) {
       }
     });
 
-    // Update message with success
-    const successText = `🚀 *Order Placed!*\n${signal.side} ${signal.quantity}x ${signal.symbol}\nOrder ID: \`${result.orderId}\``;
+    // Update message to show order is being verified
     try {
       await botInstance.editMessageReplyMarkup(
-        { inline_keyboard: [[{ text: `🚀 Executed — ${result.orderId}`, callback_data: 'noop' }]] },
+        { inline_keyboard: [[{ text: `⏳ Verifying order ${result.orderId}...`, callback_data: 'noop' }]] },
         { chat_id: chatId, message_id: messageId }
       );
     } catch (editErr) {
       logger.warn('Could not edit signal message after execute:', editErr.message);
     }
 
-    // Send confirmation as separate message
-    await botInstance.sendMessage(chatId, successText, { parse_mode: 'Markdown' });
+    await botInstance.sendMessage(chatId,
+      `📡 *Order Sent*\n${signal.side} ${signal.quantity}x ${signal.symbol}\nOrder ID: \`${result.orderId}\`\n_Verifying with exchange..._`,
+      { parse_mode: 'Markdown' }
+    );
 
-    logger.info(`Signal #${signalId} executed: Upstox order ${result.orderId}`);
+    logger.info(`Signal #${signalId} order placed: ${result.orderId} — starting polling`);
+
+    // Poll for settlement (async, non-blocking for the callback response)
+    signal._messageId = messageId;
+    pollOrderUntilSettled(botInstance, chatId, userId, signalId, signal, result.orderId, result.dbOrderId)
+      .catch(err => logger.error(`Polling failed for signal #${signalId}:`, err));
   } catch (error) {
     logger.error(`Failed to execute signal #${signalId}:`, error);
 
@@ -345,9 +437,10 @@ async function handleExecuteMarketFallback(botInstance, query, signalId) {
 
     const result = await placeOrder(userId, orderParams);
 
+    // Mark as PLACING (not EXECUTED yet)
     await prisma.tradeSignal.update({
       where: { id: signalId },
-      data: { status: 'EXECUTED', upstoxOrderId: result.dbOrderId }
+      data: { status: 'PLACING', upstoxOrderId: result.dbOrderId }
     });
 
     await prisma.signalAck.create({
@@ -360,7 +453,7 @@ async function handleExecuteMarketFallback(botInstance, query, signalId) {
 
     try {
       await botInstance.editMessageReplyMarkup(
-        { inline_keyboard: [[{ text: `🚀 MARKET Executed — ${result.orderId}`, callback_data: 'noop' }]] },
+        { inline_keyboard: [[{ text: `⏳ Verifying MARKET order ${result.orderId}...`, callback_data: 'noop' }]] },
         { chat_id: chatId, message_id: messageId }
       );
     } catch (editErr) {
@@ -368,9 +461,14 @@ async function handleExecuteMarketFallback(botInstance, query, signalId) {
     }
 
     await botInstance.sendMessage(chatId,
-      `🚀 *MARKET Order Placed!*\n${signal.side} ${signal.quantity}x ${signal.symbol}\nOrder ID: \`${result.orderId}\``,
+      `📡 *MARKET Order Sent*\n${signal.side} ${signal.quantity}x ${signal.symbol}\nOrder ID: \`${result.orderId}\`\n_Verifying with exchange..._`,
       { parse_mode: 'Markdown' }
     );
+
+    // Poll for settlement
+    signal._messageId = messageId;
+    pollOrderUntilSettled(botInstance, chatId, userId, signalId, signal, result.orderId, result.dbOrderId)
+      .catch(err => logger.error(`Polling failed for MARKET fallback signal #${signalId}:`, err));
   } catch (error) {
     logger.error(`Failed to execute MARKET fallback for signal #${signalId}:`, error);
     const errorMsg = error.message || 'Unknown error';

@@ -197,7 +197,7 @@ export default function YourPlan() {
     );
   }
 
-  const { portfolio, reinvestment, plan: investmentPlan } = plan || {};
+  const { portfolio, reinvestment, plan: investmentPlan, aiInsights } = plan || {};
 
   return (
     <div className="space-y-6 pb-8">
@@ -489,6 +489,104 @@ export default function YourPlan() {
               View All Recommendations
             </button>
           </div>
+
+          {/* AI Insights Section */}
+          {aiInsights && (
+            <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-md border border-gray-200 dark:border-gray-700">
+              <h2 className="text-xl font-semibold mb-4 text-gray-800 dark:text-gray-100 flex items-center gap-2">
+                <AlertCircle className="w-6 h-6 text-indigo-600" />
+                AI Analysis
+              </h2>
+
+              {/* Rating Badge + Confidence */}
+              <div className="flex items-center gap-4 mb-5">
+                <span className={`px-4 py-2 rounded-full text-sm font-bold ${
+                  aiInsights.overallRating === 'EXCELLENT' ? 'bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300' :
+                  aiInsights.overallRating === 'GOOD' ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300' :
+                  aiInsights.overallRating === 'MODERATE' ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300' :
+                  'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300'
+                }`}>
+                  {aiInsights.overallRating}
+                </span>
+                {aiInsights.confidence && (
+                  <div className="flex items-center gap-2">
+                    <div className="w-24 h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full ${
+                          aiInsights.confidence >= 80 ? 'bg-green-500' :
+                          aiInsights.confidence >= 60 ? 'bg-blue-500' :
+                          'bg-yellow-500'
+                        }`}
+                        style={{ width: `${aiInsights.confidence}%` }}
+                      />
+                    </div>
+                    <span className="text-sm text-gray-600 dark:text-gray-400">{aiInsights.confidence}% confidence</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Key Insights */}
+              {aiInsights.keyInsights?.length > 0 && (
+                <div className="mb-4">
+                  <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">Key Insights</h3>
+                  <ul className="space-y-1.5">
+                    {aiInsights.keyInsights.map((insight, i) => (
+                      <li key={i} className="flex items-start gap-2 text-sm text-gray-700 dark:text-gray-300">
+                        <span className="text-blue-500 mt-0.5">&#x2022;</span>
+                        {insight}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Warnings */}
+              {aiInsights.warnings?.length > 0 && (
+                <div className="mb-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
+                  <h3 className="text-sm font-semibold text-red-800 dark:text-red-300 mb-2">Warnings</h3>
+                  <ul className="space-y-1.5">
+                    {aiInsights.warnings.map((warning, i) => (
+                      <li key={i} className="flex items-start gap-2 text-sm text-red-700 dark:text-red-300">
+                        <span className="mt-0.5">&#x26A0;</span>
+                        {warning}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Action Items */}
+              {aiInsights.actionItems?.length > 0 && (
+                <div className="mb-4">
+                  <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">Action Items</h3>
+                  <ul className="space-y-1.5">
+                    {aiInsights.actionItems.map((item, i) => (
+                      <li key={i} className="flex items-start gap-2 text-sm text-gray-700 dark:text-gray-300">
+                        <CheckCircle className="w-4 h-4 text-green-500 flex-shrink-0 mt-0.5" />
+                        {item}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Personalized Advice */}
+              {aiInsights.personalizedAdvice && (
+                <div className="mb-4 bg-indigo-50 dark:bg-indigo-900/20 rounded-lg p-4">
+                  <h3 className="text-sm font-semibold text-indigo-800 dark:text-indigo-300 mb-1">Personalized Advice</h3>
+                  <p className="text-sm text-gray-700 dark:text-gray-300">{aiInsights.personalizedAdvice}</p>
+                </div>
+              )}
+
+              {/* Risk Assessment */}
+              {aiInsights.riskAssessment && (
+                <div className="bg-gray-50 dark:bg-gray-900 rounded-lg p-4">
+                  <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">Risk Assessment</h3>
+                  <p className="text-sm text-gray-700 dark:text-gray-300">{aiInsights.riskAssessment}</p>
+                </div>
+              )}
+            </div>
+          )}
         </>
       )}
       

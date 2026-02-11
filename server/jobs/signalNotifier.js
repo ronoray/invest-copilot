@@ -2,7 +2,7 @@ import cron from 'node-cron';
 import prisma from '../services/prisma.js';
 import { getBot } from '../services/telegramBot.js';
 import { generateTradeSignals, expireOldSignals } from '../services/signalGenerator.js';
-import { isTokenValid, getAuthorizationUrl, getHoldings } from '../services/upstoxService.js';
+import { isTokenValid, getAuthorizationUrl, getHoldings, getOrderStatus } from '../services/upstoxService.js';
 import { isTradingDay } from '../utils/marketHolidays.js';
 import logger from '../services/logger.js';
 
@@ -296,6 +296,111 @@ ${signal.rationale || ''}${repeatNote}`;
 }
 
 /**
+ * Poll pending/placing Upstox orders and update linked TradeSignals.
+ * Runs every 5 min during market hours to catch orders that settled
+ * after the initial 15s polling window.
+ */
+async function pollPendingOrders() {
+  if (!isTradingDay(new Date())) return;
+
+  const bot = getBot();
+
+  try {
+    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+    // Find all non-terminal UpstoxOrders from last 24h
+    const pendingOrders = await prisma.upstoxOrder.findMany({
+      where: {
+        createdAt: { gte: twentyFourHoursAgo },
+        status: { notIn: ['complete', 'traded', 'rejected', 'cancelled', 'COMPLETE', 'TRADED', 'REJECTED', 'CANCELLED'] }
+      },
+      include: {
+        user: { include: { upstoxIntegration: true, telegramUser: true } }
+      }
+    });
+
+    if (pendingOrders.length === 0) return;
+
+    logger.info(`Polling ${pendingOrders.length} pending Upstox orders...`);
+
+    for (const order of pendingOrders) {
+      try {
+        if (!order.user?.upstoxIntegration?.accessToken) continue;
+
+        const status = await getOrderStatus(order.userId, order.orderId);
+        const orderStatus = (status.status || '').toLowerCase();
+
+        if (!['complete', 'traded', 'rejected', 'cancelled'].includes(orderStatus)) {
+          continue; // Still pending
+        }
+
+        logger.info(`Order ${order.orderId} settled: ${orderStatus}`);
+
+        // Find linked TradeSignal
+        const linkedSignal = await prisma.tradeSignal.findFirst({
+          where: { upstoxOrderId: order.id }
+        });
+
+        if (!linkedSignal) continue;
+
+        const telegramUser = order.user?.telegramUser;
+        const chatId = telegramUser ? parseInt(telegramUser.telegramId) : null;
+
+        if (['complete', 'traded'].includes(orderStatus)) {
+          // Success — confirm signal
+          if (linkedSignal.status !== 'EXECUTED') {
+            await prisma.tradeSignal.update({
+              where: { id: linkedSignal.id },
+              data: { status: 'EXECUTED' }
+            });
+          }
+
+          if (bot && chatId && telegramUser.isActive) {
+            const avgPrice = status.averagePrice ? ` @ ₹${status.averagePrice}` : '';
+            await bot.sendMessage(chatId,
+              `✅ *ORDER CONFIRMED* (via monitoring)\n\n${linkedSignal.side} ${linkedSignal.quantity}x *${linkedSignal.symbol}*${avgPrice}\nOrder: \`${order.orderId}\``,
+              { parse_mode: 'Markdown' }
+            );
+          }
+        } else {
+          // Failure — roll back signal
+          await prisma.tradeSignal.update({
+            where: { id: linkedSignal.id },
+            data: { status: 'PENDING', upstoxOrderId: null, lastNotifiedAt: null }
+          });
+
+          if (bot && chatId && telegramUser.isActive) {
+            const reason = status.message || 'Unknown reason';
+            await bot.sendMessage(chatId,
+              `🔴 *ORDER FAILED — THIS IS MY FAILURE*\n\n${linkedSignal.side} ${linkedSignal.symbol} was *${orderStatus.toUpperCase()}*\nReason: _${reason}_\n\nSignal has been reset. It will re-appear in your next notification cycle.`,
+              {
+                parse_mode: 'Markdown',
+                reply_markup: {
+                  inline_keyboard: [[
+                    { text: '🔄 Retry as MARKET', callback_data: `sig_mkt_${linkedSignal.id}` },
+                    { text: '⏰ Snooze 1hr', callback_data: `sig_snooze_${linkedSignal.id}` },
+                    { text: '🚫 Dismiss', callback_data: `sig_dismiss_${linkedSignal.id}` }
+                  ]]
+                }
+              }
+            );
+          }
+
+          logger.warn(`Signal #${linkedSignal.id} rolled back via cron: order ${order.orderId} = ${orderStatus}`);
+        }
+
+        // Small delay between API calls
+        await new Promise(resolve => setTimeout(resolve, 500));
+      } catch (orderErr) {
+        logger.error(`Failed to poll order ${order.orderId}:`, orderErr.message);
+      }
+    }
+  } catch (error) {
+    logger.error('Order polling cron error:', error);
+  }
+}
+
+/**
  * Initialize the signal notifier cron jobs.
  */
 export function initSignalNotifier() {
@@ -331,9 +436,17 @@ export function initSignalNotifier() {
     timezone: 'Asia/Kolkata'
   });
 
+  // Poll pending Upstox orders every 5 min during market hours
+  cron.schedule('*/5 9-16 * * 1-5', async () => {
+    await pollPendingOrders();
+  }, {
+    timezone: 'Asia/Kolkata'
+  });
+
   logger.info('Signal notifier initialized:');
   logger.info('  Signal generation: 9:30 AM + 1:00 PM IST');
   logger.info('  Signal notifications: every 5 min, 9-3:30 PM IST');
+  logger.info('  Order status polling: every 5 min, 9 AM-4 PM IST');
 }
 
-export default { initSignalNotifier, notifyPendingSignals, generateSignalsForAllPortfolios };
+export default { initSignalNotifier, notifyPendingSignals, generateSignalsForAllPortfolios, pollPendingOrders };

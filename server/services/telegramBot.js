@@ -237,17 +237,17 @@ async function handleExecuteSignal(botInstance, query, signalId) {
     });
 
     if (!signal) {
-      await botInstance.answerCallbackQuery(query.id, { text: 'Signal not found' });
+      await botInstance.answerCallbackQuery(query.id, { text: 'Signal not found' }).catch(() => {});
       return;
     }
 
     if (signal.status === 'EXECUTED' || signal.status === 'PLACING') {
-      await botInstance.answerCallbackQuery(query.id, { text: signal.status === 'PLACING' ? 'Order is being verified...' : 'Already executed' });
+      await botInstance.answerCallbackQuery(query.id, { text: signal.status === 'PLACING' ? 'Order is being verified...' : 'Already executed' }).catch(() => {});
       return;
     }
 
     if (signal.status === 'DISMISSED' || signal.status === 'EXPIRED') {
-      await botInstance.answerCallbackQuery(query.id, { text: `Signal is ${signal.status.toLowerCase()}` });
+      await botInstance.answerCallbackQuery(query.id, { text: `Signal is ${signal.status.toLowerCase()}` }).catch(() => {});
       return;
     }
 
@@ -255,16 +255,16 @@ async function handleExecuteSignal(botInstance, query, signalId) {
     const upstox = signal.portfolio?.user?.upstoxIntegration;
 
     if (!upstox || !upstox.isConnected || !upstox.accessToken) {
-      await botInstance.answerCallbackQuery(query.id, { text: 'Upstox not connected' });
+      await botInstance.answerCallbackQuery(query.id, { text: 'Upstox not connected' }).catch(() => {});
       return;
     }
 
-    // Show processing state
-    await botInstance.answerCallbackQuery(query.id, { text: 'Placing order...' });
+    // Show processing state — catch stale callback errors (Telegram expires queries after ~30s)
+    await botInstance.answerCallbackQuery(query.id, { text: 'Placing order...' }).catch(() => {});
     await botInstance.editMessageReplyMarkup(
       { inline_keyboard: [[{ text: '⏳ Placing order...', callback_data: 'noop' }]] },
       { chat_id: chatId, message_id: messageId }
-    );
+    ).catch(() => {});
 
     // Map signal trigger type to Upstox order params
     let orderType = 'MARKET';
@@ -295,7 +295,7 @@ async function handleExecuteSignal(botInstance, query, signalId) {
                 [{ text: '🚫 Dismiss', callback_data: `sig_dismiss_${signalId}` }]
               ] },
               { chat_id: chatId, message_id: messageId }
-            );
+            ).catch(() => {});
             await botInstance.sendMessage(chatId,
               `⚠️ *Price Validation Failed*\n\nSignal price: ${formatPrice(price)}\nCurrent market price: ${formatPrice(currentPrice)}\nDeviation: ${(deviation * 100).toFixed(1)}%\n\n_The signal price is too far from the current market price. This could lead to order rejection by the exchange._`,
               { parse_mode: 'Markdown' }
@@ -403,8 +403,8 @@ async function handleExecuteMarketFallback(botInstance, query, signalId) {
       }
     });
 
-    if (!signal || signal.status === 'EXECUTED' || signal.status === 'DISMISSED' || signal.status === 'EXPIRED') {
-      await botInstance.answerCallbackQuery(query.id, { text: 'Signal no longer available' });
+    if (!signal || signal.status === 'EXECUTED' || signal.status === 'PLACING' || signal.status === 'DISMISSED' || signal.status === 'EXPIRED') {
+      await botInstance.answerCallbackQuery(query.id, { text: 'Signal no longer available' }).catch(() => {});
       return;
     }
 
@@ -412,15 +412,15 @@ async function handleExecuteMarketFallback(botInstance, query, signalId) {
     const upstox = signal.portfolio?.user?.upstoxIntegration;
 
     if (!upstox || !upstox.isConnected || !upstox.accessToken) {
-      await botInstance.answerCallbackQuery(query.id, { text: 'Upstox not connected' });
+      await botInstance.answerCallbackQuery(query.id, { text: 'Upstox not connected' }).catch(() => {});
       return;
     }
 
-    await botInstance.answerCallbackQuery(query.id, { text: 'Placing MARKET order...' });
+    await botInstance.answerCallbackQuery(query.id, { text: 'Placing MARKET order...' }).catch(() => {});
     await botInstance.editMessageReplyMarkup(
       { inline_keyboard: [[{ text: '⏳ Placing MARKET order...', callback_data: 'noop' }]] },
       { chat_id: chatId, message_id: messageId }
-    );
+    ).catch(() => {});
 
     const orderParams = {
       symbol: signal.symbol,

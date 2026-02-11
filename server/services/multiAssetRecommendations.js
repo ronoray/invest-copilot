@@ -5,7 +5,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { buildProfileBrief } from './advancedScreener.js';
 import { fetchMarketContext } from './marketData.js';
-import { ANALYST_IDENTITY, MARKET_DATA_INSTRUCTION } from './analystPrompts.js';
+import { ANALYST_IDENTITY, MARKET_DATA_INSTRUCTION, buildAccountabilityScorecard } from './analystPrompts.js';
 import logger from './logger.js';
 
 const anthropic = new Anthropic({
@@ -82,14 +82,26 @@ export async function generateMultiAssetRecommendations(options = {}) {
       logger.warn('Could not fetch market context for multi-asset:', e.message);
     }
 
+    // Build accountability scorecard
+    let scorecard = '';
+    if (portfolio?.id) {
+      try {
+        scorecard = await buildAccountabilityScorecard(portfolio.id);
+      } catch (e) {
+        logger.warn('Could not build scorecard for multi-asset:', e.message);
+      }
+    }
+
     const prompt = `${ANALYST_IDENTITY}
 
 ${marketContext}
 ${MARKET_DATA_INSTRUCTION}
 
+${scorecard}
+
 ${profileBrief}
 
-MULTI-ASSET PORTFOLIO CONSTRUCTION — build a complete wealth-building machine.
+MULTI-ASSET PORTFOLIO CONSTRUCTION — build a complete wealth-building machine. This is YOUR allocation. Every rupee deployed is YOUR responsibility. If previous calls went wrong (see scorecard above), factor recovery into this plan.
 
 **CAPITAL TO DEPLOY:** ₹${capital.toLocaleString('en-IN')}
 **RISK PROFILE:** ${effectiveRisk}
@@ -315,11 +327,34 @@ export async function getCommodityRecommendations(options = {}) {
 - Total commodities: 10-15% of overall portfolio`;
     }
 
+    // Fetch real market data
+    let marketContext = '';
+    try {
+      marketContext = await fetchMarketContext(portfolio?.holdings || []);
+    } catch (e) {
+      logger.warn('Could not fetch market context for commodities:', e.message);
+    }
+
+    // Build accountability scorecard
+    let scorecard = '';
+    if (portfolio?.id) {
+      try {
+        scorecard = await buildAccountabilityScorecard(portfolio.id);
+      } catch (e) {
+        logger.warn('Could not build scorecard for commodities:', e.message);
+      }
+    }
+
     const prompt = `${ANALYST_IDENTITY}
+
+${marketContext}
+${MARKET_DATA_INSTRUCTION}
+
+${scorecard}
 
 ${profileBrief}
 
-COMMODITY ALLOCATION — build the hard asset layer of this portfolio.
+COMMODITY ALLOCATION — build the hard asset layer of this portfolio. This is YOUR call. Own it.
 
 **CAPITAL FOR COMMODITIES:** ₹${capital.toLocaleString('en-IN')}
 
@@ -454,11 +489,34 @@ export async function getMutualFundRecommendations(options = {}) {
 - SIP preferred for equity, lump sum OK for debt`;
     }
 
+    // Fetch real market data
+    let marketContext = '';
+    try {
+      marketContext = await fetchMarketContext(portfolio?.holdings || []);
+    } catch (e) {
+      logger.warn('Could not fetch market context for mutual funds:', e.message);
+    }
+
+    // Build accountability scorecard
+    let scorecard = '';
+    if (portfolio?.id) {
+      try {
+        scorecard = await buildAccountabilityScorecard(portfolio.id);
+      } catch (e) {
+        logger.warn('Could not build scorecard for mutual funds:', e.message);
+      }
+    }
+
     const prompt = `${ANALYST_IDENTITY}
+
+${marketContext}
+${MARKET_DATA_INSTRUCTION}
+
+${scorecard}
 
 ${profileBrief}
 
-MUTUAL FUND PORTFOLIO — build the systematic wealth engine.
+MUTUAL FUND PORTFOLIO — build the systematic wealth engine. This is YOUR allocation plan. Every scheme you recommend carries YOUR conviction.
 
 **CAPITAL FOR MFs:** ₹${capital.toLocaleString('en-IN')}
 **TIME HORIZON:** ${timeHorizon}

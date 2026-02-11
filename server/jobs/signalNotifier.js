@@ -316,7 +316,7 @@ async function pollPendingOrders() {
         status: { notIn: ['complete', 'traded', 'rejected', 'cancelled', 'COMPLETE', 'TRADED', 'REJECTED', 'CANCELLED'] }
       },
       include: {
-        user: { include: { upstoxIntegration: true, telegramUser: true } }
+        integration: { include: { user: { include: { telegramUser: true } } } }
       }
     });
 
@@ -326,9 +326,9 @@ async function pollPendingOrders() {
 
     for (const order of pendingOrders) {
       try {
-        if (!order.user?.upstoxIntegration?.accessToken) continue;
+        if (!order.integration?.accessToken) continue;
 
-        const status = await getOrderStatus(order.userId, order.orderId);
+        const status = await getOrderStatus(order.integration.userId, order.orderId);
         const orderStatus = (status.status || '').toLowerCase();
 
         if (!['complete', 'traded', 'rejected', 'cancelled'].includes(orderStatus)) {
@@ -344,7 +344,7 @@ async function pollPendingOrders() {
 
         if (!linkedSignal) continue;
 
-        const telegramUser = order.user?.telegramUser;
+        const telegramUser = order.integration?.user?.telegramUser;
         const chatId = telegramUser ? parseInt(telegramUser.telegramId) : null;
 
         if (['complete', 'traded'].includes(orderStatus)) {

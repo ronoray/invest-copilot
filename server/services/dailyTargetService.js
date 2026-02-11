@@ -1,6 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk';
 import prisma from './prisma.js';
 import { buildProfileBrief } from './advancedScreener.js';
+import { ANALYST_IDENTITY, MARKET_DATA_INSTRUCTION, buildAccountabilityScorecard } from './analystPrompts.js';
+import { fetchMarketContext } from './marketData.js';
 import logger from './logger.js';
 
 const anthropic = new Anthropic({
@@ -9,7 +11,7 @@ const anthropic = new Anthropic({
 
 /**
  * Compute the AI-recommended daily earning target for a portfolio.
- * Considers: holdings, risk profile, available cash, market structure.
+ * Uses ownership mentality, yesterday's carryover, market context, and per-holding breakdown.
  *
  * @param {number} portfolioId
  * @returns {Promise<{ aiTarget: number, aiRationale: string, aiConfidence: number }>}
@@ -25,45 +27,119 @@ export async function computeAiTarget(portfolioId) {
   }
 
   const profileBrief = buildProfileBrief(portfolio);
-  const holdingsCount = (portfolio.holdings || []).length;
-  const totalInvested = (portfolio.holdings || []).reduce(
+  const holdings = portfolio.holdings || [];
+  const holdingsCount = holdings.length;
+  const totalInvested = holdings.reduce(
     (sum, h) => sum + h.quantity * parseFloat(h.avgPrice), 0
   );
-  const totalCurrent = (portfolio.holdings || []).reduce(
+  const totalCurrent = holdings.reduce(
     (sum, h) => sum + h.quantity * parseFloat(h.currentPrice || h.avgPrice), 0
   );
 
-  const prompt = `You are an expert Indian stock market analyst. Given this investor profile and portfolio, compute a REALISTIC daily earning target.
+  // Fetch yesterday's DailyTarget for carryover deficit
+  let yesterdayContext = '';
+  try {
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    yesterday.setHours(0, 0, 0, 0);
+
+    // Look back up to 5 days to find the last trading day's target
+    for (let i = 0; i < 5; i++) {
+      const checkDate = new Date(yesterday);
+      checkDate.setDate(checkDate.getDate() - i);
+      checkDate.setHours(0, 0, 0, 0);
+
+      const prevTarget = await prisma.dailyTarget.findUnique({
+        where: { portfolioId_date: { portfolioId, date: checkDate } }
+      });
+
+      if (prevTarget) {
+        const prevEffective = parseFloat(prevTarget.userTarget || prevTarget.aiTarget || 0);
+        const prevEarned = parseFloat(prevTarget.earnedActual || 0);
+        const deficit = prevEffective - prevEarned;
+
+        if (deficit > 0) {
+          yesterdayContext = `YESTERDAY'S RESULT: Target was ₹${prevEffective.toFixed(0)}, earned ₹${prevEarned.toFixed(0)}, DEFICIT ₹${deficit.toFixed(0)}. This deficit MUST be factored into today's recovery plan. I failed yesterday — today I make it back.`;
+        } else {
+          yesterdayContext = `YESTERDAY'S RESULT: Target was ₹${prevEffective.toFixed(0)}, earned ₹${prevEarned.toFixed(0)} — TARGET MET with ₹${Math.abs(deficit).toFixed(0)} surplus. Momentum is on our side. Set today's target with confidence.`;
+        }
+        break;
+      }
+    }
+  } catch (e) {
+    logger.warn('Could not fetch yesterday target for carryover:', e.message);
+  }
+
+  // Fetch market context
+  let marketContext = '';
+  try {
+    marketContext = await fetchMarketContext(holdings);
+  } catch (e) {
+    logger.warn('Could not fetch market context for target:', e.message);
+  }
+
+  // Build accountability scorecard
+  let scorecard = '';
+  try {
+    scorecard = await buildAccountabilityScorecard(portfolioId);
+  } catch (e) {
+    logger.warn('Could not build scorecard for target:', e.message);
+  }
+
+  // Build per-holding breakdown for the prompt
+  const holdingsBreakdown = holdings
+    .map(h => {
+      const invested = h.quantity * parseFloat(h.avgPrice);
+      const current = h.quantity * parseFloat(h.currentPrice || h.avgPrice);
+      const pl = current - invested;
+      return `${h.symbol} (${h.exchange || 'NSE'}): ${h.quantity} shares, avg ₹${parseFloat(h.avgPrice).toFixed(0)}, current ₹${parseFloat(h.currentPrice || h.avgPrice).toFixed(0)}, P&L ${pl >= 0 ? '+' : ''}₹${pl.toFixed(0)}`;
+    })
+    .join('\n');
+
+  const prompt = `${ANALYST_IDENTITY}
+
+${marketContext}
+${MARKET_DATA_INSTRUCTION}
+
+${scorecard}
 
 ${profileBrief}
 
-Total Invested: ${totalInvested.toLocaleString('en-IN')}
-Current Value: ${totalCurrent.toLocaleString('en-IN')}
+HOLDINGS BREAKDOWN:
+${holdingsBreakdown || 'No holdings'}
+
+Total Invested: ₹${totalInvested.toLocaleString('en-IN')}
+Current Value: ₹${totalCurrent.toLocaleString('en-IN')}
 Number of Holdings: ${holdingsCount}
 
+${yesterdayContext}
+
+TASK: Compute today's REALISTIC daily earning target for this portfolio. This is MY portfolio and I own every rupee.
+
 Rules:
-- Consider current Indian market volatility (typical daily swings 0.5-2% on individual stocks).
-- The target should be ACHIEVABLE through realistic intraday/short-term moves on their existing holdings.
-- Be conservative — a target that can be hit 60-70% of trading days is better than an ambitious one.
-- If the portfolio is small (< 1 lakh invested), the target should be proportionally modest.
-- If no holdings, suggest based on available cash and risk profile.
+- Base the target on ACTUAL holdings — estimate each stock's realistic intraday range (typical daily swing 0.5-2%)
+- Calculate per-holding expected contribution: "INFY: ₹X from 0.8% expected move on 50 shares"
+- If yesterday had a deficit, include recovery amount in today's target (aggressive but achievable)
+- The target must be achievable 60-70% of trading days — not aspirational
+- If portfolio is small (< ₹1 lakh invested), keep target proportionally modest
+- Factor in current market conditions — trending days allow higher targets than choppy/range-bound days
+- If no holdings, suggest based on available cash and risk profile
 
 Respond in this EXACT JSON format (no markdown, no extra text):
 {
   "aiTarget": <number in INR>,
-  "aiRationale": "<2-3 sentence explanation of why this target is feasible>",
+  "aiRationale": "<2-3 sentences: why this target, per-holding expected contributions, recovery plan if deficit>",
   "aiConfidence": <number 0-100>
 }`;
 
   try {
     const message = await anthropic.messages.create({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 500,
+      max_tokens: 600,
       messages: [{ role: 'user', content: prompt }],
     });
 
     const text = message.content[0].text.trim();
-    // Parse JSON from response (handle potential markdown wrapping)
     const jsonStr = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
     const result = JSON.parse(jsonStr);
 
@@ -74,7 +150,6 @@ Respond in this EXACT JSON format (no markdown, no extra text):
     };
   } catch (error) {
     logger.error('AI target computation failed:', error.message);
-    // Fallback: 0.3% of invested value as a conservative target
     const fallbackTarget = totalInvested > 0 ? Math.round(totalInvested * 0.003) : 100;
     return {
       aiTarget: fallbackTarget,

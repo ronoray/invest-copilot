@@ -5,6 +5,7 @@ import { getCurrentPrice, fetchMarketContext } from '../services/marketData.js';
 import { ANALYST_IDENTITY, MARKET_DATA_INSTRUCTION, buildAccountabilityScorecard } from '../services/analystPrompts.js';
 import { scanMarketForOpportunities, buildProfileBrief } from '../services/advancedScreener.js';
 import { sendAlert, broadcastMessage, getBot } from '../services/telegramBot.js';
+import { generateTradeSignals } from '../services/signalGenerator.js';
 import logger from '../services/logger.js';
 import { isTradingDay, isMarketHoliday } from '../utils/marketHolidays.js';
 
@@ -651,10 +652,10 @@ async function checkDailyTargetProgress() {
       if (!portfolio?.user?.telegramUser?.isActive || portfolio.user.telegramUser.isMuted) continue;
 
       try {
-        // Fetch live prices for top 3 holdings by invested value
+        // Fetch live prices for top 8 holdings by invested value
         const sortedHoldings = [...(portfolio.holdings || [])]
           .sort((a, b) => (b.quantity * parseFloat(b.avgPrice)) - (a.quantity * parseFloat(a.avgPrice)))
-          .slice(0, 3);
+          .slice(0, 8);
 
         let intradayPL = 0;
         const holdingUpdates = [];
@@ -750,6 +751,25 @@ ${minutesLeft <= 90 ? 'We are running out of time. Every minute counts. Act on t
         await sendTelegramMessage(chatId, alertMsg, { parse_mode: 'Markdown' });
         logger.info(`Daily target alert sent for portfolio ${portfolio.id}: gap ₹${gap.toFixed(0)}`);
 
+        // Auto-generate recovery signals if behind target, no pending signals, and past 11 AM
+        if (gap > 0 && pendingSignals.length === 0 && hours >= 11) {
+          try {
+            const recoveryContext = `URGENT RECOVERY: Portfolio is ₹${gap.toFixed(0)} behind today's target of ₹${effectiveTarget.toFixed(0)} with ${minutesLeft} minutes until market close. Generate recovery trades specifically targeting this ₹${gap.toFixed(0)} gap. Prioritize high-probability, short-duration trades on liquid stocks.`;
+            const recoverySignals = await generateTradeSignals(portfolio.id, recoveryContext);
+
+            if (recoverySignals.length > 0) {
+              const signalNames = recoverySignals.map(s => `${s.side} ${s.symbol}`).join(', ');
+              await sendTelegramMessage(chatId,
+                `⚡ *RECOVERY SIGNALS GENERATED*\n\nI've auto-generated ${recoverySignals.length} recovery trade(s) to close the ₹${gap.toFixed(0)} gap: ${signalNames}\n\nThese will appear in your signal notifications shortly. Execute them to get back on track.`,
+                { parse_mode: 'Markdown' }
+              );
+              logger.info(`Auto-generated ${recoverySignals.length} recovery signals for portfolio ${portfolio.id}`);
+            }
+          } catch (recoveryErr) {
+            logger.error(`Recovery signal generation failed for portfolio ${portfolio.id}:`, recoveryErr.message);
+          }
+        }
+
         await new Promise(r => setTimeout(r, 500));
       } catch (err) {
         logger.error(`Daily target check failed for portfolio ${portfolio.id}:`, err.message);
@@ -759,6 +779,150 @@ ${minutesLeft <= 90 ? 'We are running out of time. Every minute counts. Act on t
     logger.info(`Daily target progress check complete (${targets.length} targets)`);
   } catch (error) {
     logger.error('Daily target progress error:', error);
+  }
+}
+
+// ============================================
+// END-OF-DAY TARGET REVIEW (3:35 PM)
+// Final P&L update + carryover note for tomorrow
+// ============================================
+
+async function sendEndOfDayTargetReview() {
+  if (!isTradingDay(new Date())) return;
+
+  try {
+    logger.info('Running end-of-day target review...');
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const targets = await prisma.dailyTarget.findMany({
+      where: { date: today },
+      include: {
+        portfolio: {
+          include: {
+            holdings: true,
+            user: {
+              include: { telegramUser: true }
+            }
+          }
+        }
+      }
+    });
+
+    if (targets.length === 0) {
+      logger.info('No daily targets to review at EOD');
+      return;
+    }
+
+    for (const target of targets) {
+      const portfolio = target.portfolio;
+      if (!portfolio?.user?.telegramUser?.isActive || portfolio.user.telegramUser.isMuted) continue;
+
+      try {
+        // Final price fetch for all holdings (up to 8)
+        const sortedHoldings = [...(portfolio.holdings || [])]
+          .sort((a, b) => (b.quantity * parseFloat(b.avgPrice)) - (a.quantity * parseFloat(a.avgPrice)))
+          .slice(0, 8);
+
+        let finalPL = 0;
+        const holdingResults = [];
+
+        for (const h of sortedHoldings) {
+          try {
+            const priceData = await getCurrentPrice(h.symbol, h.exchange || 'NSE');
+            if (priceData?.price) {
+              const storedPrice = parseFloat(h.currentPrice || h.avgPrice);
+              const pl = (priceData.price - storedPrice) * h.quantity;
+              finalPL += pl;
+              holdingResults.push({
+                symbol: h.symbol,
+                pl,
+                pctMove: storedPrice > 0 ? ((priceData.price - storedPrice) / storedPrice * 100) : 0
+              });
+            }
+            await new Promise(r => setTimeout(r, 12000));
+          } catch (e) {
+            logger.warn(`EOD price fetch failed for ${h.symbol}:`, e.message);
+          }
+        }
+
+        // Update final earned amount
+        await prisma.dailyTarget.update({
+          where: { id: target.id },
+          data: {
+            earnedActual: finalPL,
+            earnedUpdatedAt: new Date()
+          }
+        });
+
+        const effectiveTarget = parseFloat(target.userTarget || target.aiTarget || 0);
+        const gap = effectiveTarget - finalPL;
+        const chatId = parseInt(portfolio.user.telegramUser.telegramId);
+        const pName = portfolioLabel(portfolio);
+
+        // Sort holdings by P&L contribution
+        holdingResults.sort((a, b) => b.pl - a.pl);
+        const winners = holdingResults.filter(h => h.pl > 0);
+        const losers = holdingResults.filter(h => h.pl < 0);
+
+        const winnersText = winners.length > 0
+          ? winners.map(h => `✅ ${h.symbol}: +₹${h.pl.toFixed(0)} (${h.pctMove >= 0 ? '+' : ''}${h.pctMove.toFixed(1)}%)`).join('\n')
+          : 'No winners today';
+        const losersText = losers.length > 0
+          ? losers.map(h => `❌ ${h.symbol}: ₹${h.pl.toFixed(0)} (${h.pctMove.toFixed(1)}%)`).join('\n')
+          : 'No losers today';
+
+        if (gap <= 0) {
+          // Target met!
+          const surplus = Math.abs(gap);
+          const msg = `🏆 *END OF DAY — TARGET ACHIEVED*
+━━━━━━━━━━━━━━━━━━━
+📁 *${pName}*
+
+🎯 Target: ₹${effectiveTarget.toFixed(0)}
+📊 Final P&L: +₹${finalPL.toFixed(0)}${surplus > 0 ? ` (₹${surplus.toFixed(0)} ABOVE target)` : ''}
+
+*Winners:*
+${winnersText}
+
+*Losers:*
+${losersText}
+
+I delivered today. ${surplus > 100 ? `The ₹${surplus.toFixed(0)} surplus builds our buffer.` : ''} Tomorrow's target will be computed at 9:16 AM with this momentum factored in.`;
+
+          await sendTelegramMessage(chatId, msg, { parse_mode: 'Markdown' });
+        } else {
+          // Target missed
+          const msg = `📉 *END OF DAY — TARGET MISSED*
+━━━━━━━━━━━━━━━━━━━
+📁 *${pName}*
+
+🎯 Target: ₹${effectiveTarget.toFixed(0)}
+📊 Final P&L: ${finalPL >= 0 ? '+' : ''}₹${finalPL.toFixed(0)}
+🔻 *Deficit: ₹${gap.toFixed(0)}*
+
+*Winners:*
+${winnersText}
+
+*Losers (what dragged us down):*
+${losersText}
+
+I own this miss. ${losers.length > 0 ? `${losers[0].symbol} was the biggest drag at ₹${losers[0].pl.toFixed(0)}.` : ''} I'll factor this ₹${gap.toFixed(0)} deficit into tomorrow's recovery plan. Tomorrow's target will include recovery — I don't leave money on the table.`;
+
+          await sendTelegramMessage(chatId, msg, { parse_mode: 'Markdown' });
+        }
+
+        logger.info(`EOD review sent for portfolio ${portfolio.id}: ${gap <= 0 ? 'TARGET MET' : `missed by ₹${gap.toFixed(0)}`}`);
+        await new Promise(r => setTimeout(r, 500));
+      } catch (err) {
+        logger.error(`EOD target review failed for portfolio ${portfolio.id}:`, err.message);
+      }
+    }
+
+    logger.info(`End-of-day target review complete (${targets.length} targets)`);
+  } catch (error) {
+    logger.error('End-of-day target review error:', error);
   }
 }
 
@@ -812,10 +976,18 @@ export function initTelegramAlerts() {
     timezone: 'Asia/Kolkata'
   });
 
+  // End-of-day target review at 3:35 PM IST (after market close)
+  cron.schedule('35 15 * * 1-5', async () => {
+    await sendEndOfDayTargetReview();
+  }, {
+    timezone: 'Asia/Kolkata'
+  });
+
   logger.info('Telegram AI Alert System initialized');
   logger.info('Schedule:');
   logger.info('  9:00 AM - Morning Deep Dive (per-portfolio market + diversification + risk)');
   logger.info('  10-3 PM - Daily Target Income Check (hourly)');
+  logger.info('  3:35 PM - End-of-Day Target Review (final P&L + carryover)');
   logger.info('  6:00 PM - Evening Review (per-portfolio technical + value + sentiment)');
   logger.info('  9:00 PM - Game Plan (per-portfolio strategy + personalized watchlist)');
   logger.info('  Skips NSE market holidays automatically');
@@ -824,6 +996,7 @@ export function initTelegramAlerts() {
 export default {
   checkPriceAlerts,
   checkDailyTargetProgress,
+  sendEndOfDayTargetReview,
   sendMorningDeepDive,
   sendEveningReview,
   sendTomorrowGamePlan,

@@ -3,7 +3,8 @@ import multer from 'multer';
 import { readFileSync, mkdirSync } from 'fs';
 import path from 'path';
 import { scanMarketForOpportunities, buildProfileBrief, buildAllPortfoliosBrief } from '../services/advancedScreener.js';
-import { fetchMarketContext, MARKET_DATA_ANTI_HALLUCINATION_PROMPT } from '../services/marketData.js';
+import { fetchMarketContext } from '../services/marketData.js';
+import { ANALYST_IDENTITY, MARKET_DATA_INSTRUCTION, buildAccountabilityScorecard } from '../services/analystPrompts.js';
 import prisma from '../services/prisma.js';
 import Anthropic from '@anthropic-ai/sdk';
 import logger from '../services/logger.js';
@@ -25,161 +26,45 @@ const anthropic = new Anthropic({
  * @param {string} context - Full portfolio brief (single or all portfolios)
  */
 const COMPREHENSIVE_PROMPTS = {
-  marketAnalysis: (context) => `
-## 1. MARKET ANALYSIS — Personalized Market Outlook
+  marketAnalysis: () => `
+## 1. MARKET STRUCTURE & POSITIONING
+Where is Nifty in its current cycle? Key institutional levels (support/resistance where big money sits). Bank Nifty structure. Sector rotation map — which sectors are in accumulation, distribution, or markup phase. 3-5 SPECIFIC trade ideas with entry/target/stop that match this investor's risk profile. What's the ONE event that could move markets 2%+ this week?`,
 
-${context}
+  portfolioDiversification: () => `
+## 2. PORTFOLIO SURGERY — Concentration & Gaps
+Grade diversification A-F. Calculate sector concentration (% in each sector). What's dangerously over-weighted? What CRITICAL sectors are completely missing? For each gap: name the SPECIFIC stock to add with entry price and position size. Cross-portfolio correlation check — are family portfolios overlapping too much? Asset class gaps: specific MF schemes, ETFs, gold instruments, and fixed income instruments to add.`,
 
-Given the above investor situation, analyze the current Indian stock market:
-- What is the broad market doing (Nifty, Sensex, Bank Nifty) and how does it affect THIS investor?
-- For CONSERVATIVE portfolios: Is this a good time to deploy capital or stay defensive?
-- For AGGRESSIVE portfolios: What momentum sectors/themes are running? Where are the breakout opportunities?
-- Identify 3-5 specific opportunities RIGHT NOW that match each portfolio's risk profile
-- Key support/resistance levels on Nifty 50 and sector indices relevant to current holdings
-- Upcoming events (earnings season, RBI policy, FII activity) that need attention`,
+  riskManagement: () => `
+## 3. RISK ARCHITECTURE
+Position sizing rules: max single-stock exposure as % of portfolio. For EVERY current holding: exact stop-loss level in ₹, trailing stop methodology. Which positions are oversized for the risk profile — name them and say how much to trim (₹ amounts). Max drawdown scenario: if Nifty drops 10%, what happens to this portfolio? Calculate the ₹ impact. Emergency protocol: at what Nifty level should each portfolio go 50% cash?`,
 
-  portfolioDiversification: (context) => `
-## 2. PORTFOLIO DIVERSIFICATION — Gap Analysis
+  technicalAnalysis: () => `
+## 4. TECHNICAL CONVICTION CALLS
+For EVERY holding: trend direction, key levels, and a clear verdict — HOLD, ADD MORE, or EXIT with the trigger price. Then scan the BROADER market for the 5 best technical setups right now across ALL market caps: breakout with volume, oversold quality bounce, accumulation pattern completion. For each: exact entry, target, stop-loss, timeframe, and risk-reward ratio.`,
 
-${context}
+  economicIndicators: () => `
+## 5. MACRO CHAIN ANALYSIS
+Don't just list indicators — CONNECT THE CHAINS: RBI rate stance → specific impact on each banking/NBFC holding. Crude at current levels → OMC margins → specific stocks affected. INR trajectory → IT earnings revisions → hold or exit? FII flow direction → which portfolio sectors see inflow pressure? GDP composition → which capex/consumption plays benefit? For EACH chain: the specific portfolio action to take.`,
 
-Analyze concentration risk and diversification gaps for EACH portfolio above:
-- What sectors are over-represented or missing entirely?
-- For portfolios WITH holdings: Which sectors should be added to reduce correlation?
-- For EMPTY portfolios: What's the ideal starting allocation for their risk profile?
-- Suggest 3-4 specific stocks per portfolio that address their gaps
-- Cross-portfolio view: Are the family's investments collectively well-diversified?
-- Asset class gaps: Should any portfolio add MFs, ETFs, gold, or bonds alongside stocks?`,
+  valueInvesting: () => `
+## 6. VALUATION DEEP DIVE
+For every current holding: P/E vs 5-year average and vs sector average. PEG ratio. Is the growth priced in or is there upside? Flag any holding that's 20%+ above fair value — recommend trimming with specific target trim amount. Then find 3 genuinely UNDERVALUED opportunities in the market: stocks trading below intrinsic value with a clear catalyst to close the gap. Show the math: "Fair value ₹X based on Y methodology, current price ₹Z = N% upside."`,
 
-  riskManagement: (context) => `
-## 3. RISK MANAGEMENT — Portfolio-Specific Rules
+  marketSentiment: () => `
+## 7. POSITIONING & SENTIMENT
+India VIX level and what it implies for option premiums and expected moves. FII vs DII — who has conviction? Delivery % in key stocks — is money entering or exiting? Retail participation indicators. For this portfolio: should capital be deployed aggressively NOW, staged over weeks, or held back? Give a specific deployment schedule with dates and amounts if staging.`,
 
-${context}
+  earningsReports: () => `
+## 8. EARNINGS POWER ANALYSIS
+For every holding: most recent quarter — revenue growth (YoY), PAT margin expansion/compression, EPS surprise vs consensus, management guidance for next quarter. Clear verdict: BEAT/MEET/MISS and what it means for the stock's trajectory. For sectors where capital should be deployed: which companies just delivered blowout earnings that the market hasn't fully priced yet? Name them with entry levels.`,
 
-Create risk management rules SPECIFIC to each portfolio:
-- CONSERVATIVE portfolios: Tighter stop-losses (5-8%), larger positions in quality, max 15% in any single stock
-- AGGRESSIVE portfolios: Wider stops (10-15%), smaller positions in speculative plays, trailing stop strategy
-- Position sizing formula for each portfolio based on their available capital
-- For existing holdings: Which positions are oversized or undersized for the risk profile?
-- Portfolio-level risk: Max drawdown scenarios for each portfolio
-- Emergency rules: When to go to cash (market crash triggers)
-Provide specific ₹ amounts, not just percentages.`,
+  growthVsDividend: () => `
+## 9. INCOME & GROWTH ARCHITECTURE
+Calculate current portfolio yield (dividend income). Is it adequate for the investor's profile? Recommend 3-4 SPECIFIC dividend stocks with yield > 2%, payout history, ex-dividend dates. For growth allocation: 3-4 stocks with revenue growth > 20% YoY. SPECIFIC mutual fund schemes for both strategies (name the fund, AMC, expense ratio). Build a "monthly income ladder" showing expected quarterly dividends from recommended positions.`,
 
-  technicalAnalysis: (context) => `
-## 4. TECHNICAL ANALYSIS — Existing Holdings + Watchlist
-
-${context}
-
-Provide technical analysis for:
-A) Every stock currently held in the portfolios above:
-   - Current trend (uptrend/downtrend/sideways)
-   - Key support and resistance levels
-   - RSI zone (oversold/neutral/overbought)
-   - Is it a HOLD, ADD MORE, or EXIT?
-
-B) 3-5 new stocks on each risk tier that show strong technical setups:
-   - Breakout candidates with volume confirmation
-   - Oversold bounces in quality names
-   - Chart patterns forming (cup & handle, flags, etc.)
-
-For each: Entry zone, target, stop-loss, and time horizon.`,
-
-  economicIndicators: (context) => `
-## 5. ECONOMIC INDICATORS — Impact on This Investor
-
-${context}
-
-How do current economic conditions affect THIS investor's portfolios?
-- RBI interest rate stance → Impact on banking/NBFC holdings and bond allocation
-- Inflation trajectory → Which holdings benefit or suffer? Should commodities allocation change?
-- GDP growth outlook → Which portfolio sectors align with growth? Which are headwinds?
-- FII/DII flows → Are foreign investors buying or selling the sectors this investor holds?
-- USD/INR trend → Impact on IT holdings, import-dependent companies
-- Crude oil → Impact on OMCs, aviation, manufacturing holdings
-- For each indicator: Specific action items for conservative vs aggressive portfolios`,
-
-  valueInvesting: (context) => `
-## 6. VALUE INVESTING — What's Cheap For This Profile
-
-${context}
-
-Given each portfolio's risk profile and existing holdings:
-- For CONSERVATIVE portfolios: Find undervalued large-caps with P/E below sector average, high dividend yield, low debt-to-equity, strong ROE, wide moat. These should be core holdings.
-- For AGGRESSIVE portfolios: Find undervalued growth stories — high ROE, expanding margins, market share gainers that are temporarily cheap (fallen angels, sector rotations).
-- For each recommendation: P/E vs 5-year average, P/B, debt, ROE, dividend yield, free cash flow
-- Intrinsic value estimate vs current price for top 3 picks per portfolio
-- Identify any CURRENT holdings that have become overvalued and should be trimmed`,
-
-  marketSentiment: (context) => `
-## 7. MARKET SENTIMENT — Timing Guidance
-
-${context}
-
-Current market sentiment analysis relevant to this investor:
-- Overall market mood: Fear/Greed indicator equivalent for Indian markets
-- FII vs DII battle: Who's buying, who's selling, and what it means
-- India VIX: Is volatility elevated or suppressed? What should each portfolio do?
-- Sector-specific sentiment for sectors held in the portfolios above
-- IPO market temperature: Is retail euphoria or caution the theme?
-- Mutual fund inflows/outflows: Are retail investors pumping or dumping?
-For each portfolio:
-- Should they be DEPLOYING capital now or WAITING?
-- If deploying: Lump sum or staggered over weeks?`,
-
-  earningsReports: (context) => `
-## 8. EARNINGS ANALYSIS — Holdings & Sector Review
-
-${context}
-
-For every stock currently held in the portfolios:
-- Most recent quarterly results: Revenue growth (YoY), PAT margins, EPS
-- Did it BEAT/MEET/MISS analyst expectations?
-- Management commentary highlights and forward guidance
-- What does this mean: HOLD / ADD MORE / EXIT?
-
-For the sectors relevant to empty portfolios (where capital needs to be deployed):
-- Which sectors delivered strong earnings this quarter?
-- Which companies in those sectors are worth entering?
-- Any earnings surprises (positive or negative) creating opportunities?`,
-
-  growthVsDividend: (context) => `
-## 9. GROWTH VS DIVIDEND STRATEGY — Personalized Allocation
-
-${context}
-
-Based on each portfolio's risk profile:
-
-**For CONSERVATIVE portfolios:**
-- Recommend 3-4 dividend stocks (yield > 2%, consistent payout history, blue-chip)
-- Suggest dividend-focused MFs
-- Calculate expected annual dividend income from current + recommended holdings
-- Build a "dividend income ladder" — monthly income from staggered payouts
-
-**For AGGRESSIVE portfolios:**
-- Recommend 3-4 pure growth stocks (revenue growing > 20% YoY, market disruptors)
-- Suggest growth-focused MFs (small/mid-cap, sectoral)
-- Expected capital appreciation scenario (1-year, 3-year)
-- Which current holdings are growth vs value? Is the mix right?
-
-**Cross-portfolio:** How do the portfolios complement each other as a family unit?`,
-
-  globalEvents: (context) => `
-## 10. GLOBAL MACRO & HEDGING — Protection Strategy
-
-${context}
-
-How global events impact THIS investor's specific holdings and future plans:
-- US Federal Reserve: Rate trajectory and impact on IT stocks, FII flows to India
-- China: Manufacturing data, any supply chain shifts benefiting Indian companies held
-- Geopolitical: India's trade deals, border situations, defense spending implications
-- Global commodities: Oil, gold, copper — impact on specific holdings
-- Currency moves: INR outlook and which portfolio positions benefit/suffer
-
-Hedging recommendations per portfolio:
-- CONSERVATIVE: Gold allocation (SGB/ETF), G-Sec exposure, cash reserves %
-- AGGRESSIVE: Sector hedges, defensive anchor stocks, put option awareness
-- Portfolio insurance: How much cash buffer should each portfolio maintain?
-- Rebalancing triggers: When to shift allocation between portfolios`
+  globalEvents: () => `
+## 10. GLOBAL MACRO & HEDGING ARCHITECTURE
+US Fed rate trajectory → Indian bond yields → impact on specific holdings. China PMI → supply chain shifts → which Indian companies benefit? Crude/gold/copper → sector-specific impacts. INR forecast → export vs import plays. For THIS portfolio: exact hedging recommendations — gold allocation (SGB series or ETF name), G-Sec fund name, defensive anchors. Cash buffer recommendation as % and ₹ amount. Rebalancing triggers: "If Nifty breaks X, do Y."`
 };
 
 /**
@@ -634,38 +519,52 @@ router.get('/comprehensive-analysis', async (req, res) => {
       logger.warn('Could not fetch market context for comprehensive analysis:', e.message);
     }
 
-    const prompt = `You are an expert investment advisor providing a comprehensive 10-section analysis.
-This analysis must be DEEPLY PERSONALIZED to the investor's actual situation — their specific holdings, capital, risk profiles, and portfolio goals.
-Do NOT give generic advice. Every recommendation must reference the actual portfolios and holdings described below.
+    // Build accountability scorecard for primary portfolio
+    let scorecard = '';
+    try {
+      const primaryPortfolioId = portfolioId ? parseInt(portfolioId) : portfolios[0]?.id;
+      if (primaryPortfolioId) {
+        scorecard = await buildAccountabilityScorecard(primaryPortfolioId);
+      }
+    } catch (e) {
+      logger.warn('Could not build scorecard for comprehensive analysis:', e.message);
+    }
+
+    const prompt = `${ANALYST_IDENTITY}
 
 ${marketContext}
-${MARKET_DATA_ANTI_HALLUCINATION_PROMPT}
+${MARKET_DATA_INSTRUCTION}
+
+${scorecard}
 
 ${context}
 
-Now provide all 10 sections of analysis:
+COMPREHENSIVE PORTFOLIO ANALYSIS — 10 sections of deep, conviction-based analysis.
 
-${COMPREHENSIVE_PROMPTS.marketAnalysis(context)}
-${COMPREHENSIVE_PROMPTS.portfolioDiversification(context)}
-${COMPREHENSIVE_PROMPTS.riskManagement(context)}
-${COMPREHENSIVE_PROMPTS.technicalAnalysis(context)}
-${COMPREHENSIVE_PROMPTS.economicIndicators(context)}
-${COMPREHENSIVE_PROMPTS.valueInvesting(context)}
-${COMPREHENSIVE_PROMPTS.marketSentiment(context)}
-${COMPREHENSIVE_PROMPTS.earningsReports(context)}
-${COMPREHENSIVE_PROMPTS.growthVsDividend(context)}
-${COMPREHENSIVE_PROMPTS.globalEvents(context)}
+Every recommendation must be SPECIFIC to this investor — reference their actual holdings, capital, risk profile, and portfolio goals by name.
+Give ACTIONABLE calls: "BUY HDFCBANK at ₹1,650, target ₹1,850, stop ₹1,580" — not "consider diversifying into banking."
+
+${COMPREHENSIVE_PROMPTS.marketAnalysis()}
+${COMPREHENSIVE_PROMPTS.portfolioDiversification()}
+${COMPREHENSIVE_PROMPTS.riskManagement()}
+${COMPREHENSIVE_PROMPTS.technicalAnalysis()}
+${COMPREHENSIVE_PROMPTS.economicIndicators()}
+${COMPREHENSIVE_PROMPTS.valueInvesting()}
+${COMPREHENSIVE_PROMPTS.marketSentiment()}
+${COMPREHENSIVE_PROMPTS.earningsReports()}
+${COMPREHENSIVE_PROMPTS.growthVsDividend()}
+${COMPREHENSIVE_PROMPTS.globalEvents()}
+
+${scorecard ? 'ACCOUNTABILITY: Your previous signal history is shown above. Reference your track record — own wins and losses. For any losing calls, propose specific recovery actions in the relevant sections.' : ''}
 
 **FORMAT:**
-- Clear section headers with numbers and emojis
-- Specific stock tickers in CAPS (e.g., HDFCBANK, RELIANCE)
-- Reference each portfolio by its actual name and owner (e.g., "For [Owner]'s [Broker] portfolio...")
-- Bullet points for clarity
-- Confidence: HIGH 🟢 / MEDIUM 🟡 / LOW 🔴
-- Time horizon: SHORT / MEDIUM / LONG
-- Risk level: LOW / MODERATE / HIGH
-- All prices in ₹
-- Actionable: "Buy X at ₹Y" not "consider looking into X"`;
+- Clear section headers with numbers
+- Stock tickers in CAPS (HDFCBANK, RELIANCE)
+- Reference each portfolio by owner name and broker
+- For every recommendation: Entry ₹, Target ₹, Stop-loss ₹, Timeframe, Conviction (HIGH/MEDIUM/LOW)
+- For every holding: Clear verdict — HOLD / ADD MORE / TRIM / EXIT with trigger price
+- All amounts in ₹ with position sizes
+- Multi-asset coverage: stocks, MFs (specific scheme names), gold (SGB/ETF), fixed income (specific instruments), REITs where relevant`;
 
     const message = await anthropic.messages.create({
       model: 'claude-sonnet-4-20250514',

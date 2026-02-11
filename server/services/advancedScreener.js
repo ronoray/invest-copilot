@@ -3,7 +3,8 @@
 // Replaces the old hardcoded mock screener with real AI analysis
 
 import Anthropic from '@anthropic-ai/sdk';
-import { getCurrentPrice, fetchMarketContext, MARKET_DATA_ANTI_HALLUCINATION_PROMPT } from './marketData.js';
+import { getCurrentPrice, fetchMarketContext } from './marketData.js';
+import { ANALYST_IDENTITY, MARKET_DATA_INSTRUCTION, buildAccountabilityScorecard } from './analystPrompts.js';
 import logger from './logger.js';
 
 const anthropic = new Anthropic({
@@ -144,30 +145,49 @@ export async function scanMarketForOpportunities(options = {}) {
     logger.warn('Could not fetch market context for scan:', e.message);
   }
 
-  const prompt = `You are an expert Indian stock market advisor. Analyze the current market conditions and provide specific stock recommendations tailored to this investor's profile.
+  // Build accountability scorecard if portfolio exists
+  let scorecard = '';
+  if (portfolio?.id) {
+    try {
+      scorecard = await buildAccountabilityScorecard(portfolio.id);
+    } catch (e) {
+      logger.warn('Could not build scorecard for scan:', e.message);
+    }
+  }
+
+  const prompt = `${ANALYST_IDENTITY}
 
 ${marketContext}
-${MARKET_DATA_ANTI_HALLUCINATION_PROMPT}
+${MARKET_DATA_INSTRUCTION}
+
+${scorecard}
 
 ${profileBrief}
 
-**INVESTMENT AMOUNT:** ₹${baseAmount.toLocaleString('en-IN')} to deploy now
+FULL MARKET SCAN — I need your best conviction picks across the ENTIRE Indian market.
 
-**RISK GUIDANCE:**
+**CAPITAL TO DEPLOY:** ₹${baseAmount.toLocaleString('en-IN')}
+
+**RISK FRAMEWORK:**
 ${riskGuidance}
 
-**EXISTING HOLDINGS TO AVOID DUPLICATING:** ${existingSymbols || 'None'}
+**ALREADY HOLDING (DO NOT DUPLICATE):** ${existingSymbols || 'None'}
 
-**YOUR TASK:**
-Recommend exactly ${targetCount.high || 3} HIGH risk, ${targetCount.medium || 3} MEDIUM risk, and ${targetCount.low || 3} LOW risk NSE stocks.
+SCAN METHODOLOGY — work through this systematically:
+1. SECTOR SWEEP: Analyze ALL major sectors — Banking, IT, Pharma, Auto, FMCG, Metals, Energy, Infra, Defense, Chemicals, Textiles, Real Estate, Telecom, Media, Insurance. Which sectors have the best risk-reward setup RIGHT NOW?
+2. MARKET CAP SPECTRUM: Cover Nifty 50 (large), Nifty Midcap 150, Nifty Smallcap 250. The best opportunities are often outside the top 50
+3. THEMATIC PLAYS: Government policy beneficiaries, China+1, PLI scheme winners, capex cycle plays, consumption recovery — what's working?
+4. VALUATION FILTER: For each pick, explain the valuation case — PE vs sector average, PEG ratio, earnings growth trajectory
 
-For EACH stock, provide deep analysis:
-- Why this stock specifically for THIS investor's profile and situation
-- What catalyst or setup makes it attractive RIGHT NOW
-- Concrete entry, target, and stop-loss levels
-- How it complements the existing portfolio
+For EACH stock, provide:
+- THE THESIS: Why this stock, why now? Not "good company" — what's the CATALYST?
+- THE TRADE: Entry, target, stop-loss. Risk-reward ratio (must be at least 2:1)
+- THE INVALIDATION: What breaks this trade?
+- PORTFOLIO FIT: How does it complement what this investor already holds?
 
-Allocate the ₹${baseAmount.toLocaleString('en-IN')} across all ${totalStocks} stocks proportionally based on conviction and risk tier.
+${scorecard ? 'ACCOUNTABILITY: Your previous calls are shown above. Factor your track record into conviction levels. If a sector burned you recently, explain why you think it works now.' : ''}
+
+Provide exactly ${targetCount.high || 3} HIGH risk, ${targetCount.medium || 3} MEDIUM risk, and ${targetCount.low || 3} LOW risk picks.
 
 Return ONLY valid JSON (no markdown):
 {
@@ -186,9 +206,9 @@ Return ONLY valid JSON (no markdown):
       "timeHorizonDays": 15,
       "suggestedAmount": 3000,
       "simpleWhy": [
-        "Specific reason 1 for this investor",
-        "Specific reason 2 — catalyst or setup",
-        "Specific reason 3 — how it fits the portfolio"
+        "THESIS: [specific catalyst/reason]",
+        "VALUATION: [PE/PEG/growth metrics that justify entry]",
+        "PORTFOLIO FIT: [how it complements existing holdings]"
       ],
       "expectedReturns": {
         "best": "+30%",
@@ -196,21 +216,20 @@ Return ONLY valid JSON (no markdown):
         "worst": "-15%"
       },
       "sector": "Energy",
-      "reasoning": "2-3 sentence deep reasoning specific to this investor's situation"
+      "reasoning": "Full thesis with catalyst, valuation basis, and invalidation trigger"
     }
   ],
   "medium": [ ... same structure ... ],
   "low": [ ... same structure ... ]
 }
 
-**CRITICAL RULES:**
-- Use real NSE stock symbols (e.g., RELIANCE, TCS, HDFCBANK, ZOMATO, SUZLON, etc.)
-- Prices should be your best estimate of current market prices
-- Do NOT recommend stocks the investor already holds
+RULES:
+- Real NSE symbols only. Scan across ALL market caps and sectors — don't just pick Nifty 50 names
+- Price estimates should be your best knowledge of current levels
 - Allocations must sum to approximately ₹${baseAmount.toLocaleString('en-IN')}
-- simpleWhy must be an array of 3 strings, each specific to this investor
-- Be specific and actionable — no generic advice
-- Return ONLY the JSON object, nothing else`;
+- simpleWhy: 3 strings — THESIS, VALUATION, PORTFOLIO FIT
+- Be BOLD. If you have 90% conviction, say it. If it's a speculative play, flag it honestly
+- Return ONLY the JSON object`;
 
   try {
     const message = await anthropic.messages.create({

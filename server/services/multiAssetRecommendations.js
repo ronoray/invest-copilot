@@ -4,7 +4,8 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { buildProfileBrief } from './advancedScreener.js';
-import { fetchMarketContext, MARKET_DATA_ANTI_HALLUCINATION_PROMPT } from './marketData.js';
+import { fetchMarketContext } from './marketData.js';
+import { ANALYST_IDENTITY, MARKET_DATA_INSTRUCTION } from './analystPrompts.js';
 import logger from './logger.js';
 
 const anthropic = new Anthropic({
@@ -81,20 +82,21 @@ export async function generateMultiAssetRecommendations(options = {}) {
       logger.warn('Could not fetch market context for multi-asset:', e.message);
     }
 
-    const prompt = `You are an expert Indian financial advisor creating a COMPREHENSIVE multi-asset investment portfolio.
+    const prompt = `${ANALYST_IDENTITY}
 
 ${marketContext}
-${MARKET_DATA_ANTI_HALLUCINATION_PROMPT}
+${MARKET_DATA_INSTRUCTION}
 
 ${profileBrief}
 
-**INVESTMENT PARAMETERS:**
-- Capital to Deploy: ₹${capital.toLocaleString('en-IN')}
-- Risk Profile: ${effectiveRisk}
-- Time Horizon: ${timeHorizon}
-- Existing Holdings to AVOID: ${existingSymbols || 'None'}
+MULTI-ASSET PORTFOLIO CONSTRUCTION — build a complete wealth-building machine.
 
-**ALLOCATION GUIDANCE (${effectiveRisk}):**
+**CAPITAL TO DEPLOY:** ₹${capital.toLocaleString('en-IN')}
+**RISK PROFILE:** ${effectiveRisk}
+**TIME HORIZON:** ${timeHorizon}
+**ALREADY HOLDING (AVOID):** ${existingSymbols || 'None'}
+
+**ALLOCATION FRAMEWORK (${effectiveRisk}):**
 ${allocation.note}
 - Equity: ${allocation.equity.min}-${allocation.equity.max}%
 - Mutual Funds: ${allocation.mutualFunds.min}-${allocation.mutualFunds.max}%
@@ -102,17 +104,17 @@ ${allocation.note}
 - Fixed Income: ${allocation.fixedIncome.min}-${allocation.fixedIncome.max}%
 - Alternatives: ${allocation.alternatives.min}-${allocation.alternatives.max}%
 
-**YOUR TASK:**
-Create a DEEPLY PERSONALIZED multi-asset portfolio. Every recommendation must explain WHY it fits THIS specific investor.
+THINK LIKE A FAMILY OFFICE ALLOCATOR:
+- EQUITIES: Scan the entire NSE universe. Pick conviction stocks with clear thesis — not just blue chips. Include the mid/small cap gems that institutional money is quietly accumulating
+- MUTUAL FUNDS: Name SPECIFIC schemes (Direct Growth plans only). "Parag Parikh Flexi Cap" not "a flexi cap fund." Include actual return track records and expense ratios
+- COMMODITIES: SGBs (name the series if available), Gold/Silver ETFs (specific tickers), commodity MFs. Position sizing based on macro view
+- FIXED INCOME: Specific G-Sec funds, SDL funds, corporate bond funds, FD rates from specific banks. Duration view based on rate cycle
+- ALTERNATIVES: REITs (Embassy, Mindspace, Brookfield), InvITs, international ETFs (Nasdaq 100, S&P 500 funds available in India)
 
-For a CONSERVATIVE profile: Emphasize SGBs, G-Secs, large-cap MFs, dividend stocks, FDs. Avoid crypto, small-caps, F&O.
-For an AGGRESSIVE profile: Emphasize growth stocks, small/mid-cap MFs, commodity plays, REITs, selective crypto. Minimize FDs.
-For a BALANCED profile: Even mix. Quality large + mid caps, balanced MFs, gold, some corporate bonds.
-
-For EVERY recommendation, include a "guide" object for COMPLETE BEGINNERS:
-- Step-by-step instructions assuming NO demat account, NO investment experience
-- Platform-specific tips (Zerodha, Upstox, Groww, SBI, etc.)
-- Common mistakes to avoid
+For EVERY recommendation:
+- WHY THIS, WHY NOW: Specific thesis, not "good for diversification"
+- THE RISK: What could go wrong and at what point to exit
+- GUIDE: Step-by-step for a complete beginner including which platform to use
 
 Include a "riskLevel" field: "HIGH", "MEDIUM", or "LOW" for every recommendation.
 
@@ -313,23 +315,25 @@ export async function getCommodityRecommendations(options = {}) {
 - Total commodities: 10-15% of overall portfolio`;
     }
 
-    const prompt = `You are an expert Indian commodity market advisor. Analyze commodity markets and provide recommendations tailored to this investor.
+    const prompt = `${ANALYST_IDENTITY}
 
 ${profileBrief}
 
-**COMMODITY CAPITAL:** ₹${capital.toLocaleString('en-IN')}
+COMMODITY ALLOCATION — build the hard asset layer of this portfolio.
 
-**COMMODITY GUIDANCE (${effectiveRisk}):**
+**CAPITAL FOR COMMODITIES:** ₹${capital.toLocaleString('en-IN')}
+
+**FRAMEWORK (${effectiveRisk}):**
 ${commodityGuidance}
 
-For EVERY recommendation, include a "guide" object for COMPLETE BEGINNERS with step-by-step instructions.
-Include a "riskLevel" field: Gold/SGBs = LOW, Silver = MEDIUM, Crude Oil = HIGH.
+ANALYSIS REQUIRED:
+1. **Gold**: Current macro thesis for gold (real rates, DXY, central bank buying). SPECIFIC recommendation: SGB series vs Gold ETF (name the ETF) vs Digital Gold — which and how much for THIS investor
+2. **Silver**: Higher beta play. Silver ETFs available in India (specific names). Only if risk profile warrants — explain the risk-reward
+3. **Crude Oil**: Don't recommend MCX futures for retail. Instead: energy proxy stocks (ONGC, Oil India, BPCL, Reliance) or energy MFs. Current crude thesis and impact
+4. **Commodity MFs**: Specific schemes that give diversified commodity exposure
 
-**PROVIDE DETAILED RECOMMENDATIONS FOR:**
-1. **Gold** — Compare: Sovereign Gold Bonds vs Gold ETFs vs Digital Gold. Which is best for this investor and why?
-2. **Silver** — Silver ETFs, Digital Silver. Only if risk profile allows.
-3. **Crude Oil** — MCX awareness + proxy stocks (ONGC, Oil India, etc.). Only for moderate/aggressive.
-4. **Agricultural Commodities** — Mention awareness only (not directly investable for retail easily).
+For EVERY recommendation: include a "guide" object with step-by-step instructions for beginners and which platform to use.
+Include "riskLevel": Gold/SGBs = LOW, Silver = MEDIUM, Crude proxies = HIGH.
 
 Return ONLY valid JSON:
 {
@@ -450,29 +454,32 @@ export async function getMutualFundRecommendations(options = {}) {
 - SIP preferred for equity, lump sum OK for debt`;
     }
 
-    const prompt = `You are an expert Indian mutual fund advisor. Recommend MFs tailored to this investor.
+    const prompt = `${ANALYST_IDENTITY}
 
 ${profileBrief}
 
-**MF CAPITAL:** ₹${capital.toLocaleString('en-IN')}
+MUTUAL FUND PORTFOLIO — build the systematic wealth engine.
+
+**CAPITAL FOR MFs:** ₹${capital.toLocaleString('en-IN')}
 **TIME HORIZON:** ${timeHorizon}
 
-**MF GUIDANCE (${effectiveRisk}):**
+**FRAMEWORK (${effectiveRisk}):**
 ${mfGuidance}
 
-For EVERY fund, include a "guide" object for COMPLETE BEGINNERS.
-Include a "riskLevel" field: Large Cap/Debt = LOW, Mid Cap/Hybrid = MEDIUM, Small Cap/Sectoral = HIGH.
+NAME SPECIFIC SCHEMES — "Parag Parikh Flexi Cap Fund Direct Growth" not "a flexi cap fund."
 
-**CATEGORIES TO COVER:**
-1. Large Cap / Index Funds (1-2 funds)
-2. Mid Cap Funds (1-2 funds)
-3. Small Cap Funds (1 fund if risk allows, otherwise skip)
-4. Balanced / Hybrid Funds (1 fund)
-5. Debt Funds (1 fund — short duration or banking & PSU)
-6. ELSS Tax Saving (1 fund)
-7. Sectoral/Thematic (1 fund if aggressive, otherwise skip)
+CATEGORIES TO COVER:
+1. **Large Cap / Index**: Nifty 50 or Sensex index fund — name the best one by tracking error. Why index over active for this investor?
+2. **Mid Cap**: The 1-2 best mid cap funds right now. Fund manager track record matters — name them
+3. **Small Cap**: High risk, high reward. Only if profile allows. Name the scheme with best risk-adjusted returns
+4. **Balanced / Hybrid**: Dynamic asset allocation fund for automatic rebalancing. Name the best one
+5. **Debt**: Short duration or banking & PSU fund for the fixed income allocation. Current yield environment analysis
+6. **ELSS**: Best tax-saving fund — compare top 3 and pick one with reasoning
+7. **Sectoral/Thematic**: For aggressive profiles — defense, manufacturing, pharma, or IT fund depending on current sector cycle
 
-For each fund provide: REAL fund name, AMC, actual return estimates, expense ratio, minimum SIP amount.
+For EVERY fund: REAL name (Direct Growth plan), AMC, return estimates (1Y/3Y/5Y), expense ratio, minimum SIP.
+For EVERY fund: include a "guide" object for beginners with step-by-step and platform recommendations.
+"riskLevel": Large Cap/Debt = LOW, Mid Cap/Hybrid = MEDIUM, Small Cap/Sectoral = HIGH.
 
 Return ONLY valid JSON:
 {

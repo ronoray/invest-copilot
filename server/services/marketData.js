@@ -293,16 +293,10 @@ export async function fetchMarketContext(holdings = []) {
 }
 
 /**
- * Anti-hallucination instruction block for AI prompts.
+ * @deprecated Use MARKET_DATA_INSTRUCTION from analystPrompts.js instead.
+ * Kept for backward compatibility — re-exports the new instruction.
  */
-export const MARKET_DATA_ANTI_HALLUCINATION_PROMPT = `
-CRITICAL INSTRUCTIONS:
-- You have been provided REAL-TIME market data above. Use ONLY this data for price references.
-- NEVER say "I don't have access to real-time data" or similar disclaimers.
-- NEVER recommend checking Moneycontrol, NSE website, or any external source.
-- If data for a specific stock is not provided, say "price data not available for [symbol]".
-- Do NOT fabricate or estimate prices. Use ONLY the prices provided above.
-`;
+export { MARKET_DATA_INSTRUCTION as MARKET_DATA_ANTI_HALLUCINATION_PROMPT } from './analystPrompts.js';
 
 // Utility
 function sleep(ms) {

@@ -1,7 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk';
 import prisma from './prisma.js';
 import { buildProfileBrief } from './advancedScreener.js';
-import { fetchMarketContext, MARKET_DATA_ANTI_HALLUCINATION_PROMPT } from './marketData.js';
+import { fetchMarketContext } from './marketData.js';
+import { ANALYST_IDENTITY, MARKET_DATA_INSTRUCTION, buildAccountabilityScorecard } from './analystPrompts.js';
 import logger from './logger.js';
 
 const anthropic = new Anthropic({
@@ -13,6 +14,7 @@ const anthropic = new Anthropic({
  * Signals are actionable: specific symbol, side, quantity, trigger.
  *
  * @param {number} portfolioId
+ * @param {string} extraContext - Additional context (e.g., unfilled signals warning)
  * @returns {Promise<Array>} Created TradeSignal records
  */
 export async function generateTradeSignals(portfolioId, extraContext = '') {
@@ -36,10 +38,10 @@ export async function generateTradeSignals(portfolioId, extraContext = '') {
   });
 
   const targetContext = dailyTarget
-    ? `Today's earning target: ${dailyTarget.aiTarget} INR. Earned so far: ${dailyTarget.earnedActual} INR. Gap: ${dailyTarget.aiTarget - dailyTarget.earnedActual} INR.`
-    : 'No daily target set yet.';
+    ? `Today's earning target: ₹${dailyTarget.aiTarget}. Earned so far: ₹${dailyTarget.earnedActual}. Gap: ₹${(dailyTarget.aiTarget - dailyTarget.earnedActual).toFixed(0)}.`
+    : '';
 
-  // Fetch real market data for AI context
+  // Fetch real market data
   let marketContext = '';
   try {
     marketContext = await fetchMarketContext(portfolio.holdings || []);
@@ -47,24 +49,46 @@ export async function generateTradeSignals(portfolioId, extraContext = '') {
     logger.warn('Could not fetch market context for signal generation:', e.message);
   }
 
-  const prompt = `You are an expert Indian stock market trader. Generate specific, actionable trade signals for this investor.
+  // Build accountability scorecard
+  let scorecard = '';
+  try {
+    scorecard = await buildAccountabilityScorecard(portfolioId);
+  } catch (e) {
+    logger.warn('Could not build scorecard:', e.message);
+  }
+
+  const prompt = `${ANALYST_IDENTITY}
 
 ${marketContext}
-${MARKET_DATA_ANTI_HALLUCINATION_PROMPT}
+${MARKET_DATA_INSTRUCTION}
+
+${scorecard}
 
 ${profileBrief}
 
-Available Cash: ${cash.toLocaleString('en-IN')} INR
+Available Cash: ₹${cash.toLocaleString('en-IN')}
 ${targetContext}
-${extraContext ? '\n' + extraContext : ''}
+${extraContext}
 
-Generate trade signals (BUY and/or SELL) that:
-1. Are realistic and executable on NSE/BSE today
-2. Match the investor's risk profile
-3. For SELL signals: only suggest stocks already in holdings
-4. For BUY signals: consider available cash and suggest quantity affordable within it
-5. Include specific entry price/zone and confidence level
-6. Prioritize signals that help achieve the daily target
+GENERATE TRADE SIGNALS NOW.
+
+Scan the ENTIRE Indian market — Nifty 50, Nifty Next 50, Nifty Midcap 150, Nifty Smallcap 250, and sectoral indices. Don't limit yourself to a handful of popular names. Find the best risk-reward setups across ALL sectors and market caps.
+
+For each signal, provide:
+1. THE THESIS: Why this stock, why now? What's the catalyst? (earnings beat, sector rotation, technical breakout, policy tailwind, valuation gap)
+2. THE TRADE: Exact entry, target, stop-loss. Risk-reward ratio must be at least 2:1
+3. THE INVALIDATION: What kills this trade? At what price/event do you admit you're wrong?
+4. POSITION SIZING: Quantity based on available cash and risk profile — don't over-concentrate
+
+${scorecard ? 'IMPORTANT: Review your previous calls above. If any call went wrong, factor that into your new recommendations. If a stock you previously recommended is still a good setup, you can re-recommend with updated levels. Own your track record.' : ''}
+
+Rules:
+- Mix of BUY and SELL signals as the market dictates
+- SELL signals: ONLY for stocks already in holdings. If a holding has a broken thesis, say EXIT
+- BUY signals: Must be affordable within available cash. Calculate quantity at current market price
+- Be BOLD but DISCIPLINED: high conviction calls with defined risk
+- Confidence 80+ = "I'm putting my reputation on this", 60-79 = "Good setup, worth the risk", below 60 = don't bother including it
+- If the market setup is genuinely bad today (gap down, global crisis), it's OK to return fewer signals or mostly SELL/EXIT signals. Don't force trades
 
 Respond in this EXACT JSON format (no markdown, no extra text):
 {
@@ -78,25 +102,25 @@ Respond in this EXACT JSON format (no markdown, no extra text):
       "triggerPrice": null,
       "triggerLow": null,
       "triggerHigh": null,
-      "confidence": 75,
-      "rationale": "Brief reason for this signal"
+      "confidence": 85,
+      "rationale": "THESIS: [why]. CATALYST: [what triggers]. R:R 2.5:1. Stop at ₹X invalidates if [condition]."
     }
   ]
 }
 
-Rules:
-- Maximum 5 signals total (mix of BUY and SELL as appropriate)
-- triggerType can be MARKET (execute now), LIMIT (at specific price), or ZONE (between triggerLow and triggerHigh)
-- For MARKET orders, triggerPrice/triggerLow/triggerHigh should be null
-- For LIMIT orders, set triggerPrice
-- For ZONE orders, set triggerLow and triggerHigh
-- confidence is 0-100 (how confident you are in this signal)
-- If no good signals exist, return empty array`;
+Technical notes:
+- Maximum 5 signals (quality over quantity)
+- triggerType: MARKET (execute now), LIMIT (at specific price), ZONE (between triggerLow and triggerHigh)
+- MARKET orders: triggerPrice/triggerLow/triggerHigh = null
+- LIMIT orders: set triggerPrice
+- ZONE orders: set triggerLow and triggerHigh
+- confidence: 0-100 (minimum 60 to be worth including)
+- If genuinely no good setups exist today, return empty array — never force a bad trade`;
 
   try {
     const message = await anthropic.messages.create({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 1000,
+      max_tokens: 2000,
       messages: [{ role: 'user', content: prompt }],
     });
 
@@ -112,7 +136,6 @@ Rules:
     const expiresAt = new Date();
     expiresAt.setUTCHours(10, 0, 0, 0);
     if (expiresAt <= new Date()) {
-      // If already past 3:30 PM IST, expire tomorrow
       expiresAt.setDate(expiresAt.getDate() + 1);
     }
 

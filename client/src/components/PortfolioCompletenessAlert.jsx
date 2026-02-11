@@ -36,7 +36,7 @@ export default function PortfolioCompletenessAlert({ portfolio, linkToPortfolio 
   return (
     <div className="space-y-2">
       {critical.length > 0 && (
-        <div className="flex items-start gap-2 px-4 py-3 bg-red-50 border border-red-200 rounded-lg text-sm">
+        <div className="flex items-start gap-2 px-4 py-3 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg text-sm">
           <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0 mt-0.5" />
           <div className="flex-1 min-w-0">
             <span className="text-red-800">
@@ -48,7 +48,7 @@ export default function PortfolioCompletenessAlert({ portfolio, linkToPortfolio 
         </div>
       )}
       {critical.length === 0 && recommended.length > 0 && (
-        <div className="flex items-start gap-2 px-4 py-3 bg-amber-50 border border-amber-200 rounded-lg text-sm">
+        <div className="flex items-start gap-2 px-4 py-3 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded-lg text-sm">
           <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
           <div className="flex-1 min-w-0">
             <span className="text-amber-800">

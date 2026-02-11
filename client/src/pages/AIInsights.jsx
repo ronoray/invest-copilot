@@ -128,8 +128,8 @@ export default function AIInsights() {
       <div className="flex items-center justify-center min-h-screen">
         <div className="text-center">
           <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-gray-600">Generating comprehensive AI analysis...</p>
-          <p className="text-gray-500 text-sm mt-2">This may take 20-30 seconds</p>
+          <p className="text-gray-600 dark:text-gray-400">Generating comprehensive AI analysis...</p>
+          <p className="text-gray-500 dark:text-gray-400 text-sm mt-2">This may take 20-30 seconds</p>
         </div>
       </div>
     );
@@ -160,11 +160,11 @@ export default function AIInsights() {
 
       {/* Error State */}
       {error && (
-        <div className="bg-red-50 border-2 border-red-200 rounded-xl p-4 flex items-start gap-3">
+        <div className="bg-red-50 dark:bg-red-900/30 border-2 border-red-200 rounded-xl p-4 flex items-start gap-3">
           <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
           <div>
-            <p className="text-red-900 font-semibold">Error</p>
-            <p className="text-red-700 text-sm">{error}</p>
+            <p className="text-red-900 dark:text-red-200 font-semibold">Error</p>
+            <p className="text-red-700 dark:text-red-300 text-sm">{error}</p>
           </div>
         </div>
       )}
@@ -173,8 +173,8 @@ export default function AIInsights() {
       {sections.length > 0 && (
         <>
           {/* Metadata */}
-          <div className="bg-white rounded-xl p-4 shadow-md border border-slate-200">
-            <div className="flex items-center justify-between text-sm text-gray-600">
+          <div className="bg-white dark:bg-gray-800 rounded-xl p-4 shadow-md border border-slate-200 dark:border-gray-700">
+            <div className="flex items-center justify-between text-sm text-gray-600 dark:text-gray-400">
               <span>
                 📊 {sections.length} sections analyzed
               </span>
@@ -194,7 +194,7 @@ export default function AIInsights() {
             {sections.map((section, index) => (
               <div 
                 key={index}
-                className="bg-white rounded-xl shadow-lg border-2 border-slate-200 overflow-hidden hover:shadow-xl transition-all"
+                className="bg-white dark:bg-gray-800 rounded-xl shadow-lg border-2 border-slate-200 dark:border-gray-700 overflow-hidden hover:shadow-xl transition-all"
               >
                 {/* Section Header */}
                 <div className={`bg-gradient-to-r ${getSectionColor(index)} p-5 text-white`}>
@@ -212,7 +212,7 @@ export default function AIInsights() {
                 {/* Section Content */}
                 <div className="p-6">
                   <div className="prose prose-sm max-w-none">
-                    <div className="text-gray-700 leading-relaxed space-y-3">
+                    <div className="text-gray-700 dark:text-gray-300 leading-relaxed space-y-3">
                       {section.content.map((line, lineIndex) => {
                         // Format lines with bullet points
                         if (line.trim().startsWith('-') || line.trim().startsWith('•')) {
@@ -244,10 +244,10 @@ export default function AIInsights() {
 
       {/* Empty State */}
       {!analysis && !loading && !error && (
-        <div className="bg-gradient-to-br from-slate-50 to-slate-100 rounded-xl p-12 text-center border-2 border-slate-200 shadow-lg">
-          <Brain className="w-16 h-16 text-slate-300 mx-auto mb-4" />
-          <p className="text-slate-700 text-lg font-semibold mb-2">No analysis yet</p>
-          <p className="text-slate-500 text-sm mb-5">
+        <div className="bg-gradient-to-br from-slate-50 to-slate-100 dark:from-gray-800 dark:to-gray-900 rounded-xl p-12 text-center border-2 border-slate-200 dark:border-gray-700 shadow-lg">
+          <Brain className="w-16 h-16 text-slate-300 dark:text-gray-600 mx-auto mb-4" />
+          <p className="text-slate-700 dark:text-gray-300 text-lg font-semibold mb-2">No analysis yet</p>
+          <p className="text-slate-500 dark:text-gray-400 text-sm mb-5">
             Generate a comprehensive AI analysis covering 10 key areas of your portfolio
           </p>
           <button 
@@ -260,15 +260,15 @@ export default function AIInsights() {
       )}
 
       {/* Info Footer */}
-      <div className="bg-blue-50 border-2 border-blue-200 rounded-xl p-4 text-sm">
-        <p className="text-blue-900">
+      <div className="bg-blue-50 dark:bg-blue-900/30 border-2 border-blue-200 dark:border-blue-800 rounded-xl p-4 text-sm">
+        <p className="text-blue-900 dark:text-blue-200">
           <strong className="font-semibold">📅 Auto-Analysis:</strong> Comprehensive analyses are generated automatically via Telegram at 9:00 AM, 6:00 PM, and 9:00 PM IST daily. You can also generate on-demand using the button above.
         </p>
       </div>
 
       {/* Disclaimer */}
-      <div className="bg-amber-50 border-2 border-amber-200 rounded-xl p-4 text-sm">
-        <p className="text-amber-900">
+      <div className="bg-amber-50 dark:bg-yellow-900/30 border-2 border-amber-200 dark:border-amber-800 rounded-xl p-4 text-sm">
+        <p className="text-amber-900 dark:text-amber-200">
           <strong className="font-semibold">⚠️ Important:</strong> AI insights are for informational purposes only. 
           Always conduct your own research and consult a financial advisor before making investment decisions.
         </p>

@@ -140,21 +140,21 @@ export default function Portfolio() {
             onClick={() => setSelectedPortfolioId(p.id)}
             className={`flex-shrink-0 min-w-[180px] max-w-[240px] rounded-xl p-4 border-2 text-left transition-all ${
               p.id === selectedPortfolioId
-                ? 'border-blue-500 bg-blue-50 shadow-md'
-                : 'border-gray-200 bg-white hover:border-gray-300 hover:shadow'
+                ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/30 shadow-md'
+                : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 hover:border-gray-300 dark:hover:border-gray-600 hover:shadow'
             }`}
           >
-            <p className="font-semibold text-gray-900 text-sm truncate">{p.name}</p>
-            <p className="text-xs text-gray-500 truncate">{p.ownerName}</p>
+            <p className="font-semibold text-gray-900 dark:text-gray-100 text-sm truncate">{p.name}</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{p.ownerName}</p>
             <div className="flex items-center gap-2 mt-2">
-              <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 font-medium">
+              <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 font-medium">
                 {BROKER_LABELS[p.broker] || p.broker}
               </span>
-              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${RISK_COLORS[p.riskProfile] || 'bg-gray-100 text-gray-600'}`}>
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${RISK_COLORS[p.riskProfile] || 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400'}`}>
                 {p.riskProfile}
               </span>
             </div>
-            <p className="text-sm font-bold text-gray-900 mt-2">
+            <p className="text-sm font-bold text-gray-900 dark:text-gray-100 mt-2">
               {formatCurrency(p.startingCapital)}
             </p>
           </button>
@@ -162,9 +162,9 @@ export default function Portfolio() {
         {/* Add card */}
         <button
           onClick={() => setShowCreateModal(true)}
-          className="flex-shrink-0 min-w-[120px] rounded-xl p-4 border-2 border-dashed border-gray-300 flex items-center justify-center hover:border-blue-400 hover:bg-blue-50 transition-all"
+          className="flex-shrink-0 min-w-[120px] rounded-xl p-4 border-2 border-dashed border-gray-300 dark:border-gray-600 flex items-center justify-center hover:border-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-all"
         >
-          <Plus className="w-8 h-8 text-gray-400" />
+          <Plus className="w-8 h-8 text-gray-400 dark:text-gray-500" />
         </button>
       </div>
 
@@ -178,24 +178,24 @@ export default function Portfolio() {
 
       {/* Portfolio Settings Strip */}
       {selectedPortfolio && (
-        <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-200">
+        <div className="bg-white dark:bg-gray-800 rounded-xl p-4 shadow-sm border border-gray-200 dark:border-gray-700">
           <div className="flex items-center justify-between flex-wrap gap-3">
             <div className="flex items-center gap-3 flex-wrap">
               <span className={`text-xs px-3 py-1 rounded-full font-semibold ${RISK_COLORS[selectedPortfolio.riskProfile] || ''}`}>
                 {selectedPortfolio.riskProfile}
               </span>
-              <span className="text-sm text-gray-600">
+              <span className="text-sm text-gray-600 dark:text-gray-400">
                 {BROKER_LABELS[selectedPortfolio.broker] || selectedPortfolio.broker}
               </span>
               {selectedPortfolio.investmentGoal && (
-                <span className="text-sm text-gray-600">
+                <span className="text-sm text-gray-600 dark:text-gray-400">
                   {GOAL_LABELS[selectedPortfolio.investmentGoal] || selectedPortfolio.investmentGoal}
                 </span>
               )}
               {selectedPortfolio.investmentExperience && (
-                <span className="text-sm text-gray-600">{selectedPortfolio.investmentExperience}</span>
+                <span className="text-sm text-gray-600 dark:text-gray-400">{selectedPortfolio.investmentExperience}</span>
               )}
-              <span className="text-sm font-semibold text-gray-800">
+              <span className="text-sm font-semibold text-gray-800 dark:text-gray-100">
                 Capital: {formatCurrency(selectedPortfolio.startingCapital)}
               </span>
               <span className="text-sm text-green-700 font-medium">
@@ -205,13 +205,13 @@ export default function Portfolio() {
             <div className="flex gap-2">
               <button
                 onClick={() => setShowEditModal(true)}
-                className="px-3 py-1.5 text-sm text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 flex items-center gap-1.5"
+                className="px-3 py-1.5 text-sm text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center gap-1.5"
               >
                 <Settings size={14} /> Edit
               </button>
               <button
                 onClick={() => setShowCapitalModal(true)}
-                className="px-3 py-1.5 text-sm text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 flex items-center gap-1.5"
+                className="px-3 py-1.5 text-sm text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center gap-1.5"
               >
                 <DollarSign size={14} /> Capital
               </button>
@@ -231,7 +231,7 @@ export default function Portfolio() {
       {loading ? (
         <div className="flex items-center justify-center py-12">
           <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
-          <span className="ml-3 text-gray-600">Loading holdings...</span>
+          <span className="ml-3 text-gray-600 dark:text-gray-400">Loading holdings...</span>
         </div>
       ) : (
         <>
@@ -267,7 +267,7 @@ export default function Portfolio() {
           {/* Holdings Table */}
           {holdings.length === 0 ? (
             <div className="card text-center py-12">
-              <p className="text-gray-500 text-lg mb-4">No holdings in this portfolio</p>
+              <p className="text-gray-500 dark:text-gray-400 text-lg mb-4">No holdings in this portfolio</p>
             </div>
           ) : (
             <div className="card overflow-hidden">
@@ -276,11 +276,11 @@ export default function Portfolio() {
                 {holdings.map((holding) => {
                   const isProfitable = holding.unrealizedPL >= 0;
                   return (
-                    <div key={holding.id} className="bg-gray-50 rounded-lg p-4">
+                    <div key={holding.id} className="bg-gray-50 dark:bg-gray-900 rounded-lg p-4">
                       <div className="flex items-center justify-between mb-3">
                         <div>
-                          <p className="font-semibold text-gray-900">{holding.symbol}</p>
-                          <p className="text-xs text-gray-500">{holding.exchange}</p>
+                          <p className="font-semibold text-gray-900 dark:text-gray-100">{holding.symbol}</p>
+                          <p className="text-xs text-gray-500 dark:text-gray-400">{holding.exchange}</p>
                         </div>
                         <div className={`text-right ${isProfitable ? 'text-green-600' : 'text-red-600'}`}>
                           <p className="font-semibold">{isProfitable ? '+' : ''}{formatCurrency(holding.unrealizedPL)}</p>
@@ -289,20 +289,20 @@ export default function Portfolio() {
                       </div>
                       <div className="grid grid-cols-2 gap-2 text-sm">
                         <div>
-                          <p className="text-gray-500 text-xs">Qty</p>
-                          <p className="font-medium text-gray-900">{holding.quantity}</p>
+                          <p className="text-gray-500 dark:text-gray-400 text-xs">Qty</p>
+                          <p className="font-medium text-gray-900 dark:text-gray-100">{holding.quantity}</p>
                         </div>
                         <div>
-                          <p className="text-gray-500 text-xs">Current</p>
-                          <p className="font-medium text-gray-900">{formatCurrency(holding.currentPrice)}</p>
+                          <p className="text-gray-500 dark:text-gray-400 text-xs">Current</p>
+                          <p className="font-medium text-gray-900 dark:text-gray-100">{formatCurrency(holding.currentPrice)}</p>
                         </div>
                         <div>
-                          <p className="text-gray-500 text-xs">Invested</p>
-                          <p className="font-medium text-gray-900">{formatCurrency(holding.investedAmount)}</p>
+                          <p className="text-gray-500 dark:text-gray-400 text-xs">Invested</p>
+                          <p className="font-medium text-gray-900 dark:text-gray-100">{formatCurrency(holding.investedAmount)}</p>
                         </div>
                         <div>
-                          <p className="text-gray-500 text-xs">Value</p>
-                          <p className="font-medium text-gray-900">{formatCurrency(holding.currentValue)}</p>
+                          <p className="text-gray-500 dark:text-gray-400 text-xs">Value</p>
+                          <p className="font-medium text-gray-900 dark:text-gray-100">{formatCurrency(holding.currentValue)}</p>
                         </div>
                       </div>
                     </div>
@@ -312,32 +312,32 @@ export default function Portfolio() {
 
               {/* Desktop Table */}
               <div className="hidden md:block overflow-x-auto">
-                <table className="min-w-full divide-y divide-gray-200">
-                  <thead className="bg-gray-50">
+                <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                  <thead className="bg-gray-50 dark:bg-gray-900">
                     <tr>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Stock</th>
-                      <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Qty</th>
-                      <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Avg Price</th>
-                      <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Current</th>
-                      <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Invested</th>
-                      <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Value</th>
-                      <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">P&L</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Stock</th>
+                      <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Qty</th>
+                      <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Avg Price</th>
+                      <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Current</th>
+                      <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Invested</th>
+                      <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Value</th>
+                      <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">P&L</th>
                     </tr>
                   </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
+                  <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                     {holdings.map((holding) => {
                       const isProfitable = holding.unrealizedPL >= 0;
                       return (
-                        <tr key={holding.id} className="hover:bg-gray-50">
+                        <tr key={holding.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
                           <td className="px-6 py-4 whitespace-nowrap">
-                            <div className="text-sm font-medium text-gray-900">{holding.symbol}</div>
-                            <div className="text-sm text-gray-500">{holding.exchange}</div>
+                            <div className="text-sm font-medium text-gray-900 dark:text-gray-100">{holding.symbol}</div>
+                            <div className="text-sm text-gray-500 dark:text-gray-400">{holding.exchange}</div>
                           </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-right text-sm text-gray-900">{holding.quantity}</td>
-                          <td className="px-6 py-4 whitespace-nowrap text-right text-sm text-gray-900">{formatCurrency(holding.avgPrice)}</td>
-                          <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium text-gray-900">{formatCurrency(holding.currentPrice)}</td>
-                          <td className="px-6 py-4 whitespace-nowrap text-right text-sm text-gray-900">{formatCurrency(holding.investedAmount)}</td>
-                          <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium text-gray-900">{formatCurrency(holding.currentValue)}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-right text-sm text-gray-900 dark:text-gray-100">{holding.quantity}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-right text-sm text-gray-900 dark:text-gray-100">{formatCurrency(holding.avgPrice)}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium text-gray-900 dark:text-gray-100">{formatCurrency(holding.currentPrice)}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-right text-sm text-gray-900 dark:text-gray-100">{formatCurrency(holding.investedAmount)}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium text-gray-900 dark:text-gray-100">{formatCurrency(holding.currentValue)}</td>
                           <td className="px-6 py-4 whitespace-nowrap text-right text-sm">
                             <div className={isProfitable ? 'text-green-600' : 'text-red-600'}>
                               <div className="font-medium">{isProfitable ? '+' : ''}{formatCurrency(holding.unrealizedPL)}</div>

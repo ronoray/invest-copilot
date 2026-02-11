@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { LogIn } from 'lucide-react';
+import { useTheme } from '../context/ThemeContext';
+import { LogIn, Sun, Moon } from 'lucide-react';
 
 const Login = () => {
   const [email, setEmail] = useState('');
@@ -8,6 +9,7 @@ const Login = () => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const { login } = useAuth();
+  const { theme, toggleTheme } = useTheme();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -23,17 +25,26 @@ const Login = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center px-4">
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800 flex items-center justify-center px-4 relative">
+      {/* Theme Toggle */}
+      <button
+        onClick={toggleTheme}
+        className="absolute top-4 right-4 p-2 rounded-lg bg-white dark:bg-gray-800 shadow-md hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors border border-gray-200 dark:border-gray-700"
+        title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+      >
+        {theme === 'dark' ? <Sun size={18} className="text-yellow-400" /> : <Moon size={18} className="text-gray-600 dark:text-gray-400" />}
+      </button>
+
       <div className="max-w-md w-full">
         {/* Logo and Title */}
         <div className="text-center mb-8">
           <div className="text-5xl mb-4">📈</div>
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">Investment Co-Pilot</h1>
-          <p className="text-gray-600">Sign in to manage your investments</p>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100 mb-2">Investment Co-Pilot</h1>
+          <p className="text-gray-600 dark:text-gray-400">Sign in to manage your investments</p>
         </div>
 
         {/* Login Form */}
-        <div className="bg-white rounded-2xl shadow-xl p-8">
+        <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8">
           <form onSubmit={handleSubmit} className="space-y-6">
             {/* Error Message */}
             {error && (
@@ -44,7 +55,7 @@ const Login = () => {
 
             {/* Email Input */}
             <div>
-              <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-2">
+              <label htmlFor="email" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                 Email
               </label>
               <input
@@ -53,14 +64,14 @@ const Login = () => {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
                 placeholder="you@example.com"
               />
             </div>
 
             {/* Password Input */}
             <div>
-              <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-2">
+              <label htmlFor="password" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                 Password
               </label>
               <input
@@ -69,7 +80,7 @@ const Login = () => {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
                 placeholder="Enter your password"
               />
             </div>
@@ -97,7 +108,7 @@ const Login = () => {
         </div>
 
         {/* Footer */}
-        <div className="text-center mt-6 text-sm text-gray-600">
+        <div className="text-center mt-6 text-sm text-gray-600 dark:text-gray-400">
           <p>© 2026 Investment Co-Pilot. All rights reserved.</p>
         </div>
       </div>

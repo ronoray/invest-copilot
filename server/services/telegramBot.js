@@ -194,6 +194,35 @@ async function handleExecuteSignal(botInstance, query, signalId) {
       price = parseFloat(signal.triggerLow);
     }
 
+    // Validate LIMIT price against live market price (reject if >20% deviation)
+    if (orderType === 'LIMIT' && price > 0) {
+      try {
+        const liveData = await getCurrentPrice(signal.symbol, signal.exchange);
+        const currentPrice = liveData?.price || liveData?.lastPrice;
+        if (currentPrice && currentPrice > 0) {
+          const deviation = Math.abs(price - currentPrice) / currentPrice;
+          if (deviation > 0.20) {
+            logger.warn(`Signal #${signalId} price validation failed: signal=${price}, market=${currentPrice}, deviation=${(deviation * 100).toFixed(1)}%`);
+            await botInstance.editMessageReplyMarkup(
+              { inline_keyboard: [
+                [{ text: '📊 Place as MARKET order', callback_data: `sig_mkt_${signalId}` }],
+                [{ text: '🚫 Dismiss', callback_data: `sig_dismiss_${signalId}` }]
+              ] },
+              { chat_id: chatId, message_id: messageId }
+            );
+            await botInstance.sendMessage(chatId,
+              `⚠️ *Price Validation Failed*\n\nSignal price: ${formatPrice(price)}\nCurrent market price: ${formatPrice(currentPrice)}\nDeviation: ${(deviation * 100).toFixed(1)}%\n\n_The signal price is too far from the current market price. This could lead to order rejection by the exchange._`,
+              { parse_mode: 'Markdown' }
+            );
+            return;
+          }
+        }
+      } catch (priceErr) {
+        logger.warn(`Could not validate price for signal #${signalId}: ${priceErr.message}`);
+        // Continue with order — better to try than to block on price fetch failure
+      }
+    }
+
     const orderParams = {
       symbol: signal.symbol,
       exchange: `${signal.exchange}_EQ`,
@@ -260,6 +289,92 @@ async function handleExecuteSignal(botInstance, query, signalId) {
 
     const errorMsg = error.message || 'Unknown error';
     await botInstance.sendMessage(chatId, `❌ *Order Failed*\nSignal #${signalId}: ${errorMsg}`, { parse_mode: 'Markdown' });
+  }
+}
+
+// Handle "Place as MARKET order" fallback after price validation failure
+async function handleExecuteMarketFallback(botInstance, query, signalId) {
+  const chatId = query.message.chat.id;
+  const messageId = query.message.message_id;
+
+  try {
+    const signal = await prisma.tradeSignal.findUnique({
+      where: { id: signalId },
+      include: {
+        portfolio: {
+          include: {
+            user: {
+              include: { upstoxIntegration: true }
+            }
+          }
+        }
+      }
+    });
+
+    if (!signal || signal.status === 'EXECUTED' || signal.status === 'DISMISSED' || signal.status === 'EXPIRED') {
+      await botInstance.answerCallbackQuery(query.id, { text: 'Signal no longer available' });
+      return;
+    }
+
+    const userId = signal.portfolio?.user?.id;
+    const upstox = signal.portfolio?.user?.upstoxIntegration;
+
+    if (!upstox || !upstox.isConnected || !upstox.accessToken) {
+      await botInstance.answerCallbackQuery(query.id, { text: 'Upstox not connected' });
+      return;
+    }
+
+    await botInstance.answerCallbackQuery(query.id, { text: 'Placing MARKET order...' });
+    await botInstance.editMessageReplyMarkup(
+      { inline_keyboard: [[{ text: '⏳ Placing MARKET order...', callback_data: 'noop' }]] },
+      { chat_id: chatId, message_id: messageId }
+    );
+
+    const orderParams = {
+      symbol: signal.symbol,
+      exchange: `${signal.exchange}_EQ`,
+      transactionType: signal.side,
+      orderType: 'MARKET',
+      quantity: signal.quantity,
+      price: 0,
+      triggerPrice: 0,
+      portfolioId: signal.portfolioId
+    };
+
+    logger.info(`Executing signal #${signalId} as MARKET order (fallback):`, orderParams);
+
+    const result = await placeOrder(userId, orderParams);
+
+    await prisma.tradeSignal.update({
+      where: { id: signalId },
+      data: { status: 'EXECUTED', upstoxOrderId: result.dbOrderId }
+    });
+
+    await prisma.signalAck.create({
+      data: {
+        signalId,
+        action: 'EXECUTE',
+        note: `MARKET order (price fallback) ${result.orderId} placed via Telegram by ${query.from.first_name || query.from.id}`
+      }
+    });
+
+    try {
+      await botInstance.editMessageReplyMarkup(
+        { inline_keyboard: [[{ text: `🚀 MARKET Executed — ${result.orderId}`, callback_data: 'noop' }]] },
+        { chat_id: chatId, message_id: messageId }
+      );
+    } catch (editErr) {
+      logger.warn('Could not edit signal message after market execute:', editErr.message);
+    }
+
+    await botInstance.sendMessage(chatId,
+      `🚀 *MARKET Order Placed!*\n${signal.side} ${signal.quantity}x ${signal.symbol}\nOrder ID: \`${result.orderId}\``,
+      { parse_mode: 'Markdown' }
+    );
+  } catch (error) {
+    logger.error(`Failed to execute MARKET fallback for signal #${signalId}:`, error);
+    const errorMsg = error.message || 'Unknown error';
+    await botInstance.sendMessage(chatId, `❌ *MARKET Order Failed*\nSignal #${signalId}: ${errorMsg}`, { parse_mode: 'Markdown' });
   }
 }
 
@@ -777,6 +892,12 @@ Use /mute to disable all alerts`;
         // Handle Execute action separately (places Upstox order)
         if (action === 'exec') {
           await handleExecuteSignal(botInstance, query, signalId);
+          return;
+        }
+
+        // Handle "Place as MARKET order" (after price validation failure)
+        if (action === 'mkt') {
+          await handleExecuteMarketFallback(botInstance, query, signalId);
           return;
         }
 

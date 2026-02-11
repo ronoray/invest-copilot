@@ -176,7 +176,7 @@ export default function YourPlan() {
       <div className="flex items-center justify-center min-h-screen">
         <div className="text-center">
           <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-gray-600">Building your investment plan...</p>
+          <p className="text-gray-600 dark:text-gray-400">Building your investment plan...</p>
         </div>
       </div>
     );
@@ -184,9 +184,9 @@ export default function YourPlan() {
 
   if (error && !plan) {
     return (
-      <div className="bg-white rounded-xl p-12 text-center">
+      <div className="bg-white dark:bg-gray-800 rounded-xl p-12 text-center">
         <AlertCircle className="w-16 h-16 text-red-500 mx-auto mb-4" />
-        <p className="text-gray-600 mb-4">{error}</p>
+        <p className="text-gray-600 dark:text-gray-400 mb-4">{error}</p>
         <button 
           onClick={loadPlan}
           className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
@@ -259,7 +259,7 @@ export default function YourPlan() {
             <select
               value={selectedPortfolioId || ''}
               onChange={handlePortfolioChange}
-              className="w-full md:w-auto px-4 py-2 bg-white text-gray-900 rounded-lg font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-400"
+              className="w-full md:w-auto px-4 py-2 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-lg font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-400"
             >
               {portfolios.map(p => (
                 <option key={p.id} value={p.id}>
@@ -281,33 +281,33 @@ export default function YourPlan() {
 
       {/* Money Snapshot */}
       {portfolio && (
-        <div className="bg-white rounded-xl p-6 shadow-md border border-gray-200">
-          <h2 className="text-xl font-semibold mb-4 text-gray-800 flex items-center gap-2">
+        <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-md border border-gray-200 dark:border-gray-700">
+          <h2 className="text-xl font-semibold mb-4 text-gray-800 dark:text-gray-100 flex items-center gap-2">
             <DollarSign className="w-6 h-6 text-green-600" />
             Your Money Snapshot
           </h2>
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-            <div className="bg-blue-50 rounded-lg p-4">
-              <p className="text-sm text-gray-600 mb-1">Starting Capital</p>
+            <div className="bg-blue-50 dark:bg-blue-900/30 rounded-lg p-4">
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Starting Capital</p>
               <p className="text-lg sm:text-2xl font-bold text-blue-900">
                 ₹{portfolio.startingCapital?.toLocaleString('en-IN')}
               </p>
             </div>
-            <div className="bg-purple-50 rounded-lg p-4">
-              <p className="text-sm text-gray-600 mb-1">Currently Invested</p>
+            <div className="bg-purple-50 dark:bg-purple-900/30 rounded-lg p-4">
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Currently Invested</p>
               <p className="text-lg sm:text-2xl font-bold text-purple-900">
                 ₹{portfolio.totalInvested?.toLocaleString('en-IN')}
               </p>
             </div>
-            <div className="bg-green-50 rounded-lg p-4">
-              <p className="text-sm text-gray-600 mb-1">Available Cash</p>
+            <div className="bg-green-50 dark:bg-green-900/30 rounded-lg p-4">
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Available Cash</p>
               <p className="text-lg sm:text-2xl font-bold text-green-900">
                 ₹{portfolio.availableCash?.toLocaleString('en-IN')}
               </p>
             </div>
-            <div className="bg-yellow-50 rounded-lg p-4">
-              <p className="text-sm text-gray-600 mb-1">Total P&L</p>
+            <div className="bg-yellow-50 dark:bg-yellow-900/30 rounded-lg p-4">
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Total P&L</p>
               <p className={`text-lg sm:text-2xl font-bold ${portfolio.totalPL >= 0 ? 'text-green-900' : 'text-red-900'}`}>
                 {portfolio.totalPL >= 0 ? '+' : ''}₹{portfolio.totalPL?.toLocaleString('en-IN')}
               </p>
@@ -319,7 +319,7 @@ export default function YourPlan() {
 
           {/* Reinvestment Section */}
           {reinvestment && (
-            <div className={`p-4 rounded-lg ${reinvestment.shouldReinvest ? 'bg-green-50 border border-green-200' : 'bg-yellow-50 border border-yellow-200'}`}>
+            <div className={`p-4 rounded-lg ${reinvestment.shouldReinvest ? 'bg-green-50 dark:bg-green-900/30 border border-green-200' : 'bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200'}`}>
               <div className="flex items-start gap-3">
                 {reinvestment.shouldReinvest ? (
                   <CheckCircle className="w-6 h-6 text-green-600 flex-shrink-0 mt-1" />
@@ -330,16 +330,16 @@ export default function YourPlan() {
                   <p className={`font-semibold mb-1 ${reinvestment.shouldReinvest ? 'text-green-900' : 'text-yellow-900'}`}>
                     {reinvestment.shouldReinvest ? 'Ready to Invest!' : 'Save More'}
                   </p>
-                  <p className="text-sm text-gray-700">{reinvestment.reason}</p>
+                  <p className="text-sm text-gray-700 dark:text-gray-300">{reinvestment.reason}</p>
                   {reinvestment.shouldReinvest && (
                     <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
                       <div>
-                        <p className="text-gray-600">Invest Now:</p>
+                        <p className="text-gray-600 dark:text-gray-400">Invest Now:</p>
                         <p className="font-bold text-green-900">₹{reinvestment.recommendedAmount?.toLocaleString('en-IN')}</p>
                       </div>
                       <div>
-                        <p className="text-gray-600">Keep as Buffer:</p>
-                        <p className="font-bold text-gray-900">₹{reinvestment.bufferAmount?.toLocaleString('en-IN')}</p>
+                        <p className="text-gray-600 dark:text-gray-400">Keep as Buffer:</p>
+                        <p className="font-bold text-gray-900 dark:text-gray-100">₹{reinvestment.bufferAmount?.toLocaleString('en-IN')}</p>
                       </div>
                     </div>
                   )}
@@ -354,61 +354,61 @@ export default function YourPlan() {
       {reinvestment?.shouldReinvest && investmentPlan && (
         <>
           <div className="bg-gradient-to-br from-indigo-50 to-purple-50 rounded-xl p-6 shadow-md border border-indigo-200">
-            <h2 className="text-xl font-semibold mb-4 text-gray-800 flex items-center gap-2">
+            <h2 className="text-xl font-semibold mb-4 text-gray-800 dark:text-gray-100 flex items-center gap-2">
               <PieChart className="w-6 h-6 text-indigo-600" />
               Recommended Allocation
             </h2>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-              <div className="bg-white rounded-lg p-5 border-2 border-red-200">
+              <div className="bg-white dark:bg-gray-800 rounded-lg p-5 border-2 border-red-200">
                 <div className="flex items-center gap-2 mb-2">
                   <div className="w-3 h-3 rounded-full bg-red-500"></div>
-                  <p className="font-semibold text-gray-900">High Risk</p>
+                  <p className="font-semibold text-gray-900 dark:text-gray-100">High Risk</p>
                 </div>
                 <p className="text-3xl font-bold text-red-600">
                   ₹{investmentPlan.allocation?.highRisk?.toLocaleString('en-IN')}
                 </p>
-                <p className="text-sm text-gray-600 mt-1">
+                <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
                   {((investmentPlan.allocation?.highRisk / investmentPlan.totalInvestment) * 100).toFixed(0)}% of plan
                 </p>
-                <p className="text-xs text-gray-500 mt-2">Moon or bust - high volatility</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">Moon or bust - high volatility</p>
               </div>
 
-              <div className="bg-white rounded-lg p-5 border-2 border-yellow-200">
+              <div className="bg-white dark:bg-gray-800 rounded-lg p-5 border-2 border-yellow-200">
                 <div className="flex items-center gap-2 mb-2">
                   <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
-                  <p className="font-semibold text-gray-900">Medium Risk</p>
+                  <p className="font-semibold text-gray-900 dark:text-gray-100">Medium Risk</p>
                 </div>
                 <p className="text-3xl font-bold text-yellow-600">
                   ₹{investmentPlan.allocation?.mediumRisk?.toLocaleString('en-IN')}
                 </p>
-                <p className="text-sm text-gray-600 mt-1">
+                <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
                   {((investmentPlan.allocation?.mediumRisk / investmentPlan.totalInvestment) * 100).toFixed(0)}% of plan
                 </p>
-                <p className="text-xs text-gray-500 mt-2">Growth focused - balanced</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">Growth focused - balanced</p>
               </div>
 
-              <div className="bg-white rounded-lg p-5 border-2 border-green-200">
+              <div className="bg-white dark:bg-gray-800 rounded-lg p-5 border-2 border-green-200">
                 <div className="flex items-center gap-2 mb-2">
                   <div className="w-3 h-3 rounded-full bg-green-500"></div>
-                  <p className="font-semibold text-gray-900">Low Risk</p>
+                  <p className="font-semibold text-gray-900 dark:text-gray-100">Low Risk</p>
                 </div>
                 <p className="text-3xl font-bold text-green-600">
                   ₹{investmentPlan.allocation?.lowRisk?.toLocaleString('en-IN')}
                 </p>
-                <p className="text-sm text-gray-600 mt-1">
+                <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
                   {((investmentPlan.allocation?.lowRisk / investmentPlan.totalInvestment) * 100).toFixed(0)}% of plan
                 </p>
-                <p className="text-xs text-gray-500 mt-2">Stable returns - safe bet</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">Stable returns - safe bet</p>
               </div>
             </div>
 
             {/* Expected Outcomes */}
-            <div className="bg-white rounded-lg p-5">
-              <h3 className="font-semibold text-gray-900 mb-3">Expected Outcome (30 days)</h3>
+            <div className="bg-white dark:bg-gray-800 rounded-lg p-5">
+              <h3 className="font-semibold text-gray-900 dark:text-gray-100 mb-3">Expected Outcome (30 days)</h3>
               <div className="space-y-2">
-                <div className="flex justify-between items-center p-3 bg-green-50 rounded">
-                  <span className="text-sm text-gray-700">🚀 Best Case:</span>
+                <div className="flex justify-between items-center p-3 bg-green-50 dark:bg-green-900/30 rounded">
+                  <span className="text-sm text-gray-700 dark:text-gray-300">🚀 Best Case:</span>
                   <div className="text-right">
                     <span className="font-bold text-green-700 text-lg">
                       ₹{investmentPlan.expectedOutcomes?.bestCase?.toLocaleString('en-IN')}
@@ -418,8 +418,8 @@ export default function YourPlan() {
                     </span>
                   </div>
                 </div>
-                <div className="flex justify-between items-center p-3 bg-blue-50 rounded">
-                  <span className="text-sm text-gray-700">📊 Likely Case:</span>
+                <div className="flex justify-between items-center p-3 bg-blue-50 dark:bg-blue-900/30 rounded">
+                  <span className="text-sm text-gray-700 dark:text-gray-300">📊 Likely Case:</span>
                   <div className="text-right">
                     <span className="font-bold text-blue-700 text-lg">
                       ₹{investmentPlan.expectedOutcomes?.likelyCase?.toLocaleString('en-IN')}
@@ -429,8 +429,8 @@ export default function YourPlan() {
                     </span>
                   </div>
                 </div>
-                <div className="flex justify-between items-center p-3 bg-red-50 rounded">
-                  <span className="text-sm text-gray-700">📉 Worst Case:</span>
+                <div className="flex justify-between items-center p-3 bg-red-50 dark:bg-red-900/30 rounded">
+                  <span className="text-sm text-gray-700 dark:text-gray-300">📉 Worst Case:</span>
                   <div className="text-right">
                     <span className="font-bold text-red-700 text-lg">
                       ₹{investmentPlan.expectedOutcomes?.worstCase?.toLocaleString('en-IN')}
@@ -445,11 +445,11 @@ export default function YourPlan() {
           </div>
 
           {/* Specific Stock Recommendations */}
-          <div className="bg-white rounded-xl p-6 shadow-md border border-gray-200">
-            <h2 className="text-xl font-semibold mb-4 text-gray-800">What to Buy Today</h2>
+          <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-md border border-gray-200 dark:border-gray-700">
+            <h2 className="text-xl font-semibold mb-4 text-gray-800 dark:text-gray-100">What to Buy Today</h2>
             <div className="space-y-3">
               {investmentPlan.stocks?.slice(0, 5).map((stock, index) => (
-                <div key={index} className="flex items-center justify-between flex-wrap gap-2 p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
+                <div key={index} className="flex items-center justify-between flex-wrap gap-2 p-4 bg-gray-50 dark:bg-gray-900 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
                   <div className="flex items-center gap-4">
                     <div className={`w-2 h-2 rounded-full ${
                       stock.riskCategory === 'high' ? 'bg-red-500' :
@@ -457,14 +457,14 @@ export default function YourPlan() {
                       'bg-green-500'
                     }`}></div>
                     <div>
-                      <p className="font-bold text-gray-900">{stock.symbol}</p>
-                      <p className="text-sm text-gray-600">₹{stock.price?.toFixed(2)}</p>
+                      <p className="font-bold text-gray-900 dark:text-gray-100">{stock.symbol}</p>
+                      <p className="text-sm text-gray-600 dark:text-gray-400">₹{stock.price?.toFixed(2)}</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
                     <div className="text-right">
                       <p className="font-bold text-indigo-600">₹{stock.suggestedAmount?.toLocaleString('en-IN')}</p>
-                      <p className="text-xs text-gray-500">{stock.riskCategory} risk</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">{stock.riskCategory} risk</p>
                     </div>
                     {selectedPortfolio?.apiEnabled && (
                       <button
@@ -503,40 +503,40 @@ export default function YourPlan() {
       {/* Upstox Order Modal */}
       {orderModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-2xl">
+          <div className="bg-white dark:bg-gray-800 rounded-xl p-6 w-full max-w-md shadow-2xl">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-xl font-bold text-gray-900">Buy via Upstox</h3>
+              <h3 className="text-xl font-bold text-gray-900 dark:text-gray-100">Buy via Upstox</h3>
               <button onClick={() => { setOrderModal(null); setOrderResult(null); }} className="text-gray-400 hover:text-gray-600">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             <div className="space-y-4">
-              <div className="bg-gray-50 rounded-lg p-4">
-                <p className="font-bold text-lg text-gray-900">{orderModal.stock.symbol}</p>
-                <p className="text-gray-600">₹{orderModal.stock.price?.toFixed(2)} per share</p>
+              <div className="bg-gray-50 dark:bg-gray-900 rounded-lg p-4">
+                <p className="font-bold text-lg text-gray-900 dark:text-gray-100">{orderModal.stock.symbol}</p>
+                <p className="text-gray-600 dark:text-gray-400">₹{orderModal.stock.price?.toFixed(2)} per share</p>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Quantity</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Quantity</label>
                 <input
                   type="number"
                   min="1"
                   value={orderQuantity}
                   onChange={(e) => setOrderQuantity(Math.max(1, parseInt(e.target.value) || 1))}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500"
+                  className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500"
                 />
               </div>
 
-              <div className="bg-green-50 rounded-lg p-3 text-sm">
+              <div className="bg-green-50 dark:bg-green-900/30 rounded-lg p-3 text-sm">
                 <div className="flex justify-between">
-                  <span className="text-gray-600">Estimated Cost:</span>
+                  <span className="text-gray-600 dark:text-gray-400">Estimated Cost:</span>
                   <span className="font-bold text-green-700">₹{(orderQuantity * (orderModal.stock.price || 0)).toLocaleString('en-IN')}</span>
                 </div>
               </div>
 
               {orderResult && (
-                <div className={`rounded-lg p-3 text-sm ${orderResult.error ? 'bg-red-50 text-red-700' : 'bg-green-50 text-green-700'}`}>
+                <div className={`rounded-lg p-3 text-sm ${orderResult.error ? 'bg-red-50 dark:bg-red-900/30 text-red-700' : 'bg-green-50 dark:bg-green-900/30 text-green-700'}`}>
                   {orderResult.error ? `Error: ${orderResult.error}` : `Order placed! ID: ${orderResult.orderId}`}
                 </div>
               )}
@@ -544,7 +544,7 @@ export default function YourPlan() {
               <div className="flex gap-3">
                 <button
                   onClick={() => { setOrderModal(null); setOrderResult(null); }}
-                  className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
+                  className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700"
                 >
                   Cancel
                 </button>
@@ -569,9 +569,9 @@ export default function YourPlan() {
       {/* Screenshot Upload Modal */}
       {showScreenshotModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl p-6 w-full max-w-lg shadow-2xl max-h-[90vh] overflow-y-auto">
+          <div className="bg-white dark:bg-gray-800 rounded-xl p-6 w-full max-w-lg shadow-2xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-xl font-bold text-gray-900">Upload Trade Screenshot</h3>
+              <h3 className="text-xl font-bold text-gray-900 dark:text-gray-100">Upload Trade Screenshot</h3>
               <button onClick={() => { setShowScreenshotModal(false); setScreenshotFile(null); setScreenshotPreview(null); setScreenshotResult(null); }} className="text-gray-400 hover:text-gray-600">
                 <X className="w-5 h-5" />
               </button>
@@ -581,14 +581,14 @@ export default function YourPlan() {
               {/* File input */}
               <div
                 onClick={() => fileInputRef.current?.click()}
-                className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition-colors"
+                className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-8 text-center cursor-pointer hover:border-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-colors"
               >
                 {screenshotPreview ? (
                   <img src={screenshotPreview} alt="Preview" className="max-h-48 mx-auto rounded-lg" />
                 ) : (
                   <>
                     <Upload className="w-10 h-10 mx-auto text-gray-400 mb-3" />
-                    <p className="text-gray-600">Click to upload screenshot</p>
+                    <p className="text-gray-600 dark:text-gray-400">Click to upload screenshot</p>
                     <p className="text-xs text-gray-400 mt-1">JPEG, PNG, WebP (max 10MB)</p>
                   </>
                 )}
@@ -625,20 +625,20 @@ export default function YourPlan() {
               {/* Results — editable review */}
               {screenshotResult && !screenshotResult.error && (
                 <div className="space-y-3">
-                  <div className="bg-green-50 rounded-lg p-4">
+                  <div className="bg-green-50 dark:bg-green-900/30 rounded-lg p-4">
                     <p className="font-semibold text-green-800 mb-1">Review Extracted Trade(s)</p>
-                    <p className="text-xs text-gray-500 mb-3">
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
                       AI confidence: {Math.round((screenshotResult.confidence || 0) * 100)}%. Edit any incorrect values before confirming.
                     </p>
 
                     {editedTrades.map((t, i) => (
-                      <div key={i} className="bg-white rounded-lg p-4 mb-3 border border-green-200 space-y-3">
+                      <div key={i} className="bg-white dark:bg-gray-800 rounded-lg p-4 mb-3 border border-green-200 space-y-3">
                         {editedTrades.length > 1 && (
                           <p className="text-xs font-semibold text-gray-400 uppercase">Trade {i + 1}</p>
                         )}
                         <div className="grid grid-cols-2 gap-3">
                           <div>
-                            <label className="block text-xs font-medium text-gray-500 mb-1">Symbol</label>
+                            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Symbol</label>
                             <input
                               type="text"
                               value={t.symbol || ''}
@@ -647,11 +647,11 @@ export default function YourPlan() {
                                 updated[i] = { ...updated[i], symbol: e.target.value.toUpperCase() };
                                 setEditedTrades(updated);
                               }}
-                              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-semibold focus:ring-2 focus:ring-green-500 focus:border-green-500"
+                              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm font-semibold focus:ring-2 focus:ring-green-500 focus:border-green-500"
                             />
                           </div>
                           <div>
-                            <label className="block text-xs font-medium text-gray-500 mb-1">Type</label>
+                            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Type</label>
                             <select
                               value={t.tradeType || 'BUY'}
                               onChange={(e) => {
@@ -659,14 +659,14 @@ export default function YourPlan() {
                                 updated[i] = { ...updated[i], tradeType: e.target.value };
                                 setEditedTrades(updated);
                               }}
-                              className={`w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-semibold focus:ring-2 focus:ring-green-500 focus:border-green-500 ${t.tradeType === 'BUY' ? 'text-green-700' : 'text-red-700'}`}
+                              className={`w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm font-semibold focus:ring-2 focus:ring-green-500 focus:border-green-500 ${t.tradeType === 'BUY' ? 'text-green-700' : 'text-red-700'}`}
                             >
                               <option value="BUY">BUY</option>
                               <option value="SELL">SELL</option>
                             </select>
                           </div>
                           <div>
-                            <label className="block text-xs font-medium text-gray-500 mb-1">Quantity</label>
+                            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Quantity</label>
                             <input
                               type="number"
                               min="1"
@@ -676,11 +676,11 @@ export default function YourPlan() {
                                 updated[i] = { ...updated[i], quantity: parseInt(e.target.value) || '' };
                                 setEditedTrades(updated);
                               }}
-                              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-semibold focus:ring-2 focus:ring-green-500 focus:border-green-500"
+                              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm font-semibold focus:ring-2 focus:ring-green-500 focus:border-green-500"
                             />
                           </div>
                           <div>
-                            <label className="block text-xs font-medium text-gray-500 mb-1">Price (INR)</label>
+                            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Price (INR)</label>
                             <input
                               type="number"
                               step="0.01"
@@ -691,7 +691,7 @@ export default function YourPlan() {
                                 updated[i] = { ...updated[i], price: parseFloat(e.target.value) || '' };
                                 setEditedTrades(updated);
                               }}
-                              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-semibold focus:ring-2 focus:ring-green-500 focus:border-green-500"
+                              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm font-semibold focus:ring-2 focus:ring-green-500 focus:border-green-500"
                             />
                           </div>
                         </div>
@@ -700,14 +700,14 @@ export default function YourPlan() {
                     ))}
                   </div>
 
-                  <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 text-sm text-yellow-800">
+                  <div className="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 rounded-lg p-3 text-sm text-yellow-800">
                     Please verify the details above are correct. Confirming will add these trades to your portfolio.
                   </div>
 
                   <div className="flex gap-3">
                     <button
                       onClick={() => { setScreenshotResult(null); setScreenshotFile(null); setScreenshotPreview(null); setEditedTrades([]); }}
-                      className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
+                      className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700"
                     >
                       Discard
                     </button>
@@ -723,7 +723,7 @@ export default function YourPlan() {
               )}
 
               {screenshotResult?.error && (
-                <div className="bg-red-50 rounded-lg p-3 text-sm text-red-700">
+                <div className="bg-red-50 dark:bg-red-900/30 rounded-lg p-3 text-sm text-red-700">
                   Error: {screenshotResult.error}
                 </div>
               )}

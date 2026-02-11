@@ -81,7 +81,7 @@ export default function Plan() {
       <div className="flex items-center justify-center min-h-screen">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-600 mx-auto mb-4"></div>
-          <p className="text-gray-600">Loading your investment plan...</p>
+          <p className="text-gray-600 dark:text-gray-400">Loading your investment plan...</p>
         </div>
       </div>
     );
@@ -92,8 +92,8 @@ export default function Plan() {
       <div className="flex items-center justify-center min-h-screen">
         <div className="text-center max-w-md">
           <div className="text-red-500 text-5xl mb-4">⚠️</div>
-          <h2 className="text-xl font-semibold text-gray-800 mb-2">Error Loading Data</h2>
-          <p className="text-gray-600 mb-4">{error}</p>
+          <h2 className="text-xl font-semibold text-gray-800 dark:text-gray-100 mb-2">Error Loading Data</h2>
+          <p className="text-gray-600 dark:text-gray-400 mb-4">{error}</p>
           <button 
             onClick={fetchSnapshot}
             className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
@@ -112,10 +112,10 @@ export default function Plan() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between mb-8">
         <div>
-          <h1 className="text-2xl sm:text-3xl font-bold text-gray-800 flex items-center gap-2">
+          <h1 className="text-2xl sm:text-3xl font-bold text-gray-800 dark:text-gray-100 flex items-center gap-2">
             🎯 Your Investment Plan
           </h1>
-          <p className="text-gray-600 mt-1">Personalized allocation based on your portfolio</p>
+          <p className="text-gray-600 dark:text-gray-400 mt-1">Personalized allocation based on your portfolio</p>
         </div>
         <button
           onClick={() => setShowCapitalModal(true)}
@@ -126,39 +126,39 @@ export default function Plan() {
       </div>
       
       {/* Money Snapshot */}
-      <div className="bg-gradient-to-r from-green-50 to-green-100 rounded-2xl p-8 mb-8 border border-green-200">
-        <h2 className="text-xl font-semibold text-gray-800 mb-6 flex items-center gap-2">
+      <div className="bg-gradient-to-r from-green-50 to-green-100 dark:from-green-900/30 dark:to-green-800/30 rounded-2xl p-8 mb-8 border border-green-200">
+        <h2 className="text-xl font-semibold text-gray-800 dark:text-gray-100 mb-6 flex items-center gap-2">
           💵 Your Money Snapshot
         </h2>
         
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           {/* Starting Capital */}
-          <div className="bg-blue-50 rounded-xl p-6 border border-blue-200">
-            <p className="text-sm text-gray-600 mb-2">Starting Capital</p>
+          <div className="bg-blue-50 dark:bg-blue-900/30 rounded-xl p-6 border border-blue-200">
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">Starting Capital</p>
             <p className="text-xl sm:text-2xl font-bold text-blue-700">
               ₹{snapshot.startingCapital.toLocaleString('en-IN')}
             </p>
           </div>
           
           {/* Currently Invested */}
-          <div className="bg-purple-50 rounded-xl p-6 border border-purple-200">
-            <p className="text-sm text-gray-600 mb-2">Currently Invested</p>
+          <div className="bg-purple-50 dark:bg-purple-900/30 rounded-xl p-6 border border-purple-200">
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">Currently Invested</p>
             <p className="text-xl sm:text-2xl font-bold text-purple-700">
               ₹{snapshot.currentlyInvested.toLocaleString('en-IN')}
             </p>
           </div>
           
           {/* Available Cash */}
-          <div className="bg-green-50 rounded-xl p-6 border border-green-200">
-            <p className="text-sm text-gray-600 mb-2">Available Cash</p>
+          <div className="bg-green-50 dark:bg-green-900/30 rounded-xl p-6 border border-green-200">
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">Available Cash</p>
             <p className="text-xl sm:text-2xl font-bold text-green-700">
               ₹{snapshot.availableCash.toLocaleString('en-IN')}
             </p>
           </div>
           
           {/* Total P&L */}
-          <div className={`${isProfitable ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'} rounded-xl p-6 border`}>
-            <p className="text-sm text-gray-600 mb-2">Total P&L</p>
+          <div className={`${isProfitable ? 'bg-green-50 dark:bg-green-900/30 border-green-200' : 'bg-red-50 dark:bg-red-900/30 border-red-200'} rounded-xl p-6 border`}>
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">Total P&L</p>
             <p className={`text-2xl font-bold ${isProfitable ? 'text-green-700' : 'text-red-700'}`}>
               {isProfitable ? '📈' : '📉'} ₹{Math.abs(snapshot.totalPnL).toLocaleString('en-IN')}
             </p>
@@ -171,7 +171,7 @@ export default function Plan() {
       
       {/* Advice Section */}
       {snapshot.currentlyInvested === 0 ? (
-        <div className="bg-yellow-50 border-l-4 border-yellow-400 p-6 rounded-lg mb-8">
+        <div className="bg-yellow-50 dark:bg-yellow-900/30 border-l-4 border-yellow-400 p-6 rounded-lg mb-8">
           <div className="flex items-start gap-3">
             <span className="text-3xl">💡</span>
             <div>
@@ -184,7 +184,7 @@ export default function Plan() {
           </div>
         </div>
       ) : snapshot.availableCash < snapshot.startingCapital * 0.1 ? (
-        <div className="bg-blue-50 border-l-4 border-blue-400 p-6 rounded-lg mb-8">
+        <div className="bg-blue-50 dark:bg-blue-900/30 border-l-4 border-blue-400 p-6 rounded-lg mb-8">
           <div className="flex items-start gap-3">
             <span className="text-3xl">📊</span>
             <div>
@@ -197,7 +197,7 @@ export default function Plan() {
           </div>
         </div>
       ) : (
-        <div className="bg-green-50 border-l-4 border-green-400 p-6 rounded-lg mb-8">
+        <div className="bg-green-50 dark:bg-green-900/30 border-l-4 border-green-400 p-6 rounded-lg mb-8">
           <div className="flex items-start gap-3">
             <span className="text-3xl">✅</span>
             <div>
@@ -215,9 +215,9 @@ export default function Plan() {
       {/* Capital Update Modal */}
       {showCapitalModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-2xl p-8 max-w-md w-full mx-4">
-            <h3 className="text-2xl font-bold text-gray-800 mb-4">Update Starting Capital</h3>
-            <p className="text-gray-600 mb-6">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl p-8 max-w-md w-full mx-4">
+            <h3 className="text-2xl font-bold text-gray-800 dark:text-gray-100 mb-4">Update Starting Capital</h3>
+            <p className="text-gray-600 dark:text-gray-400 mb-6">
               Current capital: ₹{snapshot.startingCapital.toLocaleString('en-IN')}
             </p>
             
@@ -226,7 +226,7 @@ export default function Plan() {
               value={newCapital}
               onChange={(e) => setNewCapital(e.target.value)}
               placeholder="Enter new capital amount"
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg mb-6 text-lg"
+              className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg mb-6 text-lg"
               autoFocus
             />
             
@@ -236,7 +236,7 @@ export default function Plan() {
                   setShowCapitalModal(false);
                   setNewCapital('');
                 }}
-                className="flex-1 px-4 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition"
+                className="flex-1 px-4 py-3 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition"
                 disabled={updating}
               >
                 Cancel

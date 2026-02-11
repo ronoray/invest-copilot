@@ -86,25 +86,25 @@ export default function CapitalChangeModal({
       
       {/* Modal */}
       <div className="fixed inset-0 flex items-center justify-center z-50 p-4">
-        <div className="bg-white rounded-xl shadow-2xl max-w-md w-full max-h-[90vh] overflow-y-auto">
+        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-md w-full max-h-[90vh] overflow-y-auto">
           {/* Header */}
-          <div className="flex items-center justify-between p-6 border-b">
+          <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
+              <div className="w-10 h-10 bg-blue-100 dark:bg-blue-900/30 rounded-full flex items-center justify-center">
                 <DollarSign className="w-6 h-6 text-blue-600" />
               </div>
               <div>
-                <h2 className="text-xl font-bold text-gray-900">
+                <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">
                   Update Capital
                 </h2>
-                <p className="text-sm text-gray-600">
+                <p className="text-sm text-gray-600 dark:text-gray-400">
                   {portfolio.name}
                 </p>
               </div>
             </div>
             <button
               onClick={onClose}
-              className="text-gray-400 hover:text-gray-600 transition-colors"
+              className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
             >
               <X className="w-6 h-6" />
             </button>
@@ -113,27 +113,27 @@ export default function CapitalChangeModal({
           {/* Body */}
           <form onSubmit={handleSubmit} className="p-6 space-y-6">
             {/* Current Capital */}
-            <div className="bg-gray-50 rounded-lg p-4">
-              <p className="text-sm text-gray-600 mb-1">Current Capital</p>
-              <p className="text-2xl font-bold text-gray-900">
+            <div className="bg-gray-50 dark:bg-gray-900 rounded-lg p-4">
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Current Capital</p>
+              <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">
                 ₹{currentCapital.toLocaleString('en-IN')}
               </p>
             </div>
             
             {/* New Capital Input */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                 New Capital Amount *
               </label>
               <div className="relative">
-                <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500 font-semibold">
+                <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500 dark:text-gray-400 font-semibold">
                   ₹
                 </span>
                 <input
                   type="number"
                   value={newCapital}
                   onChange={(e) => setNewCapital(parseFloat(e.target.value) || 0)}
-                  className="w-full pl-8 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="w-full pl-8 pr-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   placeholder="10000"
                   min="1000"
                   max="10000000"
@@ -141,7 +141,7 @@ export default function CapitalChangeModal({
                   required
                 />
               </div>
-              <p className="text-xs text-gray-500 mt-1">
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                 Min: ₹1,000 • Max: ₹10,00,000
               </p>
             </div>
@@ -149,19 +149,19 @@ export default function CapitalChangeModal({
             {/* Change Preview */}
             {difference !== 0 && (
               <div className={`rounded-lg p-4 ${
-                difference > 0 ? 'bg-green-50' : 'bg-red-50'
+                difference > 0 ? 'bg-green-50 dark:bg-green-900/30' : 'bg-red-50 dark:bg-red-900/30'
               }`}>
                 <div className="flex items-center gap-2 mb-2">
                   <TrendingUp className={`w-5 h-5 ${
                     difference > 0 ? 'text-green-600' : 'text-red-600'
                   }`} />
-                  <p className="font-semibold text-gray-900">
+                  <p className="font-semibold text-gray-900 dark:text-gray-100">
                     {difference > 0 ? 'Increasing' : 'Decreasing'} Capital
                   </p>
                 </div>
                 <div className="grid grid-cols-2 gap-3 text-sm">
                   <div>
-                    <p className="text-gray-600">Change Amount</p>
+                    <p className="text-gray-600 dark:text-gray-400">Change Amount</p>
                     <p className={`font-bold ${
                       difference > 0 ? 'text-green-700' : 'text-red-700'
                     }`}>
@@ -169,7 +169,7 @@ export default function CapitalChangeModal({
                     </p>
                   </div>
                   <div>
-                    <p className="text-gray-600">Percentage</p>
+                    <p className="text-gray-600 dark:text-gray-400">Percentage</p>
                     <p className={`font-bold ${
                       difference > 0 ? 'text-green-700' : 'text-red-700'
                     }`}>
@@ -177,7 +177,7 @@ export default function CapitalChangeModal({
                     </p>
                   </div>
                 </div>
-                <p className="text-xs text-gray-600 mt-3">
+                <p className="text-xs text-gray-600 dark:text-gray-400 mt-3">
                   Available cash will {difference > 0 ? 'increase' : 'decrease'} by ₹{Math.abs(difference).toLocaleString('en-IN')}
                 </p>
               </div>
@@ -185,25 +185,25 @@ export default function CapitalChangeModal({
             
             {/* Reason Input */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                 Reason for Change *
               </label>
               <textarea
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+                className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
                 placeholder="e.g., Added ₹5,000 from salary, Withdrew ₹2,000 for expenses"
                 rows="3"
                 required
               />
-              <p className="text-xs text-gray-500 mt-1">
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                 This will be recorded in capital history
               </p>
             </div>
             
             {/* Error Message */}
             {error && (
-              <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg">
+              <div className="flex items-start gap-2 p-3 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg">
                 <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
                 <p className="text-sm text-red-700">{error}</p>
               </div>
@@ -214,7 +214,7 @@ export default function CapitalChangeModal({
               <button
                 type="button"
                 onClick={onClose}
-                className="flex-1 px-4 py-3 border border-gray-300 text-gray-700 font-semibold rounded-lg hover:bg-gray-50 transition-colors"
+                className="flex-1 px-4 py-3 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 font-semibold rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
                 disabled={loading}
               >
                 Cancel

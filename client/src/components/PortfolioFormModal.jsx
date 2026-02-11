@@ -145,21 +145,21 @@ export default function PortfolioFormModal({ isOpen, onClose, portfolio, onSucce
     <>
       <div className="fixed inset-0 bg-black bg-opacity-50 z-40" onClick={onClose} />
       <div className="fixed inset-0 flex items-center justify-center z-50 p-4">
-        <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
+        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
           {/* Header */}
-          <div className="flex items-center justify-between p-6 border-b sticky top-0 bg-white rounded-t-xl z-10">
+          <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700 sticky top-0 bg-white dark:bg-gray-800 rounded-t-xl z-10">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
+              <div className="w-10 h-10 bg-blue-100 dark:bg-blue-900/30 rounded-full flex items-center justify-center">
                 <Briefcase className="w-6 h-6 text-blue-600" />
               </div>
               <div>
-                <h2 className="text-xl font-bold text-gray-900">
+                <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">
                   {isEdit ? 'Edit Portfolio' : 'New Portfolio'}
                 </h2>
-                {isEdit && <p className="text-sm text-gray-600">{portfolio?.name}</p>}
+                {isEdit && <p className="text-sm text-gray-600 dark:text-gray-400">{portfolio?.name}</p>}
               </div>
             </div>
-            <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
               <X className="w-6 h-6" />
             </button>
           </div>
@@ -167,36 +167,36 @@ export default function PortfolioFormModal({ isOpen, onClose, portfolio, onSucce
           <form onSubmit={handleSubmit} className="p-6 space-y-6">
             {/* Identity Section */}
             <div>
-              <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">Identity</h3>
+              <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">Identity</h3>
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Portfolio Name *</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Portfolio Name *</label>
                   <input
                     type="text"
                     value={form.name}
                     onChange={(e) => updateField('name', e.target.value)}
                     placeholder="e.g., Mahua - SBI Securities"
-                    className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     required
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Owner Name *</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Owner Name *</label>
                   <input
                     type="text"
                     value={form.ownerName}
                     onChange={(e) => updateField('ownerName', e.target.value)}
                     placeholder="e.g., Mahua Banerjee"
-                    className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     required
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Broker *</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Broker *</label>
                   <select
                     value={form.broker}
                     onChange={(e) => updateField('broker', e.target.value)}
-                    className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     required
                   >
                     <option value="">Select broker...</option>
@@ -210,11 +210,11 @@ export default function PortfolioFormModal({ isOpen, onClose, portfolio, onSucce
 
             {/* Investment Profile */}
             <div>
-              <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">Investment Profile</h3>
+              <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">Investment Profile</h3>
               <div className="space-y-4">
                 {/* Risk Profile Cards */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Risk Profile</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Risk Profile</label>
                   <div className="grid grid-cols-3 gap-2">
                     {RISK_PROFILES.map(rp => (
                       <button
@@ -223,14 +223,14 @@ export default function PortfolioFormModal({ isOpen, onClose, portfolio, onSucce
                         onClick={() => updateField('riskProfile', rp.value)}
                         className={`p-3 rounded-lg border-2 text-left transition-all ${
                           form.riskProfile === rp.value
-                            ? 'border-blue-500 bg-blue-50'
-                            : 'border-gray-200 hover:border-gray-300'
+                            ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/30'
+                            : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600'
                         }`}
                       >
-                        <p className={`font-semibold text-sm ${form.riskProfile === rp.value ? 'text-blue-700' : 'text-gray-900'}`}>
+                        <p className={`font-semibold text-sm ${form.riskProfile === rp.value ? 'text-blue-700' : 'text-gray-900 dark:text-gray-100'}`}>
                           {rp.label}
                         </p>
-                        <p className="text-xs text-gray-500 mt-1 leading-tight">{rp.desc}</p>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 leading-tight">{rp.desc}</p>
                       </button>
                     ))}
                   </div>
@@ -238,11 +238,11 @@ export default function PortfolioFormModal({ isOpen, onClose, portfolio, onSucce
 
                 {/* Investment Goal */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Investment Goal</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Investment Goal</label>
                   <select
                     value={form.investmentGoal}
                     onChange={(e) => updateField('investmentGoal', e.target.value)}
-                    className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   >
                     <option value="">Select goal...</option>
                     {GOALS.map(g => (
@@ -253,7 +253,7 @@ export default function PortfolioFormModal({ isOpen, onClose, portfolio, onSucce
 
                 {/* Experience Level */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Experience Level</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Experience Level</label>
                   <div className="flex gap-2">
                     {EXPERIENCE_LEVELS.map(exp => (
                       <button
@@ -262,8 +262,8 @@ export default function PortfolioFormModal({ isOpen, onClose, portfolio, onSucce
                         onClick={() => updateField('investmentExperience', form.investmentExperience === exp.value ? '' : exp.value)}
                         className={`flex-1 py-2 px-3 rounded-full text-sm font-medium border-2 transition-all ${
                           form.investmentExperience === exp.value
-                            ? 'border-blue-500 bg-blue-50 text-blue-700'
-                            : 'border-gray-200 text-gray-600 hover:border-gray-300'
+                            ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/30 text-blue-700'
+                            : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-gray-300 dark:hover:border-gray-600'
                         }`}
                       >
                         {exp.label}
@@ -276,54 +276,54 @@ export default function PortfolioFormModal({ isOpen, onClose, portfolio, onSucce
 
             {/* Financial Details */}
             <div>
-              <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">Financial Details</h3>
+              <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">Financial Details</h3>
               <div className="space-y-4">
                 {!isEdit && (
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Starting Capital *</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Starting Capital *</label>
                     <div className="relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 font-semibold">&#8377;</span>
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 dark:text-gray-400 font-semibold">&#8377;</span>
                       <input
                         type="number"
                         value={form.startingCapital}
                         onChange={(e) => updateField('startingCapital', parseFloat(e.target.value) || 0)}
-                        className="w-full pl-8 pr-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        className="w-full pl-8 pr-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                         min="1000"
                         step="1000"
                         required
                       />
                     </div>
-                    <p className="text-xs text-gray-500 mt-1">Minimum: &#8377;1,000</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Minimum: &#8377;1,000</p>
                   </div>
                 )}
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Monthly Income</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Monthly Income</label>
                     <div className="relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 font-semibold">&#8377;</span>
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 dark:text-gray-400 font-semibold">&#8377;</span>
                       <input
                         type="number"
                         value={form.monthlyIncome}
                         onChange={(e) => updateField('monthlyIncome', e.target.value)}
-                        className="w-full pl-8 pr-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        className="w-full pl-8 pr-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                         placeholder="Optional"
                         min="0"
                       />
                     </div>
-                    <p className="text-xs text-gray-500 mt-1">Helps AI size SIPs</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Helps AI size SIPs</p>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Age</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Age</label>
                     <input
                       type="number"
                       value={form.age}
                       onChange={(e) => updateField('age', e.target.value)}
-                      className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                       placeholder="Optional"
                       min="18"
                       max="100"
                     />
-                    <p className="text-xs text-gray-500 mt-1">Helps calibrate risk</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Helps calibrate risk</p>
                   </div>
                 </div>
               </div>
@@ -331,11 +331,11 @@ export default function PortfolioFormModal({ isOpen, onClose, portfolio, onSucce
 
             {/* Settings */}
             <div>
-              <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">Settings</h3>
+              <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">Settings</h3>
               <div className="space-y-4">
                 {/* Markets */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Markets</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Markets</label>
                   <div className="flex gap-3">
                     {['NSE', 'BSE'].map(market => (
                       <label key={market} className="flex items-center gap-2 cursor-pointer">
@@ -343,9 +343,9 @@ export default function PortfolioFormModal({ isOpen, onClose, portfolio, onSucce
                           type="checkbox"
                           checked={form.markets.includes(market)}
                           onChange={() => toggleMarket(market)}
-                          className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+                          className="w-4 h-4 text-blue-600 rounded border-gray-300 dark:border-gray-600 focus:ring-blue-500"
                         />
-                        <span className="text-sm font-medium text-gray-700">{market}</span>
+                        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">{market}</span>
                       </label>
                     ))}
                   </div>
@@ -354,8 +354,8 @@ export default function PortfolioFormModal({ isOpen, onClose, portfolio, onSucce
                 {/* API Trading */}
                 <label className="flex items-center justify-between cursor-pointer">
                   <div>
-                    <p className="text-sm font-medium text-gray-700">API Trading</p>
-                    <p className="text-xs text-gray-500">Enable automated order placement</p>
+                    <p className="text-sm font-medium text-gray-700 dark:text-gray-300">API Trading</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">Enable automated order placement</p>
                   </div>
                   <div className="relative">
                     <input
@@ -364,17 +364,17 @@ export default function PortfolioFormModal({ isOpen, onClose, portfolio, onSucce
                       onChange={(e) => updateField('apiEnabled', e.target.checked)}
                       className="sr-only peer"
                     />
-                    <div className="w-11 h-6 bg-gray-200 peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                    <div className="w-11 h-6 bg-gray-200 dark:bg-gray-700 peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
                   </div>
                 </label>
 
                 {/* Notes */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Notes</label>
                   <textarea
                     value={form.notes}
                     onChange={(e) => updateField('notes', e.target.value)}
-                    className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+                    className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
                     rows="2"
                     placeholder="Any notes about this portfolio..."
                   />
@@ -384,7 +384,7 @@ export default function PortfolioFormModal({ isOpen, onClose, portfolio, onSucce
 
             {/* Error */}
             {error && (
-              <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg">
+              <div className="flex items-start gap-2 p-3 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg">
                 <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
                 <p className="text-sm text-red-700">{error}</p>
               </div>
@@ -395,7 +395,7 @@ export default function PortfolioFormModal({ isOpen, onClose, portfolio, onSucce
               <button
                 type="button"
                 onClick={onClose}
-                className="flex-1 px-4 py-3 border border-gray-300 text-gray-700 font-semibold rounded-lg hover:bg-gray-50 transition-colors"
+                className="flex-1 px-4 py-3 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 font-semibold rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
                 disabled={loading}
               >
                 Cancel

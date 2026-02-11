@@ -115,15 +115,15 @@ export default function Dashboard() {
   };
 
   const plColor = (val) => {
-    if (val == null) return 'text-gray-600';
+    if (val == null) return 'text-gray-600 dark:text-gray-400';
     return Number(val) >= 0 ? 'text-green-600' : 'text-red-600';
   };
 
   const plBg = (val) => {
-    if (val == null) return 'from-gray-50 to-gray-100 border-gray-200';
+    if (val == null) return 'from-gray-50 to-gray-100 border-gray-200 dark:from-gray-900 dark:to-gray-700 dark:border-gray-700';
     return Number(val) >= 0
-      ? 'from-green-50 to-green-100 border-green-200'
-      : 'from-red-50 to-red-100 border-red-200';
+      ? 'from-green-50 to-green-100 border-green-200 dark:from-green-900/30 dark:to-green-800/30 dark:border-green-700'
+      : 'from-red-50 to-red-100 border-red-200 dark:from-red-900/30 dark:to-red-800/30 dark:border-red-700';
   };
 
   const market = getMarketStatus();
@@ -147,7 +147,7 @@ export default function Dashboard() {
           <select
             value={selectedPortfolioId}
             onChange={(e) => setSelectedPortfolioId(e.target.value === 'all' ? 'all' : parseInt(e.target.value))}
-            className="px-4 py-2 bg-white text-gray-900 rounded-lg font-semibold focus:outline-none focus:ring-2 focus:ring-blue-400"
+            className="px-4 py-2 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-lg font-semibold focus:outline-none focus:ring-2 focus:ring-blue-400"
           >
             <option value="all">All Portfolios</option>
             {portfolios.map(p => (
@@ -164,19 +164,19 @@ export default function Dashboard() {
         const brokerLabel = (sp.broker || '').replace(/_/g, ' ');
         return (
           <>
-            <div className="bg-white rounded-xl px-4 py-3 shadow-sm border border-gray-200 flex items-center gap-3 flex-wrap text-sm">
-              <span className="font-semibold text-gray-900">{sp.ownerName}</span>
+            <div className="bg-white dark:bg-gray-800 rounded-xl px-4 py-3 shadow-sm border border-gray-200 dark:border-gray-700 flex items-center gap-3 flex-wrap text-sm">
+              <span className="font-semibold text-gray-900 dark:text-gray-100">{sp.ownerName}</span>
               <span className="text-gray-400">|</span>
-              <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 font-medium text-xs">{brokerLabel}</span>
+              <span className="px-2 py-0.5 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 font-medium text-xs">{brokerLabel}</span>
               <span className={`px-2 py-0.5 rounded-full font-medium text-xs ${
                 sp.riskProfile === 'AGGRESSIVE' ? 'bg-red-100 text-red-700' :
                 sp.riskProfile === 'CONSERVATIVE' ? 'bg-green-100 text-green-700' :
                 'bg-blue-100 text-blue-700'
               }`}>{sp.riskProfile}</span>
               {sp.investmentGoal && (
-                <span className="text-gray-500">{sp.investmentGoal.replace(/_/g, ' ')}</span>
+                <span className="text-gray-500 dark:text-gray-400">{sp.investmentGoal.replace(/_/g, ' ')}</span>
               )}
-              <span className="ml-auto font-semibold text-gray-800">
+              <span className="ml-auto font-semibold text-gray-800 dark:text-gray-100">
                 Capital: &#8377;{sp.startingCapital?.toLocaleString('en-IN')}
               </span>
               <span className="text-green-700 font-medium">
@@ -192,7 +192,7 @@ export default function Dashboard() {
       {loading ? (
         <div className="flex items-center justify-center py-12">
           <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
-          <span className="ml-3 text-gray-600">Loading portfolio...</span>
+          <span className="ml-3 text-gray-600 dark:text-gray-400">Loading portfolio...</span>
         </div>
       ) : (
         <>
@@ -205,12 +205,12 @@ export default function Dashboard() {
                   <button
                     key={p.id}
                     onClick={() => setSelectedPortfolioId(p.id)}
-                    className="bg-white rounded-xl p-4 border border-gray-200 hover:border-blue-300 hover:shadow-md transition-all text-left"
+                    className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-200 dark:border-gray-700 hover:border-blue-300 hover:shadow-md transition-all text-left"
                   >
                     <div className="flex items-center justify-between mb-2">
                       <div className="min-w-0 flex-1">
-                        <p className="font-semibold text-gray-900 truncate">{p.ownerName}</p>
-                        <p className="text-xs text-gray-500 truncate">{p.name}</p>
+                        <p className="font-semibold text-gray-900 dark:text-gray-100 truncate">{p.ownerName}</p>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{p.name}</p>
                       </div>
                       <span className={`text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0 ml-2 ${
                         p.riskProfile === 'AGGRESSIVE' ? 'bg-red-100 text-red-700' :
@@ -218,10 +218,10 @@ export default function Dashboard() {
                         'bg-blue-100 text-blue-700'
                       }`}>{p.riskProfile}</span>
                     </div>
-                    <div className="flex items-center gap-2 text-xs text-gray-500">
+                    <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
                       <span>{brokerShort}</span>
                       <span className="text-gray-300">|</span>
-                      <span className="font-semibold text-gray-800">&#8377;{p.startingCapital?.toLocaleString('en-IN')}</span>
+                      <span className="font-semibold text-gray-800 dark:text-gray-100">&#8377;{p.startingCapital?.toLocaleString('en-IN')}</span>
                       <span className="text-green-600 ml-auto">Cash: &#8377;{p.availableCash?.toLocaleString('en-IN')}</span>
                     </div>
                   </button>
@@ -233,7 +233,7 @@ export default function Dashboard() {
           {/* Quick Stats Grid */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {/* Portfolio Value */}
-            <div className={`bg-gradient-to-br from-blue-50 to-blue-100 rounded-xl p-6 border border-blue-200 hover:shadow-lg transition-shadow`}>
+            <div className={`bg-gradient-to-br from-blue-50 to-blue-100 dark:from-blue-900/30 dark:to-blue-800/30 rounded-xl p-6 border border-blue-200 dark:border-blue-700 hover:shadow-lg transition-shadow`}>
               <div className="flex items-center justify-between mb-2">
                 <h3 className="text-sm font-medium text-blue-700">Portfolio Value</h3>
                 <TrendingUp className="w-5 h-5 text-blue-600" />
@@ -261,7 +261,7 @@ export default function Dashboard() {
             </div>
 
             {/* Invested Amount */}
-            <div className="bg-gradient-to-br from-purple-50 to-purple-100 rounded-xl p-6 border border-purple-200 hover:shadow-lg transition-shadow">
+            <div className="bg-gradient-to-br from-purple-50 to-purple-100 dark:from-purple-900/30 dark:to-purple-800/30 rounded-xl p-6 border border-purple-200 dark:border-purple-700 hover:shadow-lg transition-shadow">
               <div className="flex items-center justify-between mb-2">
                 <h3 className="text-sm font-medium text-purple-700">Invested</h3>
                 <CheckCircle className="w-5 h-5 text-purple-600" />
@@ -271,7 +271,7 @@ export default function Dashboard() {
             </div>
 
             {/* Holdings Count */}
-            <div className="bg-gradient-to-br from-amber-50 to-amber-100 rounded-xl p-6 border border-amber-200 hover:shadow-lg transition-shadow">
+            <div className="bg-gradient-to-br from-amber-50 to-amber-100 dark:from-amber-900/30 dark:to-amber-800/30 rounded-xl p-6 border border-amber-200 dark:border-amber-700 hover:shadow-lg transition-shadow">
               <div className="flex items-center justify-between mb-2">
                 <h3 className="text-sm font-medium text-amber-700">Holdings</h3>
                 <CheckCircle className="w-5 h-5 text-amber-600" />
@@ -284,10 +284,10 @@ export default function Dashboard() {
           </div>
 
           {/* Holdings Table */}
-          <div className="bg-white rounded-xl p-6 shadow-md border border-gray-200">
-            <h2 className="text-xl font-semibold mb-4 text-gray-800">Holdings</h2>
+          <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-md border border-gray-200 dark:border-gray-700">
+            <h2 className="text-xl font-semibold mb-4 text-gray-800 dark:text-gray-100">Holdings</h2>
             {holdings.length === 0 ? (
-              <div className="text-center py-8 text-gray-500">
+              <div className="text-center py-8 text-gray-500 dark:text-gray-400">
                 <AlertCircle className="w-12 h-12 mx-auto mb-3 text-gray-300" />
                 <p>No holdings yet. Add your first holding to get started.</p>
                 <button
@@ -302,12 +302,12 @@ export default function Dashboard() {
               {/* Mobile Card View */}
               <div className="md:hidden space-y-3">
                 {holdings.map((h) => (
-                  <div key={h.id} className="bg-gray-50 rounded-lg p-4">
+                  <div key={h.id} className="bg-gray-50 dark:bg-gray-900 rounded-lg p-4">
                     <div className="flex items-center justify-between mb-3">
                       <div>
-                        <p className="font-semibold text-gray-900">{h.symbol}</p>
+                        <p className="font-semibold text-gray-900 dark:text-gray-100">{h.symbol}</p>
                         {selectedPortfolioId === 'all' && h.portfolioName && (
-                          <p className="text-xs text-gray-500">{h.portfolioName}</p>
+                          <p className="text-xs text-gray-500 dark:text-gray-400">{h.portfolioName}</p>
                         )}
                       </div>
                       <div className={`text-right ${plColor(h.unrealizedPL)}`}>
@@ -317,20 +317,20 @@ export default function Dashboard() {
                     </div>
                     <div className="grid grid-cols-2 gap-2 text-sm">
                       <div>
-                        <p className="text-gray-500 text-xs">Qty</p>
-                        <p className="font-medium text-gray-900">{h.quantity}</p>
+                        <p className="text-gray-500 dark:text-gray-400 text-xs">Qty</p>
+                        <p className="font-medium text-gray-900 dark:text-gray-100">{h.quantity}</p>
                       </div>
                       <div>
-                        <p className="text-gray-500 text-xs">Current</p>
-                        <p className="font-medium text-gray-900">₹{Number(h.currentPrice).toFixed(2)}</p>
+                        <p className="text-gray-500 dark:text-gray-400 text-xs">Current</p>
+                        <p className="font-medium text-gray-900 dark:text-gray-100">₹{Number(h.currentPrice).toFixed(2)}</p>
                       </div>
                       <div>
-                        <p className="text-gray-500 text-xs">Invested</p>
-                        <p className="font-medium text-gray-900">{formatCurrency(h.investedAmount)}</p>
+                        <p className="text-gray-500 dark:text-gray-400 text-xs">Invested</p>
+                        <p className="font-medium text-gray-900 dark:text-gray-100">{formatCurrency(h.investedAmount)}</p>
                       </div>
                       <div>
-                        <p className="text-gray-500 text-xs">Value</p>
-                        <p className="font-medium text-gray-900">{formatCurrency(h.currentValue)}</p>
+                        <p className="text-gray-500 dark:text-gray-400 text-xs">Value</p>
+                        <p className="font-medium text-gray-900 dark:text-gray-100">{formatCurrency(h.currentValue)}</p>
                       </div>
                     </div>
                   </div>
@@ -341,32 +341,32 @@ export default function Dashboard() {
               <div className="hidden md:block overflow-x-auto">
                 <table className="w-full">
                   <thead>
-                    <tr className="border-b-2 border-gray-200">
-                      <th className="text-left py-3 px-3 font-semibold text-gray-700 text-sm">Symbol</th>
+                    <tr className="border-b-2 border-gray-200 dark:border-gray-700">
+                      <th className="text-left py-3 px-3 font-semibold text-gray-700 dark:text-gray-300 text-sm">Symbol</th>
                       {selectedPortfolioId === 'all' && (
-                        <th className="text-left py-3 px-3 font-semibold text-gray-700 text-sm">Portfolio</th>
+                        <th className="text-left py-3 px-3 font-semibold text-gray-700 dark:text-gray-300 text-sm">Portfolio</th>
                       )}
-                      <th className="text-right py-3 px-3 font-semibold text-gray-700 text-sm">Qty</th>
-                      <th className="text-right py-3 px-3 font-semibold text-gray-700 text-sm">Avg Price</th>
-                      <th className="text-right py-3 px-3 font-semibold text-gray-700 text-sm">Current</th>
-                      <th className="text-right py-3 px-3 font-semibold text-gray-700 text-sm">Invested</th>
-                      <th className="text-right py-3 px-3 font-semibold text-gray-700 text-sm">Value</th>
-                      <th className="text-right py-3 px-3 font-semibold text-gray-700 text-sm">P&L</th>
-                      <th className="text-right py-3 px-3 font-semibold text-gray-700 text-sm">P&L %</th>
+                      <th className="text-right py-3 px-3 font-semibold text-gray-700 dark:text-gray-300 text-sm">Qty</th>
+                      <th className="text-right py-3 px-3 font-semibold text-gray-700 dark:text-gray-300 text-sm">Avg Price</th>
+                      <th className="text-right py-3 px-3 font-semibold text-gray-700 dark:text-gray-300 text-sm">Current</th>
+                      <th className="text-right py-3 px-3 font-semibold text-gray-700 dark:text-gray-300 text-sm">Invested</th>
+                      <th className="text-right py-3 px-3 font-semibold text-gray-700 dark:text-gray-300 text-sm">Value</th>
+                      <th className="text-right py-3 px-3 font-semibold text-gray-700 dark:text-gray-300 text-sm">P&L</th>
+                      <th className="text-right py-3 px-3 font-semibold text-gray-700 dark:text-gray-300 text-sm">P&L %</th>
                     </tr>
                   </thead>
                   <tbody>
                     {holdings.map((h) => (
-                      <tr key={h.id} className="border-b border-gray-100 hover:bg-gray-50">
-                        <td className="py-3 px-3 font-semibold text-gray-900">{h.symbol}</td>
+                      <tr key={h.id} className="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700">
+                        <td className="py-3 px-3 font-semibold text-gray-900 dark:text-gray-100">{h.symbol}</td>
                         {selectedPortfolioId === 'all' && (
-                          <td className="py-3 px-3 text-gray-600 text-sm">{h.portfolioName || '—'}</td>
+                          <td className="py-3 px-3 text-gray-600 dark:text-gray-400 text-sm">{h.portfolioName || '—'}</td>
                         )}
-                        <td className="text-right py-3 px-3 text-gray-700">{h.quantity}</td>
-                        <td className="text-right py-3 px-3 text-gray-700">₹{Number(h.avgPrice).toFixed(2)}</td>
-                        <td className="text-right py-3 px-3 text-gray-700">₹{Number(h.currentPrice).toFixed(2)}</td>
-                        <td className="text-right py-3 px-3 text-gray-700">{formatCurrency(h.investedAmount)}</td>
-                        <td className="text-right py-3 px-3 text-gray-700">{formatCurrency(h.currentValue)}</td>
+                        <td className="text-right py-3 px-3 text-gray-700 dark:text-gray-300">{h.quantity}</td>
+                        <td className="text-right py-3 px-3 text-gray-700 dark:text-gray-300">₹{Number(h.avgPrice).toFixed(2)}</td>
+                        <td className="text-right py-3 px-3 text-gray-700 dark:text-gray-300">₹{Number(h.currentPrice).toFixed(2)}</td>
+                        <td className="text-right py-3 px-3 text-gray-700 dark:text-gray-300">{formatCurrency(h.investedAmount)}</td>
+                        <td className="text-right py-3 px-3 text-gray-700 dark:text-gray-300">{formatCurrency(h.currentValue)}</td>
                         <td className={`text-right py-3 px-3 font-semibold ${plColor(h.unrealizedPL)}`}>
                           {Number(h.unrealizedPL) >= 0 ? '+' : ''}{formatCurrency(h.unrealizedPL)}
                         </td>
@@ -383,10 +383,10 @@ export default function Dashboard() {
           </div>
 
           {/* AI Recommendations */}
-          <div className="bg-gradient-to-br from-indigo-50 to-purple-50 rounded-xl p-6 shadow-md border border-indigo-200">
+          <div className="bg-gradient-to-br from-indigo-50 to-purple-50 dark:from-indigo-900/30 dark:to-purple-900/30 rounded-xl p-6 shadow-md border border-indigo-200 dark:border-indigo-700">
             <div className="flex items-center gap-2 mb-4">
               <Lightbulb className="w-6 h-6 text-indigo-600" />
-              <h2 className="text-xl font-semibold text-gray-800">AI Insights</h2>
+              <h2 className="text-xl font-semibold text-gray-800 dark:text-gray-100">AI Insights</h2>
               <span className="ml-auto text-sm text-indigo-600 font-medium">
                 {allRecs.length > 0 ? `${allRecs.length} active` : 'None yet'}
               </span>
@@ -394,7 +394,7 @@ export default function Dashboard() {
 
             {allRecs.length === 0 ? (
               <div className="text-center py-8">
-                <p className="text-gray-500 mb-4">No AI recommendations yet. Run a scan to get personalized insights.</p>
+                <p className="text-gray-500 dark:text-gray-400 mb-4">No AI recommendations yet. Run a scan to get personalized insights.</p>
                 <button
                   onClick={() => navigate('/recommendations')}
                   className="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
@@ -405,10 +405,10 @@ export default function Dashboard() {
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {allRecs.slice(0, 4).map((rec, idx) => (
-                  <div key={idx} className="bg-white rounded-lg p-5 shadow-sm border border-indigo-100 hover:shadow-md transition-shadow">
+                  <div key={idx} className="bg-white dark:bg-gray-800 rounded-lg p-5 shadow-sm border border-indigo-100 dark:border-indigo-800 hover:shadow-md transition-shadow">
                     <div className="flex items-start justify-between mb-3">
                       <div>
-                        <h3 className="text-lg font-bold text-gray-900">{rec.symbol || rec.stock}</h3>
+                        <h3 className="text-lg font-bold text-gray-900 dark:text-gray-100">{rec.symbol || rec.stock}</h3>
                         <span className={`inline-block px-3 py-1 rounded-full text-xs font-semibold mt-1 ${
                           rec.action === 'BUY' ? 'bg-green-100 text-green-700' :
                           rec.action === 'SELL' ? 'bg-red-100 text-red-700' :
@@ -419,7 +419,7 @@ export default function Dashboard() {
                       </div>
                       {rec.confidence && (
                         <div className="text-right">
-                          <p className="text-sm text-gray-500">Confidence</p>
+                          <p className="text-sm text-gray-500 dark:text-gray-400">Confidence</p>
                           <p className="text-xl font-bold text-indigo-600">{rec.confidence}</p>
                         </div>
                       )}
@@ -428,12 +428,12 @@ export default function Dashboard() {
                     {rec.price && (
                       <div className="space-y-2 mb-3">
                         <div className="flex justify-between text-sm">
-                          <span className="text-gray-600">Price:</span>
-                          <span className="font-semibold text-gray-900">₹{rec.price}</span>
+                          <span className="text-gray-600 dark:text-gray-400">Price:</span>
+                          <span className="font-semibold text-gray-900 dark:text-gray-100">₹{rec.price}</span>
                         </div>
                         {rec.targetPrice && (
                           <div className="flex justify-between text-sm">
-                            <span className="text-gray-600">Target:</span>
+                            <span className="text-gray-600 dark:text-gray-400">Target:</span>
                             <span className="font-semibold text-green-600">₹{rec.targetPrice}</span>
                           </div>
                         )}
@@ -441,7 +441,7 @@ export default function Dashboard() {
                     )}
 
                     {rec.reasoning && (
-                      <p className="text-sm text-gray-600 mb-3 line-clamp-2">{rec.reasoning}</p>
+                      <p className="text-sm text-gray-600 dark:text-gray-400 mb-3 line-clamp-2">{rec.reasoning}</p>
                     )}
 
                     <button
@@ -458,9 +458,9 @@ export default function Dashboard() {
           </div>
 
           {/* Market Status */}
-          <div className="bg-white rounded-xl p-6 shadow-md border border-gray-200">
-            <h2 className="text-xl font-semibold mb-4 text-gray-800">Market Status</h2>
-            <div className="flex items-center flex-wrap gap-2 text-sm text-gray-600">
+          <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-md border border-gray-200 dark:border-gray-700">
+            <h2 className="text-xl font-semibold mb-4 text-gray-800 dark:text-gray-100">Market Status</h2>
+            <div className="flex items-center flex-wrap gap-2 text-sm text-gray-600 dark:text-gray-400">
               <Clock className="w-4 h-4" />
               <span>Market Hours: 9:15 AM - 3:30 PM IST (Mon-Fri)</span>
               <span className={`ml-auto px-3 py-1 rounded-full font-medium text-xs ${
@@ -477,38 +477,38 @@ export default function Dashboard() {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <button
               onClick={() => navigate('/portfolio')}
-              className="bg-white hover:bg-gray-50 border-2 border-gray-200 rounded-xl p-4 text-center transition-all hover:shadow-md"
+              className="bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 border-2 border-gray-200 dark:border-gray-700 rounded-xl p-4 text-center transition-all hover:shadow-md"
             >
               <div className="text-2xl mb-2">+</div>
-              <p className="font-semibold text-gray-900">Add Holding</p>
+              <p className="font-semibold text-gray-900 dark:text-gray-100">Add Holding</p>
             </button>
             <button
               onClick={handleSyncPrices}
               disabled={syncing}
-              className="bg-white hover:bg-gray-50 border-2 border-gray-200 rounded-xl p-4 text-center transition-all hover:shadow-md disabled:opacity-50"
+              className="bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 border-2 border-gray-200 dark:border-gray-700 rounded-xl p-4 text-center transition-all hover:shadow-md disabled:opacity-50"
             >
               <div className="text-2xl mb-2">
                 <RefreshCw className={`w-6 h-6 mx-auto ${syncing ? 'animate-spin' : ''}`} />
               </div>
-              <p className="font-semibold text-gray-900">{syncing ? 'Syncing...' : 'Sync Prices'}</p>
+              <p className="font-semibold text-gray-900 dark:text-gray-100">{syncing ? 'Syncing...' : 'Sync Prices'}</p>
             </button>
             <button
               onClick={() => navigate('/insights')}
-              className="bg-white hover:bg-gray-50 border-2 border-gray-200 rounded-xl p-4 text-center transition-all hover:shadow-md"
+              className="bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 border-2 border-gray-200 dark:border-gray-700 rounded-xl p-4 text-center transition-all hover:shadow-md"
             >
               <div className="text-2xl mb-2">
                 <TrendingUp className="w-6 h-6 mx-auto" />
               </div>
-              <p className="font-semibold text-gray-900">View Reports</p>
+              <p className="font-semibold text-gray-900 dark:text-gray-100">View Reports</p>
             </button>
             <button
               onClick={() => navigate('/tax')}
-              className="bg-white hover:bg-gray-50 border-2 border-gray-200 rounded-xl p-4 text-center transition-all hover:shadow-md"
+              className="bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 border-2 border-gray-200 dark:border-gray-700 rounded-xl p-4 text-center transition-all hover:shadow-md"
             >
               <div className="text-2xl mb-2">
                 <CheckCircle className="w-6 h-6 mx-auto" />
               </div>
-              <p className="font-semibold text-gray-900">Tax Dashboard</p>
+              <p className="font-semibold text-gray-900 dark:text-gray-100">Tax Dashboard</p>
             </button>
           </div>
         </>

@@ -95,15 +95,15 @@ export default function TaxDashboard() {
   ];
 
   const getHoldingBadgeColor = (type) => {
-    return type === 'LTCG' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700';
+    return type === 'LTCG' ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300' : 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300';
   };
 
   const getPriorityColor = (priority) => {
     switch(priority) {
-      case 'high': return 'bg-red-100 text-red-700 border-red-300';
-      case 'medium': return 'bg-yellow-100 text-yellow-700 border-yellow-300';
-      case 'low': return 'bg-green-100 text-green-700 border-green-300';
-      default: return 'bg-gray-100 text-gray-700 border-gray-300';
+      case 'high': return 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 border-red-300 dark:border-red-700';
+      case 'medium': return 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 border-yellow-300 dark:border-yellow-700';
+      case 'low': return 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 border-green-300 dark:border-green-700';
+      default: return 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 border-gray-300 dark:border-gray-600';
     }
   };
 
@@ -129,7 +129,7 @@ export default function TaxDashboard() {
           <select 
             value={selectedYear}
             onChange={(e) => setSelectedYear(e.target.value)}
-            className="bg-white text-gray-900 px-4 py-2 rounded-lg font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-300"
+            className="bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 px-4 py-2 rounded-lg font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-300"
           >
             <option value="2025-26">FY 2025-26</option>
             <option value="2024-25">FY 2024-25</option>
@@ -196,10 +196,10 @@ export default function TaxDashboard() {
       </div>
 
       {/* Tax Rules Info */}
-      <div className="bg-blue-50 border-2 border-blue-200 rounded-xl p-5">
+      <div className="bg-blue-50 dark:bg-blue-900/30 border-2 border-blue-200 dark:border-blue-700 rounded-xl p-5">
         <div className="flex gap-3">
           <AlertCircle className="w-6 h-6 text-blue-600 flex-shrink-0 mt-1" />
-          <div className="text-xs sm:text-sm text-blue-900">
+          <div className="text-xs sm:text-sm text-blue-900 dark:text-blue-100">
             <p className="font-semibold mb-2">Tax Rules (Equity):</p>
             <ul className="space-y-1">
               <li><strong>LTCG</strong> (held &gt; 12 months): First ₹1,25,000 exempt, then 12.5% tax</li>
@@ -211,8 +211,8 @@ export default function TaxDashboard() {
       </div>
 
       {/* Tax Optimization Opportunities */}
-      <div className="bg-white rounded-xl p-6 shadow-md border border-gray-200">
-        <h2 className="text-xl font-semibold mb-4 text-gray-800 flex items-center gap-2">
+      <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-md border border-gray-200 dark:border-gray-700">
+        <h2 className="text-xl font-semibold mb-4 text-gray-800 dark:text-gray-100 flex items-center gap-2">
           <TrendingUp className="w-6 h-6 text-emerald-600" />
           Tax Optimization Opportunities
         </h2>
@@ -222,47 +222,47 @@ export default function TaxDashboard() {
             <div key={opp.id} className={`border-2 rounded-lg p-5 ${getPriorityColor(opp.priority)}`}>
               <div className="flex items-start justify-between mb-3">
                 <div>
-                  <h3 className="text-lg font-bold text-gray-900">{opp.stock}</h3>
+                  <h3 className="text-lg font-bold text-gray-900 dark:text-gray-100">{opp.stock}</h3>
                   <span className={`inline-block px-3 py-1 rounded-full text-xs font-semibold mt-1 ${
-                    opp.type === 'LTCG' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
+                    opp.type === 'LTCG' ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300' : 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300'
                   }`}>
                     {opp.type}
                   </span>
                 </div>
                 <div className="text-right">
-                  <p className="text-sm text-gray-600">Unrealized Gain</p>
+                  <p className="text-sm text-gray-600 dark:text-gray-400">Unrealized Gain</p>
                   <p className="text-xl font-bold text-green-600">₹{opp.gain.toLocaleString('en-IN')}</p>
                 </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-3 text-sm">
                 <div>
-                  <p className="text-gray-600">Current Value</p>
-                  <p className="font-semibold text-gray-900">₹{opp.currentValue.toLocaleString('en-IN')}</p>
+                  <p className="text-gray-600 dark:text-gray-400">Current Value</p>
+                  <p className="font-semibold text-gray-900 dark:text-gray-100">₹{opp.currentValue.toLocaleString('en-IN')}</p>
                 </div>
                 <div>
-                  <p className="text-gray-600">Purchase Value</p>
-                  <p className="font-semibold text-gray-900">₹{opp.purchaseValue.toLocaleString('en-IN')}</p>
+                  <p className="text-gray-600 dark:text-gray-400">Purchase Value</p>
+                  <p className="font-semibold text-gray-900 dark:text-gray-100">₹{opp.purchaseValue.toLocaleString('en-IN')}</p>
                 </div>
                 <div>
-                  <p className="text-gray-600">Holding Period</p>
-                  <p className="font-semibold text-gray-900">{opp.holdingPeriod} months</p>
+                  <p className="text-gray-600 dark:text-gray-400">Holding Period</p>
+                  <p className="font-semibold text-gray-900 dark:text-gray-100">{opp.holdingPeriod} months</p>
                 </div>
                 <div>
-                  <p className="text-gray-600">Potential Saving</p>
+                  <p className="text-gray-600 dark:text-gray-400">Potential Saving</p>
                   <p className="font-semibold text-emerald-600">₹{opp.taxSaving.toLocaleString('en-IN')}</p>
                 </div>
               </div>
 
-              <div className="bg-white rounded-lg p-3 mb-3">
-                <p className="text-gray-900 font-medium">{opp.suggestion}</p>
+              <div className="bg-white dark:bg-gray-800 rounded-lg p-3 mb-3">
+                <p className="text-gray-900 dark:text-gray-100 font-medium">{opp.suggestion}</p>
               </div>
 
               <div className="flex gap-2">
                 <button className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-2 px-4 rounded-lg transition-colors">
                   Execute Strategy
                 </button>
-                <button className="bg-white hover:bg-gray-50 text-gray-700 font-semibold py-2 px-4 rounded-lg border-2 border-gray-300 transition-colors">
+                <button className="bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 font-semibold py-2 px-4 rounded-lg border-2 border-gray-300 dark:border-gray-600 transition-colors">
                   Learn More
                 </button>
               </div>
@@ -272,8 +272,8 @@ export default function TaxDashboard() {
       </div>
 
       {/* Current Holdings with Tax Impact */}
-      <div className="bg-white rounded-xl p-6 shadow-md border border-gray-200">
-        <h2 className="text-xl font-semibold mb-4 text-gray-800 flex items-center gap-2">
+      <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-md border border-gray-200 dark:border-gray-700">
+        <h2 className="text-xl font-semibold mb-4 text-gray-800 dark:text-gray-100 flex items-center gap-2">
           <Calendar className="w-6 h-6 text-blue-600" />
           Holdings Tax Breakdown
         </h2>
@@ -281,10 +281,10 @@ export default function TaxDashboard() {
         {/* Mobile Card View */}
         <div className="md:hidden space-y-3">
           {holdings.map((holding) => (
-            <div key={holding.id} className="bg-gray-50 rounded-lg p-4">
+            <div key={holding.id} className="bg-gray-50 dark:bg-gray-900 rounded-lg p-4">
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
-                  <p className="font-semibold text-gray-900">{holding.stock}</p>
+                  <p className="font-semibold text-gray-900 dark:text-gray-100">{holding.stock}</p>
                   <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${getHoldingBadgeColor(holding.type)}`}>
                     {holding.type}
                   </span>
@@ -299,31 +299,31 @@ export default function TaxDashboard() {
               </div>
               <div className="grid grid-cols-2 gap-2 text-sm">
                 <div>
-                  <p className="text-gray-500 text-xs">Qty</p>
-                  <p className="font-medium text-gray-900">{holding.quantity}</p>
+                  <p className="text-gray-500 dark:text-gray-400 text-xs">Qty</p>
+                  <p className="font-medium text-gray-900 dark:text-gray-100">{holding.quantity}</p>
                 </div>
                 <div>
-                  <p className="text-gray-500 text-xs">Gain</p>
+                  <p className="text-gray-500 dark:text-gray-400 text-xs">Gain</p>
                   <p className="font-medium text-green-600">+₹{holding.unrealizedGain}</p>
                 </div>
                 <div>
-                  <p className="text-gray-500 text-xs">Invested</p>
-                  <p className="font-medium text-gray-900">₹{holding.investedValue.toLocaleString('en-IN')}</p>
+                  <p className="text-gray-500 dark:text-gray-400 text-xs">Invested</p>
+                  <p className="font-medium text-gray-900 dark:text-gray-100">₹{holding.investedValue.toLocaleString('en-IN')}</p>
                 </div>
                 <div>
-                  <p className="text-gray-500 text-xs">Holding</p>
-                  <p className="font-medium text-gray-900">
+                  <p className="text-gray-500 dark:text-gray-400 text-xs">Holding</p>
+                  <p className="font-medium text-gray-900 dark:text-gray-100">
                     {holding.holdingPeriod}m
                     {holding.type === 'STCG' && (
-                      <span className="text-xs text-gray-500 ml-1">({calculateTimeToLTCG(holding.holdingPeriod)} to LTCG)</span>
+                      <span className="text-xs text-gray-500 dark:text-gray-400 ml-1">({calculateTimeToLTCG(holding.holdingPeriod)} to LTCG)</span>
                     )}
                   </p>
                 </div>
               </div>
             </div>
           ))}
-          <div className="bg-gray-100 rounded-lg p-4 flex justify-between items-center">
-            <p className="font-bold text-gray-900">Total Tax on Exit</p>
+          <div className="bg-gray-100 dark:bg-gray-700 rounded-lg p-4 flex justify-between items-center">
+            <p className="font-bold text-gray-900 dark:text-gray-100">Total Tax on Exit</p>
             <p className="font-bold text-orange-600 text-lg">₹{holdings.reduce((sum, h) => sum + h.taxOnExit, 0)}</p>
           </div>
         </div>
@@ -332,34 +332,34 @@ export default function TaxDashboard() {
         <div className="hidden md:block overflow-x-auto">
           <table className="w-full">
             <thead>
-              <tr className="border-b-2 border-gray-200">
-                <th className="text-left py-3 px-4 font-semibold text-gray-700">Stock</th>
-                <th className="text-right py-3 px-4 font-semibold text-gray-700">Qty</th>
-                <th className="text-right py-3 px-4 font-semibold text-gray-700">Invested</th>
-                <th className="text-right py-3 px-4 font-semibold text-gray-700">Current</th>
-                <th className="text-right py-3 px-4 font-semibold text-gray-700">Gain</th>
-                <th className="text-center py-3 px-4 font-semibold text-gray-700">Type</th>
-                <th className="text-center py-3 px-4 font-semibold text-gray-700">Holding</th>
-                <th className="text-right py-3 px-4 font-semibold text-gray-700">Tax on Exit</th>
+              <tr className="border-b-2 border-gray-200 dark:border-gray-700">
+                <th className="text-left py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">Stock</th>
+                <th className="text-right py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">Qty</th>
+                <th className="text-right py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">Invested</th>
+                <th className="text-right py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">Current</th>
+                <th className="text-right py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">Gain</th>
+                <th className="text-center py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">Type</th>
+                <th className="text-center py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">Holding</th>
+                <th className="text-right py-3 px-4 font-semibold text-gray-700 dark:text-gray-300">Tax on Exit</th>
               </tr>
             </thead>
             <tbody>
               {holdings.map((holding) => (
-                <tr key={holding.id} className="border-b border-gray-100 hover:bg-gray-50">
-                  <td className="py-3 px-4 font-semibold text-gray-900">{holding.stock}</td>
-                  <td className="text-right py-3 px-4 text-gray-700">{holding.quantity}</td>
-                  <td className="text-right py-3 px-4 text-gray-700">₹{holding.investedValue.toLocaleString('en-IN')}</td>
-                  <td className="text-right py-3 px-4 text-gray-700">₹{holding.currentValue.toLocaleString('en-IN')}</td>
+                <tr key={holding.id} className="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700">
+                  <td className="py-3 px-4 font-semibold text-gray-900 dark:text-gray-100">{holding.stock}</td>
+                  <td className="text-right py-3 px-4 text-gray-700 dark:text-gray-300">{holding.quantity}</td>
+                  <td className="text-right py-3 px-4 text-gray-700 dark:text-gray-300">₹{holding.investedValue.toLocaleString('en-IN')}</td>
+                  <td className="text-right py-3 px-4 text-gray-700 dark:text-gray-300">₹{holding.currentValue.toLocaleString('en-IN')}</td>
                   <td className="text-right py-3 px-4 text-green-600 font-semibold">+₹{holding.unrealizedGain}</td>
                   <td className="text-center py-3 px-4">
                     <span className={`inline-block px-3 py-1 rounded-full text-xs font-semibold ${getHoldingBadgeColor(holding.type)}`}>
                       {holding.type}
                     </span>
                   </td>
-                  <td className="text-center py-3 px-4 text-gray-700 text-sm">
+                  <td className="text-center py-3 px-4 text-gray-700 dark:text-gray-300 text-sm">
                     {holding.holdingPeriod}m
                     {holding.type === 'STCG' && (
-                      <p className="text-xs text-gray-500 mt-1">
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                         {calculateTimeToLTCG(holding.holdingPeriod)} to LTCG
                       </p>
                     )}
@@ -374,9 +374,9 @@ export default function TaxDashboard() {
                 </tr>
               ))}
             </tbody>
-            <tfoot className="border-t-2 border-gray-300 bg-gray-50">
+            <tfoot className="border-t-2 border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900">
               <tr>
-                <td colSpan="4" className="py-3 px-4 font-bold text-gray-900">Total Tax on Exit</td>
+                <td colSpan="4" className="py-3 px-4 font-bold text-gray-900 dark:text-gray-100">Total Tax on Exit</td>
                 <td colSpan="4" className="text-right py-3 px-4 font-bold text-orange-600 text-lg">
                   ₹{holdings.reduce((sum, h) => sum + h.taxOnExit, 0)}
                 </td>
@@ -412,7 +412,7 @@ export default function TaxDashboard() {
           <Download className="w-5 h-5" />
           Download Tax Report (Excel)
         </button>
-        <button className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold py-3 px-6 rounded-lg transition-colors flex items-center justify-center gap-2 border-2 border-gray-300">
+        <button className="flex-1 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 font-semibold py-3 px-6 rounded-lg transition-colors flex items-center justify-center gap-2 border-2 border-gray-300 dark:border-gray-600">
           <Calendar className="w-5 h-5" />
           Year-End Tax Planning
         </button>

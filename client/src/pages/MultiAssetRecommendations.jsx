@@ -184,7 +184,7 @@ export default function MultiAssetRecommendations() {
 
       {/* Error */}
       {error && (
-        <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center gap-3">
+        <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 rounded-xl p-4 flex items-center gap-3">
           <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
           <p className="text-red-700 text-sm">{error}</p>
         </div>
@@ -192,8 +192,8 @@ export default function MultiAssetRecommendations() {
 
       {/* Allocation Overview */}
       {allocation && (
-        <div className="bg-white rounded-xl p-5 shadow-md border border-gray-200">
-          <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2 mb-4">
+        <div className="bg-white dark:bg-gray-800 rounded-xl p-5 shadow-md border border-gray-200 dark:border-gray-700">
+          <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-100 flex items-center gap-2 mb-4">
             <PieChart className="w-5 h-5 text-indigo-600" />
             Recommended Allocation
           </h2>
@@ -206,9 +206,9 @@ export default function MultiAssetRecommendations() {
               { key: 'alternatives', label: 'Alternatives', color: 'pink' },
             ].map(({ key, label, color }) => (
               <div key={key} className={`bg-${color}-50 rounded-lg p-3 border border-${color}-200`}>
-                <p className="text-xs text-gray-600 mb-1">{label}</p>
-                <p className="text-lg font-bold text-gray-900">{allocation[key]?.percentage || 0}%</p>
-                <p className="text-xs text-gray-500">{formatCurrency(allocation[key]?.amount)}</p>
+                <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">{label}</p>
+                <p className="text-lg font-bold text-gray-900 dark:text-gray-100">{allocation[key]?.percentage || 0}%</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">{formatCurrency(allocation[key]?.amount)}</p>
               </div>
             ))}
           </div>
@@ -226,7 +226,7 @@ export default function MultiAssetRecommendations() {
                 className={`px-4 py-2.5 rounded-lg font-semibold text-sm whitespace-nowrap transition-all ${
                   activeTab === tab.key
                     ? 'bg-indigo-600 text-white shadow-md'
-                    : 'bg-white text-gray-600 border border-gray-200 hover:border-indigo-300 hover:text-indigo-600'
+                    : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-700 hover:border-indigo-300 hover:text-indigo-600'
                 }`}
               >
                 {tab.label}
@@ -242,8 +242,8 @@ export default function MultiAssetRecommendations() {
                 onClick={() => setRiskFilter(filter)}
                 className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all ${
                   riskFilter === filter
-                    ? 'bg-gray-800 text-white'
-                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    ? 'bg-gray-800 text-white dark:bg-gray-200 dark:text-gray-900'
+                    : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-200'
                 }`}
               >
                 {filter === 'ALL' ? 'All Risk Levels' : `${filter} Risk`}
@@ -254,9 +254,9 @@ export default function MultiAssetRecommendations() {
           {/* Recommendation Cards */}
           <div className="space-y-4">
             {filteredItems.length === 0 ? (
-              <div className="bg-gray-50 rounded-xl p-8 text-center border border-gray-200">
+              <div className="bg-gray-50 dark:bg-gray-900 rounded-xl p-8 text-center border border-gray-200 dark:border-gray-700">
                 <Target className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-                <p className="text-gray-500">No recommendations for this filter combination</p>
+                <p className="text-gray-500 dark:text-gray-400">No recommendations for this filter combination</p>
               </div>
             ) : (
               filteredItems.map((item, idx) => {
@@ -266,14 +266,14 @@ export default function MultiAssetRecommendations() {
                 const name = item.symbol || item.name || item.ticker || item.instrument || item.type;
 
                 return (
-                  <div key={idx} className={`bg-white rounded-xl shadow-md border-2 ${risk.border} overflow-hidden`}>
+                  <div key={idx} className={`bg-white dark:bg-gray-800 rounded-xl shadow-md border-2 ${risk.border} overflow-hidden`}>
                     {/* Card Header */}
                     <div className="p-4 sm:p-5">
                       <div className="flex items-start justify-between flex-wrap gap-2 mb-3">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <h3 className="text-lg font-bold text-gray-900">{name}</h3>
+                          <h3 className="text-lg font-bold text-gray-900 dark:text-gray-100">{name}</h3>
                           {item.sector && (
-                            <span className="px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full text-xs font-medium">
+                            <span className="px-2 py-0.5 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 rounded-full text-xs font-medium">
                               {item.sector}
                             </span>
                           )}
@@ -351,9 +351,9 @@ export default function MultiAssetRecommendations() {
 
                       {/* Why this? */}
                       {item.reasoning && (
-                        <div className="bg-gray-50 rounded-lg p-3 mb-3">
-                          <p className="text-sm text-gray-700">
-                            <span className="font-semibold text-gray-900">Why: </span>
+                        <div className="bg-gray-50 dark:bg-gray-900 rounded-lg p-3 mb-3">
+                          <p className="text-sm text-gray-700 dark:text-gray-300">
+                            <span className="font-semibold text-gray-900 dark:text-gray-100">Why: </span>
                             {item.reasoning}
                           </p>
                         </div>
@@ -363,11 +363,11 @@ export default function MultiAssetRecommendations() {
                       {item.instruments && item.instruments.length > 0 && (
                         <div className="space-y-2 mb-3">
                           {item.instruments.map((inst, i) => (
-                            <div key={i} className="flex items-center justify-between bg-indigo-50 rounded-lg px-3 py-2 text-sm">
-                              <span className="font-medium text-gray-900">{inst.name}</span>
+                            <div key={i} className="flex items-center justify-between bg-indigo-50 dark:bg-indigo-900/30 rounded-lg px-3 py-2 text-sm">
+                              <span className="font-medium text-gray-900 dark:text-gray-100">{inst.name}</span>
                               <div className="text-right">
                                 <span className="font-bold text-indigo-600">{formatCurrency(inst.allocation)}</span>
-                                {inst.why && <p className="text-xs text-gray-500">{inst.why}</p>}
+                                {inst.why && <p className="text-xs text-gray-500 dark:text-gray-400">{inst.why}</p>}
                               </div>
                             </div>
                           ))}
@@ -378,7 +378,7 @@ export default function MultiAssetRecommendations() {
                       {item.guide && (
                         <button
                           onClick={() => toggleGuide(guideKey)}
-                          className="w-full flex items-center justify-between p-3 bg-indigo-50 rounded-lg text-sm font-semibold text-indigo-700 hover:bg-indigo-100 transition-colors"
+                          className="w-full flex items-center justify-between p-3 bg-indigo-50 dark:bg-indigo-900/30 rounded-lg text-sm font-semibold text-indigo-700 hover:bg-indigo-100 transition-colors"
                         >
                           <span className="flex items-center gap-2">
                             <BookOpen className="w-4 h-4" />
@@ -389,11 +389,11 @@ export default function MultiAssetRecommendations() {
                       )}
 
                       {isGuideOpen && item.guide && (
-                        <div className="mt-3 bg-indigo-50 rounded-lg p-4 space-y-3">
-                          <h4 className="font-semibold text-gray-900 text-sm">{item.guide.title}</h4>
+                        <div className="mt-3 bg-indigo-50 dark:bg-indigo-900/30 rounded-lg p-4 space-y-3">
+                          <h4 className="font-semibold text-gray-900 dark:text-gray-100 text-sm">{item.guide.title}</h4>
 
                           {/* Steps */}
-                          <ol className="list-decimal list-inside space-y-1.5 text-sm text-gray-700">
+                          <ol className="list-decimal list-inside space-y-1.5 text-sm text-gray-700 dark:text-gray-300">
                             {item.guide.steps?.map((step, i) => (
                               <li key={i}>{step}</li>
                             ))}
@@ -402,8 +402,8 @@ export default function MultiAssetRecommendations() {
                           {/* Tips */}
                           {item.guide.tips?.length > 0 && (
                             <div>
-                              <p className="text-xs font-semibold text-gray-500 uppercase mb-1">Tips</p>
-                              <ul className="space-y-1 text-sm text-gray-700">
+                              <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">Tips</p>
+                              <ul className="space-y-1 text-sm text-gray-700 dark:text-gray-300">
                                 {item.guide.tips.map((tip, i) => (
                                   <li key={i} className="flex items-start gap-1.5">
                                     <span className="text-green-600 mt-0.5">*</span>
@@ -417,10 +417,10 @@ export default function MultiAssetRecommendations() {
                           {/* Platforms */}
                           {item.guide.platforms?.length > 0 && (
                             <div>
-                              <p className="text-xs font-semibold text-gray-500 uppercase mb-1">Platforms</p>
+                              <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">Platforms</p>
                               <div className="flex flex-wrap gap-2">
                                 {item.guide.platforms.map((platform, i) => (
-                                  <span key={i} className="px-2.5 py-1 bg-white text-gray-700 rounded-full text-xs font-medium border border-gray-200">
+                                  <span key={i} className="px-2.5 py-1 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-full text-xs font-medium border border-gray-200 dark:border-gray-700">
                                     {platform}
                                   </span>
                                 ))}
@@ -439,7 +439,7 @@ export default function MultiAssetRecommendations() {
           {/* SIP Recommendation (Mutual Funds tab) */}
           {activeTab === 'mutualFunds' && data?.recommendations?.sipRecommendation && (
             <div className="bg-gradient-to-br from-purple-50 to-indigo-50 rounded-xl p-5 border border-purple-200">
-              <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
+              <h3 className="font-semibold text-gray-900 dark:text-gray-100 mb-3 flex items-center gap-2">
                 <TrendingUp className="w-5 h-5 text-purple-600" />
                 SIP Recommendation
               </h3>
@@ -448,8 +448,8 @@ export default function MultiAssetRecommendations() {
               </p>
               <div className="space-y-2">
                 {data.recommendations.sipRecommendation.distribution?.map((d, i) => (
-                  <div key={i} className="flex justify-between items-center bg-white rounded-lg px-4 py-2 text-sm">
-                    <span className="font-medium text-gray-900">{d.fund}</span>
+                  <div key={i} className="flex justify-between items-center bg-white dark:bg-gray-800 rounded-lg px-4 py-2 text-sm">
+                    <span className="font-medium text-gray-900 dark:text-gray-100">{d.fund}</span>
                     <span className="font-bold text-purple-600">{formatCurrency(d.monthly)}/mo</span>
                   </div>
                 ))}
@@ -461,10 +461,10 @@ export default function MultiAssetRecommendations() {
 
       {/* Empty state */}
       {!data && !loading && !error && (
-        <div className="bg-gradient-to-br from-gray-50 to-gray-100 rounded-xl p-12 text-center border-2 border-gray-200">
+        <div className="bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800 rounded-xl p-12 text-center border-2 border-gray-200 dark:border-gray-700">
           <Layers className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-          <p className="text-gray-700 text-lg font-semibold mb-2">Your Multi-Asset Investment Plan</p>
-          <p className="text-gray-500 text-sm mb-5">
+          <p className="text-gray-700 dark:text-gray-300 text-lg font-semibold mb-2">Your Multi-Asset Investment Plan</p>
+          <p className="text-gray-500 dark:text-gray-400 text-sm mb-5">
             Configure your capital, risk profile, and time horizon above, then generate your personalized plan across stocks, mutual funds, commodities, bonds, and alternatives.
           </p>
           <button
@@ -481,13 +481,13 @@ export default function MultiAssetRecommendations() {
       {loading && (
         <div className="flex flex-col items-center justify-center py-12">
           <RefreshCw className="w-10 h-10 animate-spin text-indigo-600 mb-4" />
-          <p className="text-gray-600 font-medium">Analyzing markets across asset classes...</p>
+          <p className="text-gray-600 dark:text-gray-400 font-medium">Analyzing markets across asset classes...</p>
           <p className="text-gray-400 text-sm mt-1">This may take 15-30 seconds</p>
         </div>
       )}
 
       {/* Disclaimer */}
-      <div className="bg-amber-50 border-2 border-amber-200 rounded-xl p-4 text-xs sm:text-sm">
+      <div className="bg-amber-50 dark:bg-yellow-900/30 border-2 border-amber-200 rounded-xl p-4 text-xs sm:text-sm">
         <p className="text-amber-900">
           <strong>Disclaimer:</strong> These AI-generated recommendations are for informational purposes only.
           They do not constitute financial advice. Past performance does not guarantee future results.
@@ -499,10 +499,10 @@ export default function MultiAssetRecommendations() {
   );
 }
 
-function Metric({ label, value, color = 'text-gray-900' }) {
+function Metric({ label, value, color = 'text-gray-900 dark:text-gray-100' }) {
   return (
-    <div className="bg-gray-50 rounded-lg p-2">
-      <p className="text-xs text-gray-500">{label}</p>
+    <div className="bg-gray-50 dark:bg-gray-900 rounded-lg p-2">
+      <p className="text-xs text-gray-500 dark:text-gray-400">{label}</p>
       <p className={`text-sm font-semibold ${color} truncate`}>{value}</p>
     </div>
   );

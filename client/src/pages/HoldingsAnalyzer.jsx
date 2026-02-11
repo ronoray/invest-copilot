@@ -178,8 +178,8 @@ export default function HoldingsAnalyzer() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Holdings Analyzer</h1>
-          <p className="text-sm text-gray-500">Daily targets, trade signals, and portfolio performance</p>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Holdings Analyzer</h1>
+          <p className="text-sm text-gray-500 dark:text-gray-400">Daily targets, trade signals, and portfolio performance</p>
         </div>
 
         {/* Portfolio Selector */}
@@ -187,7 +187,7 @@ export default function HoldingsAnalyzer() {
           <select
             value={selectedPortfolioId || ''}
             onChange={e => setSelectedPortfolioId(parseInt(e.target.value))}
-            className="px-4 py-2 border rounded-lg text-sm bg-white"
+            className="px-4 py-2 border rounded-lg text-sm bg-white dark:bg-gray-800 dark:border-gray-700 dark:text-gray-100"
           >
             {portfolios.map(p => (
               <option key={p.id} value={p.id}>
@@ -207,9 +207,9 @@ export default function HoldingsAnalyzer() {
           {/* Summary Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {/* AI Target */}
-            <div className="bg-white rounded-xl shadow-sm border p-4">
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border dark:border-gray-700 p-4">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-medium text-gray-500">AI Target</span>
+                <span className="text-sm font-medium text-gray-500 dark:text-gray-400">AI Target</span>
                 <button
                   onClick={refreshAiTarget}
                   disabled={refreshingAi}
@@ -219,7 +219,7 @@ export default function HoldingsAnalyzer() {
                   {refreshingAi ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
                 </button>
               </div>
-              <p className="text-2xl font-bold text-gray-900">{formatINR(aiTarget)}</p>
+              <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">{formatINR(aiTarget)}</p>
               {dailyTarget?.aiConfidence != null && (
                 <p className="text-xs text-gray-400 mt-1">Confidence: {dailyTarget.aiConfidence}%</p>
               )}
@@ -229,8 +229,8 @@ export default function HoldingsAnalyzer() {
             </div>
 
             {/* User Target */}
-            <div className="bg-white rounded-xl shadow-sm border p-4">
-              <span className="text-sm font-medium text-gray-500">Your Target</span>
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border dark:border-gray-700 p-4">
+              <span className="text-sm font-medium text-gray-500 dark:text-gray-400">Your Target</span>
               <div className="flex items-center gap-2 mt-2">
                 <span className="text-lg text-gray-400">₹</span>
                 <input
@@ -257,8 +257,8 @@ export default function HoldingsAnalyzer() {
             </div>
 
             {/* Earned Actual */}
-            <div className="bg-white rounded-xl shadow-sm border p-4">
-              <span className="text-sm font-medium text-gray-500">Earned Today</span>
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border dark:border-gray-700 p-4">
+              <span className="text-sm font-medium text-gray-500 dark:text-gray-400">Earned Today</span>
               <div className="flex items-center gap-2 mt-2">
                 <span className="text-lg text-gray-400">₹</span>
                 <input
@@ -279,12 +279,12 @@ export default function HoldingsAnalyzer() {
             </div>
 
             {/* Gap + Progress */}
-            <div className="bg-white rounded-xl shadow-sm border p-4">
-              <span className="text-sm font-medium text-gray-500">Gap</span>
-              <p className={`text-2xl font-bold ${gap > 0 ? 'text-red-600' : gap < 0 ? 'text-green-600' : 'text-gray-900'}`}>
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border dark:border-gray-700 p-4">
+              <span className="text-sm font-medium text-gray-500 dark:text-gray-400">Gap</span>
+              <p className={`text-2xl font-bold ${gap > 0 ? 'text-red-600' : gap < 0 ? 'text-green-600' : 'text-gray-900 dark:text-gray-100'}`}>
                 {gap > 0 ? `-${formatINR(gap)}` : gap < 0 ? `+${formatINR(Math.abs(gap))}` : 'On target'}
               </p>
-              <div className="mt-2 h-2 bg-gray-200 rounded-full overflow-hidden">
+              <div className="mt-2 h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
                 <div
                   className={`h-full rounded-full transition-all ${progressPct >= 100 ? 'bg-green-500' : progressPct >= 50 ? 'bg-blue-500' : 'bg-amber-500'}`}
                   style={{ width: `${progressPct}%` }}
@@ -295,10 +295,10 @@ export default function HoldingsAnalyzer() {
           </div>
 
           {/* Holdings Table */}
-          <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
-            <div className="px-4 py-3 border-b flex items-center justify-between">
-              <h2 className="font-semibold text-gray-900">Holdings ({holdings.length})</h2>
-              <div className="text-sm text-gray-500">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border dark:border-gray-700 overflow-hidden">
+            <div className="px-4 py-3 border-b dark:border-gray-700 flex items-center justify-between">
+              <h2 className="font-semibold text-gray-900 dark:text-gray-100">Holdings ({holdings.length})</h2>
+              <div className="text-sm text-gray-500 dark:text-gray-400">
                 Value: {formatPrice(totalValue)} | P&L:{' '}
                 <span className={totalPL >= 0 ? 'text-green-600' : 'text-red-600'}>
                   {formatPrice(totalPL)} ({totalPLPct.toFixed(2)}%)
@@ -310,14 +310,14 @@ export default function HoldingsAnalyzer() {
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
-                  <thead className="bg-gray-50">
+                  <thead className="bg-gray-50 dark:bg-gray-900">
                     <tr>
-                      <th className="px-4 py-2 text-left font-medium text-gray-500">Symbol</th>
-                      <th className="px-4 py-2 text-right font-medium text-gray-500">Qty</th>
-                      <th className="px-4 py-2 text-right font-medium text-gray-500">Avg Price</th>
-                      <th className="px-4 py-2 text-right font-medium text-gray-500">Current</th>
-                      <th className="px-4 py-2 text-right font-medium text-gray-500">P&L</th>
-                      <th className="px-4 py-2 text-right font-medium text-gray-500">P&L %</th>
+                      <th className="px-4 py-2 text-left font-medium text-gray-500 dark:text-gray-400">Symbol</th>
+                      <th className="px-4 py-2 text-right font-medium text-gray-500 dark:text-gray-400">Qty</th>
+                      <th className="px-4 py-2 text-right font-medium text-gray-500 dark:text-gray-400">Avg Price</th>
+                      <th className="px-4 py-2 text-right font-medium text-gray-500 dark:text-gray-400">Current</th>
+                      <th className="px-4 py-2 text-right font-medium text-gray-500 dark:text-gray-400">P&L</th>
+                      <th className="px-4 py-2 text-right font-medium text-gray-500 dark:text-gray-400">P&L %</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y">
@@ -327,7 +327,7 @@ export default function HoldingsAnalyzer() {
                       const pl = current - invested;
                       const plPct = invested > 0 ? (pl / invested) * 100 : 0;
                       return (
-                        <tr key={h.id} className="hover:bg-gray-50">
+                        <tr key={h.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
                           <td className="px-4 py-2 font-medium">{h.symbol}</td>
                           <td className="px-4 py-2 text-right">{h.quantity}</td>
                           <td className="px-4 py-2 text-right">{formatPrice(h.avgPrice)}</td>
@@ -348,9 +348,9 @@ export default function HoldingsAnalyzer() {
           </div>
 
           {/* Recommendations Panel */}
-          <div className="bg-white rounded-xl shadow-sm border">
-            <div className="px-4 py-3 border-b flex items-center justify-between">
-              <h2 className="font-semibold text-gray-900">Trade Signals</h2>
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border dark:border-gray-700">
+            <div className="px-4 py-3 border-b dark:border-gray-700 flex items-center justify-between">
+              <h2 className="font-semibold text-gray-900 dark:text-gray-100">Trade Signals</h2>
               <button
                 onClick={generateSignals}
                 disabled={generatingSignals}
@@ -366,7 +366,7 @@ export default function HoldingsAnalyzer() {
                 No signals yet. Click "Generate Signals" to get AI recommendations.
               </p>
             ) : (
-              <div className="divide-y">
+              <div className="divide-y dark:divide-gray-700">
                 {signals.map(sig => {
                   const isBuy = sig.side === 'BUY';
                   const isPending = sig.status === 'PENDING' || sig.status === 'SNOOZED';
@@ -381,14 +381,14 @@ export default function HoldingsAnalyzer() {
                           <span className="text-xs text-gray-400">{sig.exchange}</span>
                           <span className="text-xs text-gray-400">Qty: {sig.quantity}</span>
                         </div>
-                        <div className="flex items-center gap-3 mt-1 text-xs text-gray-500">
+                        <div className="flex items-center gap-3 mt-1 text-xs text-gray-500 dark:text-gray-400">
                           {sig.triggerType === 'MARKET' && <span>At Market</span>}
                           {sig.triggerType === 'LIMIT' && <span>Limit: {formatPrice(sig.triggerPrice)}</span>}
                           {sig.triggerType === 'ZONE' && <span>Zone: {formatPrice(sig.triggerLow)} - {formatPrice(sig.triggerHigh)}</span>}
                           <span>Confidence: {sig.confidence}%</span>
                         </div>
                         {sig.rationale && (
-                          <p className="text-xs text-gray-500 mt-1">{sig.rationale}</p>
+                          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{sig.rationale}</p>
                         )}
                       </div>
 
@@ -417,8 +417,8 @@ export default function HoldingsAnalyzer() {
                         ) : (
                           <span className={`px-2 py-1 rounded text-xs font-medium ${
                             sig.status === 'ACKED' ? 'bg-green-100 text-green-700' :
-                            sig.status === 'DISMISSED' ? 'bg-gray-100 text-gray-500' :
-                            sig.status === 'EXPIRED' ? 'bg-gray-100 text-gray-400' :
+                            sig.status === 'DISMISSED' ? 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400' :
+                            sig.status === 'EXPIRED' ? 'bg-gray-100 dark:bg-gray-700 text-gray-400' :
                             'bg-amber-100 text-amber-700'
                           }`}>
                             {sig.status}
@@ -433,11 +433,11 @@ export default function HoldingsAnalyzer() {
           </div>
 
           {/* Telegram Status */}
-          <div className="bg-white rounded-xl shadow-sm border p-4 flex items-center justify-between">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border dark:border-gray-700 p-4 flex items-center justify-between">
             <div className="flex items-center gap-3">
               <Send size={18} className="text-blue-500" />
               <div>
-                <p className="text-sm font-medium text-gray-700">Telegram Alerts</p>
+                <p className="text-sm font-medium text-gray-700 dark:text-gray-300">Telegram Alerts</p>
                 <p className="text-xs text-gray-400">
                   {pendingCount > 0
                     ? `${pendingCount} pending signal${pendingCount > 1 ? 's' : ''} (repeats every 30 min)`

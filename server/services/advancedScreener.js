@@ -5,6 +5,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { getCurrentPrice, fetchMarketContext } from './marketData.js';
 import { ANALYST_IDENTITY, MARKET_DATA_INSTRUCTION, buildAccountabilityScorecard } from './analystPrompts.js';
+import { validateAllocations } from './capitalGuard.js';
 import logger from './logger.js';
 
 const anthropic = new Anthropic({
@@ -226,7 +227,7 @@ Return ONLY valid JSON (no markdown):
 RULES:
 - Real NSE symbols only. Scan across ALL market caps and sectors — don't just pick Nifty 50 names
 - Price estimates should be your best knowledge of current levels
-- Allocations must sum to approximately ₹${baseAmount.toLocaleString('en-IN')}
+- HARD LIMIT: Total suggestedAmount across ALL picks MUST NOT exceed ₹${baseAmount.toLocaleString('en-IN')}. Sum your allocations before responding — if they exceed this limit, scale them down
 - simpleWhy: 3 strings — THESIS, VALUATION, PORTFOLIO FIT
 - Be BOLD. If you have 90% conviction, say it. If it's a speculative play, flag it honestly
 - Return ONLY the JSON object`;
@@ -260,6 +261,10 @@ RULES:
     const high = results.high || [];
     const medium = results.medium || [];
     const low = results.low || [];
+
+    // Capital guard: ensure total allocations don't exceed budget
+    const allPicks = [...high, ...medium, ...low];
+    validateAllocations(allPicks, baseAmount, 'suggestedAmount');
 
     logger.info(`Claude scan complete: ${high.length} high, ${medium.length} medium, ${low.length} low`);
 

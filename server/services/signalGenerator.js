@@ -3,6 +3,7 @@ import prisma from './prisma.js';
 import { buildProfileBrief } from './advancedScreener.js';
 import { fetchMarketContext } from './marketData.js';
 import { ANALYST_IDENTITY, MARKET_DATA_INSTRUCTION, buildAccountabilityScorecard } from './analystPrompts.js';
+import { getEffectiveCash, validateSignals } from './capitalGuard.js';
 import logger from './logger.js';
 
 const anthropic = new Anthropic({
@@ -28,7 +29,7 @@ export async function generateTradeSignals(portfolioId, extraContext = '') {
   }
 
   const profileBrief = buildProfileBrief(portfolio);
-  const cash = parseFloat(portfolio.availableCash || 0);
+  const { effectiveCash, reservedCash, rawCash } = await getEffectiveCash(portfolioId);
 
   // Get today's target for context
   const today = new Date();
@@ -66,7 +67,7 @@ ${scorecard}
 
 ${profileBrief}
 
-Available Cash: ₹${cash.toLocaleString('en-IN')}
+HARD CAPITAL LIMIT: ₹${effectiveCash.toLocaleString('en-IN')} available cash (₹${reservedCash.toFixed(0)} reserved by pending signals). Total cost of ALL BUY signals MUST NOT exceed ₹${effectiveCash.toLocaleString('en-IN')}. This is a hard constraint — violating it means orders will be rejected.
 ${targetContext}
 ${extraContext}
 
@@ -85,7 +86,7 @@ ${scorecard ? 'IMPORTANT: Review your previous calls above. If any call went wro
 Rules:
 - Mix of BUY and SELL signals as the market dictates
 - SELL signals: ONLY for stocks already in holdings. If a holding has a broken thesis, say EXIT
-- BUY signals: Must be affordable within available cash. Calculate quantity at current market price
+- BUY signals: HARD LIMIT — total cost (quantity × price) across ALL BUY signals MUST NOT exceed ₹${effectiveCash.toLocaleString('en-IN')}. Before responding, sum your quantities × prices and verify the total fits. If it doesn't, reduce quantities or drop lower-conviction signals
 - Be BOLD but DISCIPLINED: high conviction calls with defined risk
 - Confidence 80+ = "I'm putting my reputation on this", 60-79 = "Good setup, worth the risk", below 60 = don't bother including it
 - If the market setup is genuinely bad today (gap down, global crisis), it's OK to return fewer signals or mostly SELL/EXIT signals. Don't force trades
@@ -132,6 +133,9 @@ Technical notes:
       return [];
     }
 
+    // Capital guard: validate signals against effective cash
+    const validatedSignals = await validateSignals(result.signals, portfolioId);
+
     // Set expiry to end of today (3:30 PM IST = 10:00 UTC)
     const expiresAt = new Date();
     expiresAt.setUTCHours(10, 0, 0, 0);
@@ -141,7 +145,7 @@ Technical notes:
 
     // Create signals in DB
     const createdSignals = [];
-    for (const sig of result.signals.slice(0, 5)) {
+    for (const sig of validatedSignals.slice(0, 5)) {
       try {
         const created = await prisma.tradeSignal.create({
           data: {

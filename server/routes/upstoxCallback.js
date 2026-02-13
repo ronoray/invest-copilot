@@ -1,6 +1,7 @@
 import express from 'express';
 import { exchangeCodeForToken } from '../services/upstoxService.js';
 import { getBot } from '../services/telegramBot.js';
+import { updateCashOnExecution } from '../services/capitalGuard.js';
 import prisma from '../services/prisma.js';
 import logger from '../services/logger.js';
 const router = express.Router();
@@ -155,6 +156,18 @@ router.post('/webhook/upstox/orders', async (req, res) => {
 
     if (updated.count > 0) {
       logger.info(`Order ${orderId} updated via webhook: ${status}`);
+
+      // Sync portfolio cash on completed orders
+      if (status === 'complete') {
+        try {
+          const completedOrder = await prisma.upstoxOrder.findFirst({ where: { orderId } });
+          if (completedOrder) {
+            await updateCashOnExecution(completedOrder.id);
+          }
+        } catch (cashErr) {
+          logger.error(`Cash sync failed for order ${orderId}:`, cashErr.message);
+        }
+      }
 
       // Notify user via Telegram about order completion/rejection
       if (status === 'complete' || status === 'rejected' || status === 'cancelled') {

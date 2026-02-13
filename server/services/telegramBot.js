@@ -5,6 +5,7 @@ import { getCurrentPrice } from './marketData.js';
 import { scanMarketForOpportunities, buildProfileBrief } from './advancedScreener.js';
 import { generateMultiAssetRecommendations } from './multiAssetRecommendations.js';
 import { placeOrder, getOrderStatus, getAuthorizationUrl, isTokenValid } from './upstoxService.js';
+import { preOrderCapitalCheck, updateCashOnExecution } from './capitalGuard.js';
 
 const prisma = new PrismaClient();
 
@@ -154,6 +155,9 @@ async function pollOrderUntilSettled(botInstance, chatId, userId, signalId, sign
           where: { id: signalId },
           data: { status: 'EXECUTED' }
         });
+
+        // Sync portfolio cash
+        await updateCashOnExecution(dbOrderId);
 
         const avgPrice = status.averagePrice ? ` @ ${formatPrice(status.averagePrice)}` : '';
         const successMsg = `✅ *ORDER CONFIRMED*\n\n${signal.side} ${signal.quantity}x *${signal.symbol}*${avgPrice}\nOrder ID: \`${orderId}\`\n\n_Exchange confirmed. Position is live._`;
@@ -309,6 +313,38 @@ async function handleExecuteSignal(botInstance, query, signalId) {
       }
     }
 
+    // Capital check for BUY orders
+    if (signal.side === 'BUY') {
+      let estimatedPrice = price; // LIMIT price
+      if (orderType === 'MARKET') {
+        // For MARKET orders, fetch live price for capital check
+        try {
+          const priceData = await getCurrentPrice(signal.symbol, signal.exchange);
+          estimatedPrice = priceData?.price || priceData?.lastPrice || parseFloat(signal.triggerPrice || signal.triggerLow || 0);
+        } catch (e) {
+          estimatedPrice = parseFloat(signal.triggerPrice || signal.triggerLow || 0);
+        }
+      }
+
+      if (estimatedPrice > 0) {
+        const capitalCheck = await preOrderCapitalCheck(signal.portfolioId, 'BUY', signal.quantity, estimatedPrice);
+        if (!capitalCheck.allowed) {
+          logger.warn(`Signal #${signalId} capital check failed: ${capitalCheck.reason}`);
+          await botInstance.editMessageReplyMarkup(
+            { inline_keyboard: [
+              [{ text: '🚫 Dismiss', callback_data: `sig_dismiss_${signalId}` }]
+            ] },
+            { chat_id: chatId, message_id: messageId }
+          ).catch(() => {});
+          await botInstance.sendMessage(chatId,
+            `💰 *Capital Check Failed*\n\nOrder cost: ₹${capitalCheck.orderCost.toLocaleString('en-IN')}\nAvailable cash: ₹${capitalCheck.effectiveCash.toLocaleString('en-IN')}\n\n_${capitalCheck.reason}_`,
+            { parse_mode: 'Markdown' }
+          );
+          return;
+        }
+      }
+    }
+
     const orderParams = {
       symbol: signal.symbol,
       exchange: `${signal.exchange}_EQ`,
@@ -421,6 +457,35 @@ async function handleExecuteMarketFallback(botInstance, query, signalId) {
       { inline_keyboard: [[{ text: '⏳ Placing MARKET order...', callback_data: 'noop' }]] },
       { chat_id: chatId, message_id: messageId }
     ).catch(() => {});
+
+    // Capital check for BUY orders
+    if (signal.side === 'BUY') {
+      let estimatedPrice = 0;
+      try {
+        const priceData = await getCurrentPrice(signal.symbol, signal.exchange);
+        estimatedPrice = priceData?.price || priceData?.lastPrice || parseFloat(signal.triggerPrice || signal.triggerLow || 0);
+      } catch (e) {
+        estimatedPrice = parseFloat(signal.triggerPrice || signal.triggerLow || 0);
+      }
+
+      if (estimatedPrice > 0) {
+        const capitalCheck = await preOrderCapitalCheck(signal.portfolioId, 'BUY', signal.quantity, estimatedPrice);
+        if (!capitalCheck.allowed) {
+          logger.warn(`Signal #${signalId} MARKET fallback capital check failed: ${capitalCheck.reason}`);
+          await botInstance.editMessageReplyMarkup(
+            { inline_keyboard: [
+              [{ text: '🚫 Dismiss', callback_data: `sig_dismiss_${signalId}` }]
+            ] },
+            { chat_id: chatId, message_id: messageId }
+          ).catch(() => {});
+          await botInstance.sendMessage(chatId,
+            `💰 *Capital Check Failed*\n\nOrder cost: ₹${capitalCheck.orderCost.toLocaleString('en-IN')}\nAvailable cash: ₹${capitalCheck.effectiveCash.toLocaleString('en-IN')}\n\n_${capitalCheck.reason}_`,
+            { parse_mode: 'Markdown' }
+          );
+          return;
+        }
+      }
+    }
 
     const orderParams = {
       symbol: signal.symbol,

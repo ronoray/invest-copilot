@@ -6,6 +6,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { buildProfileBrief } from './advancedScreener.js';
 import { fetchMarketContext } from './marketData.js';
 import { ANALYST_IDENTITY, MARKET_DATA_INSTRUCTION, buildAccountabilityScorecard } from './analystPrompts.js';
+import { validateAllocations } from './capitalGuard.js';
 import logger from './logger.js';
 
 const anthropic = new Anthropic({
@@ -245,7 +246,7 @@ Return ONLY valid JSON (no markdown):
 **CRITICAL RULES:**
 - Use REAL Indian instrument names (NSE stocks, actual MF names, real SGB series)
 - Do NOT recommend stocks the investor already holds
-- Allocations must sum to approximately ₹${capital.toLocaleString('en-IN')}
+- HARD LIMIT: Total allocations across ALL recommendations MUST NOT exceed ₹${capital.toLocaleString('en-IN')}. Sum every allocation field before responding — if they exceed this limit, scale them down
 - Every "reasoning" field must reference THIS investor's specific situation
 - Guides must be genuinely helpful for absolute beginners
 - Provide at least 4-5 stocks, 2-3 ETFs, 4-6 MFs, 2-3 commodities, 2-3 fixed income, 1-2 alternatives
@@ -268,6 +269,20 @@ Return ONLY valid JSON (no markdown):
     }
 
     const recommendations = JSON.parse(jsonMatch[0]);
+
+    // Capital guard: validate all allocation amounts against budget
+    if (recommendations.recommendations) {
+      const recs = recommendations.recommendations;
+      const allItems = [
+        ...(recs.stocks || []),
+        ...(recs.etfs || []),
+        ...(recs.mutualFunds || []),
+        ...(recs.commodities || []),
+        ...(recs.fixedIncome || []),
+        ...(recs.alternatives || [])
+      ];
+      validateAllocations(allItems, capital, 'allocation');
+    }
 
     logger.info('Multi-asset recommendations generated successfully');
 

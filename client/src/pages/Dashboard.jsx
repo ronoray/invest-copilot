@@ -147,7 +147,7 @@ export default function Dashboard() {
           <select
             value={selectedPortfolioId}
             onChange={(e) => setSelectedPortfolioId(e.target.value === 'all' ? 'all' : parseInt(e.target.value))}
-            className="px-4 py-2 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-lg font-semibold focus:outline-none focus:ring-2 focus:ring-blue-400"
+            className="w-full px-4 py-2 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-lg font-semibold focus:outline-none focus:ring-2 focus:ring-blue-400"
           >
             <option value="all">All Portfolios</option>
             {portfolios.map(p => (

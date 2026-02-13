@@ -345,6 +345,18 @@ export async function isTokenValid(userId) {
 }
 
 /**
+ * Get funds and margin from Upstox
+ */
+export async function getFunds(userId) {
+  const integration = await getIntegration(userId);
+  const result = await upstoxRequest(integration.accessToken, 'GET', '/user/get-funds-and-margin');
+  return {
+    availableMargin: result.data?.equity?.available_margin || 0,
+    usedMargin: result.data?.equity?.used_margin || 0,
+  };
+}
+
+/**
  * Get live holdings from Upstox
  */
 export async function getHoldings(userId) {

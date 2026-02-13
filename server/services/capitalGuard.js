@@ -4,6 +4,7 @@
 
 import prisma from './prisma.js';
 import logger from './logger.js';
+import { getFunds } from './upstoxService.js';
 
 /**
  * Get effective cash for a portfolio, accounting for pending signal reservations.
@@ -244,10 +245,66 @@ export async function updateCashOnExecution(dbOrderId) {
   }
 }
 
+/**
+ * Sync Upstox available margin to portfolio.availableCash.
+ * Also expires stale PENDING/SNOOZED signals older than 24 hours.
+ *
+ * @param {number} userId
+ * @returns {{ synced: number, availableMargin: number }}
+ */
+export async function syncUpstoxFunds(userId) {
+  try {
+    const funds = await getFunds(userId);
+    const availableMargin = funds.availableMargin;
+
+    // Find Upstox portfolios for this user
+    const portfolios = await prisma.portfolio.findMany({
+      where: {
+        userId,
+        broker: 'UPSTOX',
+        isActive: true
+      }
+    });
+
+    let synced = 0;
+    for (const portfolio of portfolios) {
+      const oldCash = parseFloat(portfolio.availableCash || 0);
+      if (Math.abs(oldCash - availableMargin) > 0.01) {
+        await prisma.portfolio.update({
+          where: { id: portfolio.id },
+          data: { availableCash: availableMargin }
+        });
+        logger.info(`[Capital Guard] Upstox funds synced: portfolio ${portfolio.id} cash ₹${oldCash.toFixed(0)} → ₹${availableMargin.toFixed(0)}`);
+        synced++;
+      }
+    }
+
+    // Expire stale signals older than 24 hours (safety net)
+    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const expired = await prisma.tradeSignal.updateMany({
+      where: {
+        status: { in: ['PENDING', 'SNOOZED'] },
+        createdAt: { lt: twentyFourHoursAgo }
+      },
+      data: { status: 'EXPIRED' }
+    });
+
+    if (expired.count > 0) {
+      logger.info(`[Capital Guard] Expired ${expired.count} stale signals (>24h old)`);
+    }
+
+    return { synced, availableMargin };
+  } catch (error) {
+    logger.error(`[Capital Guard] syncUpstoxFunds failed for user ${userId}:`, error.message);
+    return { synced: 0, availableMargin: 0 };
+  }
+}
+
 export default {
   getEffectiveCash,
   validateSignals,
   validateAllocations,
   preOrderCapitalCheck,
-  updateCashOnExecution
+  updateCashOnExecution,
+  syncUpstoxFunds
 };

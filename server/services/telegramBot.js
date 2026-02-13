@@ -5,7 +5,7 @@ import { getCurrentPrice } from './marketData.js';
 import { scanMarketForOpportunities, buildProfileBrief } from './advancedScreener.js';
 import { generateMultiAssetRecommendations } from './multiAssetRecommendations.js';
 import { placeOrder, getOrderStatus, getAuthorizationUrl, isTokenValid } from './upstoxService.js';
-import { preOrderCapitalCheck, updateCashOnExecution } from './capitalGuard.js';
+import { preOrderCapitalCheck, updateCashOnExecution, syncUpstoxFunds } from './capitalGuard.js';
 
 const prisma = new PrismaClient();
 
@@ -313,6 +313,13 @@ async function handleExecuteSignal(botInstance, query, signalId) {
       }
     }
 
+    // Sync Upstox funds before capital check (ensures real-time cash)
+    try {
+      await syncUpstoxFunds(userId);
+    } catch (syncErr) {
+      logger.warn(`Pre-execution fund sync failed for signal #${signalId}: ${syncErr.message}`);
+    }
+
     // Capital check for BUY orders
     if (signal.side === 'BUY') {
       let estimatedPrice = price; // LIMIT price
@@ -457,6 +464,13 @@ async function handleExecuteMarketFallback(botInstance, query, signalId) {
       { inline_keyboard: [[{ text: '⏳ Placing MARKET order...', callback_data: 'noop' }]] },
       { chat_id: chatId, message_id: messageId }
     ).catch(() => {});
+
+    // Sync Upstox funds before capital check (ensures real-time cash)
+    try {
+      await syncUpstoxFunds(userId);
+    } catch (syncErr) {
+      logger.warn(`Pre-execution fund sync failed for MARKET signal #${signalId}: ${syncErr.message}`);
+    }
 
     // Capital check for BUY orders
     if (signal.side === 'BUY') {

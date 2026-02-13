@@ -3,6 +3,7 @@ import prisma from '../services/prisma.js';
 import { getBot } from '../services/telegramBot.js';
 import { generateTradeSignals, expireOldSignals } from '../services/signalGenerator.js';
 import { isTokenValid, getAuthorizationUrl, getHoldings, getOrderStatus } from '../services/upstoxService.js';
+import { syncUpstoxFunds } from '../services/capitalGuard.js';
 import { refreshAiTarget } from '../services/dailyTargetService.js';
 import { isTradingDay } from '../utils/marketHolidays.js';
 import logger from '../services/logger.js';
@@ -47,6 +48,39 @@ async function remindUpstoxAuth() {
 }
 
 /**
+ * Sync Upstox funds for all connected integrations with valid tokens.
+ * Updates portfolio.availableCash from Upstox available_margin.
+ */
+async function syncAllUpstoxFunds() {
+  if (!isTradingDay(new Date())) return;
+
+  try {
+    const integrations = await prisma.upstoxIntegration.findMany({
+      where: { isConnected: true }
+    });
+
+    let synced = 0;
+    for (const integration of integrations) {
+      const valid = await isTokenValid(integration.userId);
+      if (!valid) continue;
+
+      try {
+        const result = await syncUpstoxFunds(integration.userId);
+        synced += result.synced;
+      } catch (err) {
+        logger.error(`Fund sync failed for user ${integration.userId}:`, err.message);
+      }
+    }
+
+    if (synced > 0) {
+      logger.info(`[Fund Sync] Synced ${synced} Upstox portfolio(s)`);
+    }
+  } catch (error) {
+    logger.error('Fund sync cron error:', error);
+  }
+}
+
+/**
  * Auto-generate trade signals for all active portfolios.
  * Runs at 9:30 AM and 1:00 PM IST during market hours.
  */
@@ -54,6 +88,9 @@ async function generateSignalsForAllPortfolios() {
   if (!isTradingDay(new Date())) return;
 
   try {
+    // Sync Upstox funds before generating signals (freshest cash data)
+    await syncAllUpstoxFunds();
+
     // Get all active portfolios that have holdings
     const portfolios = await prisma.portfolio.findMany({
       where: { isActive: true },
@@ -485,6 +522,15 @@ export function initSignalNotifier() {
     timezone: 'Asia/Kolkata'
   });
 
+  // Sync Upstox funds at 9:17 AM (after auth reminder, before signals)
+  cron.schedule('17 9 * * 1-5', async () => {
+    if (!isTradingDay(new Date())) return;
+    logger.info('Running Upstox fund sync...');
+    await syncAllUpstoxFunds();
+  }, {
+    timezone: 'Asia/Kolkata'
+  });
+
   // Compute daily earning targets at 9:16 AM (after Upstox auth, before signals)
   cron.schedule('16 9 * * 1-5', async () => {
     logger.info('Running morning target computation...');
@@ -523,10 +569,11 @@ export function initSignalNotifier() {
   });
 
   logger.info('Signal notifier initialized:');
+  logger.info('  Upstox fund sync: 9:17 AM IST');
   logger.info('  Morning targets: 9:16 AM IST');
   logger.info('  Signal generation: 9:30 AM + 1:00 PM IST');
   logger.info('  Signal notifications: every 5 min, 9-3:30 PM IST');
   logger.info('  Order status polling: every 5 min, 9 AM-4 PM IST');
 }
 
-export default { initSignalNotifier, notifyPendingSignals, generateSignalsForAllPortfolios, pollPendingOrders, computeMorningTargets };
+export default { initSignalNotifier, notifyPendingSignals, generateSignalsForAllPortfolios, pollPendingOrders, computeMorningTargets, syncAllUpstoxFunds };

@@ -1,7 +1,7 @@
 import express from 'express';
 import { exchangeCodeForToken } from '../services/upstoxService.js';
 import { getBot } from '../services/telegramBot.js';
-import { updateCashOnExecution } from '../services/capitalGuard.js';
+import { updateCashOnExecution, syncUpstoxFunds } from '../services/capitalGuard.js';
 import prisma from '../services/prisma.js';
 import logger from '../services/logger.js';
 const router = express.Router();
@@ -25,6 +25,13 @@ router.get('/auth/upstox/callback', async (req, res) => {
     }
 
     await exchangeCodeForToken(code, userId);
+
+    // Sync Upstox funds to portfolio availableCash
+    try {
+      await syncUpstoxFunds(userId);
+    } catch (syncErr) {
+      logger.warn('Fund sync after OAuth failed:', syncErr.message);
+    }
 
     // Notify user via Telegram
     try {
@@ -101,6 +108,13 @@ router.post('/webhook/upstox/token', async (req, res) => {
     });
 
     logger.info(`Upstox token auto-refreshed for user ${integration.userId} via webhook`);
+
+    // Sync Upstox funds to portfolio availableCash
+    try {
+      await syncUpstoxFunds(integration.userId);
+    } catch (syncErr) {
+      logger.warn('Fund sync after token webhook failed:', syncErr.message);
+    }
 
     // Notify via Telegram
     try {

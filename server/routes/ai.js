@@ -850,7 +850,7 @@ const upload = multer({
  */
 router.post('/parse-screenshot', upload.single('screenshot'), async (req, res) => {
   try {
-    const userId = req.userId;
+    const userId = req.user.userId;
     const { portfolioId } = req.body;
 
     if (!req.file) {
@@ -984,7 +984,7 @@ If multiple trades are visible, return an array. If you cannot extract data, ret
  */
 router.post('/confirm-screenshot-trade', async (req, res) => {
   try {
-    const userId = req.userId;
+    const userId = req.user.userId;
     const { screenshotId, portfolioId, trades } = req.body;
 
     if (!screenshotId || !portfolioId || !trades || !Array.isArray(trades)) {

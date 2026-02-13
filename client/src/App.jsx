@@ -180,6 +180,7 @@ function NavLink({ to, icon, children, active }) {
   return (
     <Link
       to={to}
+      title={children}
       className={`inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium whitespace-nowrap transition-colors ${
         active
           ? 'border-blue-500 text-blue-600'

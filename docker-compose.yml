@@ -134,12 +134,14 @@ services:
         condition: service_healthy
     networks:
       - traefik-network
+      - edge
     volumes:
       - invest_logs:/app/logs
       - invest_backups:/backups
       - /tmp:/host-tmp
     labels:
       - "traefik.enable=true"
+      - "traefik.docker.network=edge"
       - "traefik.http.routers.invest-api.rule=Host(`invest.hungrytimes.in`) && PathPrefix(`/api`)"
       - "traefik.http.routers.invest-api.entrypoints=websecure"
       - "traefik.http.routers.invest-api.tls.certresolver=letsencrypt"
@@ -163,8 +165,10 @@ services:
       VITE_API_URL: https://invest.hungrytimes.in/api
     networks:
       - traefik-network
+      - edge
     labels:
       - "traefik.enable=true"
+      - "traefik.docker.network=edge"
       - "traefik.http.routers.invest-web.rule=Host(`invest.hungrytimes.in`)"
       - "traefik.http.routers.invest-web.entrypoints=websecure"
       - "traefik.http.routers.invest-web.tls.certresolver=letsencrypt"
@@ -182,4 +186,6 @@ volumes:
 
 networks:
   traefik-network:
+    external: true
+  edge:
     external: true

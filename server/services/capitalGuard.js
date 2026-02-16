@@ -246,6 +246,96 @@ export async function updateCashOnExecution(dbOrderId) {
 }
 
 /**
+ * Upsert holding when an order is confirmed COMPLETE.
+ * BUY: create or add to existing holding (weighted avg price).
+ * SELL: reduce quantity; delete if 0 remaining.
+ *
+ * @param {number} dbOrderId - The UpstoxOrder record ID
+ */
+export async function upsertHoldingOnExecution(dbOrderId) {
+  try {
+    const order = await prisma.upstoxOrder.findUnique({
+      where: { id: dbOrderId }
+    });
+
+    if (!order || !order.portfolioId) {
+      logger.warn(`[Capital Guard] upsertHolding: order ${dbOrderId} not found or no portfolioId`);
+      return;
+    }
+
+    const filledQty = order.filledQuantity || order.quantity;
+    const avgPrice = parseFloat(order.averagePrice || order.price || 0);
+    const side = (order.transactionType || '').toUpperCase();
+    // Strip _EQ suffix from exchange (e.g. NSE_EQ → NSE)
+    const exchange = (order.exchange || 'NSE').replace(/_EQ$/, '');
+
+    if (avgPrice <= 0 || filledQty <= 0) {
+      logger.warn(`[Capital Guard] upsertHolding: invalid qty=${filledQty} or price=${avgPrice} for order ${dbOrderId}`);
+      return;
+    }
+
+    const existing = await prisma.holding.findUnique({
+      where: {
+        portfolioId_symbol_exchange: {
+          portfolioId: order.portfolioId,
+          symbol: order.symbol,
+          exchange
+        }
+      }
+    });
+
+    if (side === 'BUY') {
+      if (existing) {
+        // Weighted average price
+        const oldTotal = existing.quantity * parseFloat(existing.avgPrice);
+        const newTotal = filledQty * avgPrice;
+        const combinedQty = existing.quantity + filledQty;
+        const weightedAvg = (oldTotal + newTotal) / combinedQty;
+
+        await prisma.holding.update({
+          where: { id: existing.id },
+          data: {
+            quantity: combinedQty,
+            avgPrice: weightedAvg
+          }
+        });
+        logger.info(`[Capital Guard] Holding updated: ${order.symbol} ${existing.quantity}→${combinedQty} @ ₹${weightedAvg.toFixed(2)} (portfolio ${order.portfolioId})`);
+      } else {
+        await prisma.holding.create({
+          data: {
+            portfolioId: order.portfolioId,
+            symbol: order.symbol,
+            exchange,
+            quantity: filledQty,
+            avgPrice
+          }
+        });
+        logger.info(`[Capital Guard] Holding created: ${order.symbol} ${filledQty}x @ ₹${avgPrice.toFixed(2)} (portfolio ${order.portfolioId})`);
+      }
+    } else if (side === 'SELL') {
+      if (!existing) {
+        logger.warn(`[Capital Guard] upsertHolding: SELL but no existing holding for ${order.symbol} (portfolio ${order.portfolioId})`);
+        return;
+      }
+
+      const remainingQty = existing.quantity - filledQty;
+      if (remainingQty <= 0) {
+        await prisma.holding.delete({ where: { id: existing.id } });
+        logger.info(`[Capital Guard] Holding deleted: ${order.symbol} fully sold (portfolio ${order.portfolioId})`);
+      } else {
+        await prisma.holding.update({
+          where: { id: existing.id },
+          data: { quantity: remainingQty }
+        });
+        logger.info(`[Capital Guard] Holding reduced: ${order.symbol} ${existing.quantity}→${remainingQty} (portfolio ${order.portfolioId})`);
+      }
+    }
+  } catch (error) {
+    logger.error(`[Capital Guard] upsertHoldingOnExecution failed for order ${dbOrderId}:`, error.message);
+  }
+}
+
+/**
  * Sync Upstox available margin to portfolio.availableCash.
  * Also expires stale PENDING/SNOOZED signals older than 24 hours.
  *
@@ -306,5 +396,6 @@ export default {
   validateAllocations,
   preOrderCapitalCheck,
   updateCashOnExecution,
+  upsertHoldingOnExecution,
   syncUpstoxFunds
 };

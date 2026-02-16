@@ -5,7 +5,7 @@ import { getCurrentPrice } from './marketData.js';
 import { scanMarketForOpportunities, buildProfileBrief } from './advancedScreener.js';
 import { generateMultiAssetRecommendations } from './multiAssetRecommendations.js';
 import { placeOrder, getOrderStatus, getAuthorizationUrl, isTokenValid } from './upstoxService.js';
-import { preOrderCapitalCheck, updateCashOnExecution, syncUpstoxFunds } from './capitalGuard.js';
+import { preOrderCapitalCheck, updateCashOnExecution, upsertHoldingOnExecution, syncUpstoxFunds } from './capitalGuard.js';
 
 const prisma = new PrismaClient();
 
@@ -156,8 +156,9 @@ async function pollOrderUntilSettled(botInstance, chatId, userId, signalId, sign
           data: { status: 'EXECUTED' }
         });
 
-        // Sync portfolio cash
+        // Sync portfolio cash and holdings
         await updateCashOnExecution(dbOrderId);
+        await upsertHoldingOnExecution(dbOrderId);
 
         const avgPrice = status.averagePrice ? ` @ ${formatPrice(status.averagePrice)}` : '';
         const successMsg = `✅ *ORDER CONFIRMED*\n\n${signal.side} ${signal.quantity}x *${signal.symbol}*${avgPrice}\nOrder ID: \`${orderId}\`\n\n_Exchange confirmed. Position is live._`;

@@ -1,7 +1,7 @@
 import express from 'express';
 import { exchangeCodeForToken } from '../services/upstoxService.js';
 import { getBot } from '../services/telegramBot.js';
-import { updateCashOnExecution, syncUpstoxFunds } from '../services/capitalGuard.js';
+import { updateCashOnExecution, upsertHoldingOnExecution, syncUpstoxFunds } from '../services/capitalGuard.js';
 import prisma from '../services/prisma.js';
 import logger from '../services/logger.js';
 const router = express.Router();
@@ -171,15 +171,28 @@ router.post('/webhook/upstox/orders', async (req, res) => {
     if (updated.count > 0) {
       logger.info(`Order ${orderId} updated via webhook: ${status}`);
 
-      // Sync portfolio cash on completed orders
+      // Sync portfolio cash and holdings on completed orders
       if (status === 'complete') {
         try {
           const completedOrder = await prisma.upstoxOrder.findFirst({ where: { orderId } });
           if (completedOrder) {
             await updateCashOnExecution(completedOrder.id);
+            await upsertHoldingOnExecution(completedOrder.id);
+
+            // Mark linked TradeSignal as EXECUTED (catches poll timeout case)
+            const linkedSignal = await prisma.tradeSignal.findFirst({
+              where: { upstoxOrderId: completedOrder.id, status: { not: 'EXECUTED' } }
+            });
+            if (linkedSignal) {
+              await prisma.tradeSignal.update({
+                where: { id: linkedSignal.id },
+                data: { status: 'EXECUTED' }
+              });
+              logger.info(`Signal #${linkedSignal.id} marked EXECUTED via webhook for order ${orderId}`);
+            }
           }
         } catch (cashErr) {
-          logger.error(`Cash sync failed for order ${orderId}:`, cashErr.message);
+          logger.error(`Cash/holding sync failed for order ${orderId}:`, cashErr.message);
         }
       }
 
@@ -232,7 +245,6 @@ router.post('/webhook/upstox/orders', async (req, res) => {
               await prisma.signalAck.create({
                 data: {
                   signalId: linkedSignal.id,
-                  userId: order.integration?.userId,
                   action: 'ROLLBACK',
                   note: `Order ${status}: ${orderData.status_message || 'No reason provided'}`
                 }

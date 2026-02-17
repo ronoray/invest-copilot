@@ -22,24 +22,23 @@ const NSE_HOLIDAYS = {
   '2025-11-26': 'Constitution Day (tentative)',
   '2025-12-25': 'Christmas',
 
-  // 2026
+  // 2026 — Source: NSE official circular, Groww, Zerodha
+  // Mahashivratri (Feb 15) falls on Sunday — not a trading holiday
+  '2026-01-15': 'Municipal Corporation Election - Maharashtra',
   '2026-01-26': 'Republic Day',
-  '2026-02-17': 'Mahashivratri',
   '2026-03-03': 'Holi',
-  '2026-03-20': 'Id-Ul-Fitr (Ramadan)',
-  '2026-03-30': 'Shri Mahavir Jayanti',
+  '2026-03-26': 'Shri Ram Navami',
+  '2026-03-31': 'Shri Mahavir Jayanti',
   '2026-04-03': 'Good Friday',
   '2026-04-14': 'Dr. Baba Saheb Ambedkar Jayanti',
   '2026-05-01': 'Maharashtra Day',
-  '2026-05-27': 'Id-Ul-Zuha (Bakri Id)',
+  '2026-05-28': 'Id-Ul-Zuha (Bakri Id)',
   '2026-06-26': 'Muharram',
-  '2026-08-15': 'Independence Day',
-  '2026-08-16': 'Ganesh Chaturthi',
+  '2026-09-14': 'Ganesh Chaturthi',
   '2026-10-02': 'Mahatma Gandhi Jayanti',
-  '2026-10-09': 'Dussehra',
-  '2026-10-29': 'Diwali Laxmi Pujan',
-  '2026-10-30': 'Diwali Balipratipada',
-  '2026-11-16': 'Prakash Gurpurb Sri Guru Nanak Dev',
+  '2026-10-20': 'Dussehra',
+  '2026-11-10': 'Diwali Balipratipada',
+  '2026-11-24': 'Prakash Gurpurb Sri Guru Nanak Dev',
   '2026-12-25': 'Christmas',
 };
 

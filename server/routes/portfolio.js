@@ -24,7 +24,7 @@ router.get('/', async (req, res) => {
       if (userId) {
         try {
           const hasUpstox = await prisma.upstoxIntegration.findFirst({
-            where: { userId, isActive: true }
+            where: { userId, isConnected: true }
           });
           if (hasUpstox) {
             await Promise.all([

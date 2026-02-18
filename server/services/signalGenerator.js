@@ -112,10 +112,12 @@ Respond in this EXACT JSON format (no markdown, no extra text):
 Technical notes:
 - Maximum 5 signals (quality over quantity)
 - triggerType: MARKET (execute now), LIMIT (at specific price), ZONE (between triggerLow and triggerHigh)
-- MARKET orders: triggerPrice/triggerLow/triggerHigh = null
+- MARKET orders: set "price" field to the current approximate market price (for capital validation). triggerPrice/triggerLow/triggerHigh = null
 - LIMIT orders: set triggerPrice
 - ZONE orders: set triggerLow and triggerHigh
+- EVERY signal MUST include a "price" field with the approximate current price of the stock — this is mandatory for capital validation
 - confidence: 0-100 (minimum 60 to be worth including)
+- CRITICAL CAPITAL CHECK: Before finalizing your response, add up (quantity × price) for ALL BUY signals. If the total exceeds ₹${effectiveCash.toLocaleString('en-IN')}, you MUST reduce quantities or remove signals until the total fits. Show your math in the rationale of the first signal.
 - If genuinely no good setups exist today, return empty array — never force a bad trade`;
 
   try {

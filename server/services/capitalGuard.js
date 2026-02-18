@@ -5,6 +5,7 @@
 import prisma from './prisma.js';
 import logger from './logger.js';
 import { getFunds, getHoldings, getPositions, getOrderStatus } from './upstoxService.js';
+import { getCurrentPrice } from './marketData.js';
 
 /**
  * Get effective cash for a portfolio, accounting for pending signal reservations.
@@ -80,12 +81,25 @@ export async function validateSignals(signals, portfolioId) {
 
   // Validate BUY signals against remaining cash
   for (const sig of buySignals) {
-    const price = parseFloat(sig.triggerPrice || sig.triggerLow || sig.price || 0);
+    let price = parseFloat(sig.triggerPrice || sig.triggerLow || sig.price || 0);
     const quantity = Math.max(1, parseInt(sig.quantity) || 1);
 
+    // MARKET orders: fetch live price for capital validation
     if (price <= 0) {
-      // MARKET order — no price to validate against, pass through
-      validated.push(sig);
+      try {
+        const liveData = await getCurrentPrice(sig.symbol, sig.exchange || 'NSE');
+        price = liveData?.price || liveData?.lastPrice || 0;
+        if (price > 0) {
+          logger.info(`[Capital Guard] MARKET order ${sig.symbol}: fetched live price ₹${price.toFixed(2)} for validation`);
+        }
+      } catch (e) {
+        logger.warn(`[Capital Guard] Could not fetch price for ${sig.symbol}: ${e.message}`);
+      }
+    }
+
+    if (price <= 0) {
+      // Still no price — drop signal rather than pass unchecked
+      logger.warn(`[Capital Guard] BUY ${sig.symbol}: DROPPED — no price available for capital check`);
       continue;
     }
 

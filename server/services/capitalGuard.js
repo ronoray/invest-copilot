@@ -4,7 +4,7 @@
 
 import prisma from './prisma.js';
 import logger from './logger.js';
-import { getFunds, getHoldings } from './upstoxService.js';
+import { getFunds, getHoldings, getPositions } from './upstoxService.js';
 
 /**
  * Get effective cash for a portfolio, accounting for pending signal reservations.
@@ -392,7 +392,8 @@ export async function syncUpstoxFunds(userId) {
 
 /**
  * Sync holdings from Upstox API into the DB for all UPSTOX portfolios of a user.
- * Creates missing holdings, updates qty/avgPrice/currentPrice, removes sold-off holdings.
+ * Merges long-term holdings (demat, T+1 delayed) with short-term positions
+ * (today's buys/sells) for an accurate real-time picture.
  *
  * @param {number} userId
  * @returns {{ synced: number, created: number, removed: number }}
@@ -401,8 +402,72 @@ export async function syncUpstoxHoldings(userId) {
   try {
     const { holdings: upstoxHoldings } = await getHoldings(userId);
 
-    if (!upstoxHoldings || upstoxHoldings.length === 0) {
-      logger.info(`[Capital Guard] syncUpstoxHoldings: no Upstox holdings for user ${userId}`);
+    // Fetch today's positions to detect same-day sells (before T+1 settlement)
+    let todayPositions = [];
+    try {
+      const posResult = await getPositions(userId);
+      todayPositions = posResult.positions || [];
+    } catch (err) {
+      logger.warn(`[Capital Guard] Could not fetch positions (non-blocking): ${err.message}`);
+    }
+
+    // Build a map of today's sell/buy adjustments: symbol → { sellQty, buyQty }
+    const positionAdjustments = new Map();
+    for (const pos of todayPositions) {
+      const symbol = (pos.tradingsymbol || pos.trading_symbol || '').replace(/-EQ$/, '');
+      if (!symbol) continue;
+      const exchange = (pos.exchange || 'NSE').replace(/_EQ$/, '');
+      const key = `${symbol}:${exchange}`;
+      positionAdjustments.set(key, {
+        sellQty: pos.day_sell_quantity || 0,
+        buyQty: pos.day_buy_quantity || 0,
+        lastPrice: parseFloat(pos.last_price || 0)
+      });
+    }
+
+    // Build effective holdings: start with long-term, adjust for today's activity
+    const effectiveHoldings = new Map();
+    for (const uh of (upstoxHoldings || [])) {
+      const symbol = (uh.tradingsymbol || uh.trading_symbol || '').replace(/-EQ$/, '');
+      const exchange = (uh.exchange || 'NSE').replace(/_EQ$/, '');
+      if (!symbol) continue;
+
+      const key = `${symbol}:${exchange}`;
+      let quantity = uh.quantity || 0;
+      const avgPrice = parseFloat(uh.average_price || 0);
+      const currentPrice = parseFloat(uh.last_price || uh.close_price || 0);
+
+      // Adjust for today's sells (long-term-holdings doesn't reflect same-day sells until T+1)
+      const adj = positionAdjustments.get(key);
+      if (adj && adj.sellQty > 0) {
+        quantity -= adj.sellQty;
+        logger.info(`[Capital Guard] ${symbol}: demat qty=${uh.quantity}, today sold=${adj.sellQty}, effective=${quantity}`);
+      }
+
+      if (quantity > 0) {
+        effectiveHoldings.set(key, { symbol, exchange, quantity, avgPrice, currentPrice });
+      }
+    }
+
+    // Also add any same-day buys not yet in long-term holdings
+    for (const pos of todayPositions) {
+      const symbol = (pos.tradingsymbol || pos.trading_symbol || '').replace(/-EQ$/, '');
+      const exchange = (pos.exchange || 'NSE').replace(/_EQ$/, '');
+      if (!symbol) continue;
+      const key = `${symbol}:${exchange}`;
+      if (!effectiveHoldings.has(key) && (pos.day_buy_quantity || 0) > 0 && (pos.quantity || 0) > 0) {
+        effectiveHoldings.set(key, {
+          symbol, exchange,
+          quantity: pos.quantity,
+          avgPrice: parseFloat(pos.buy_price || pos.average_price || 0),
+          currentPrice: parseFloat(pos.last_price || 0)
+        });
+        logger.info(`[Capital Guard] ${symbol}: new same-day buy, qty=${pos.quantity}`);
+      }
+    }
+
+    if (effectiveHoldings.size === 0) {
+      logger.info(`[Capital Guard] syncUpstoxHoldings: no effective Upstox holdings for user ${userId}`);
     }
 
     // Find all active UPSTOX portfolios for this user
@@ -421,53 +486,40 @@ export async function syncUpstoxHoldings(userId) {
 
       const seenKeys = new Set();
 
-      for (const uh of (upstoxHoldings || [])) {
-        // Upstox format: tradingsymbol, exchange, quantity, average_price, last_price
-        const symbol = uh.tradingsymbol || uh.trading_symbol || '';
-        const exchange = (uh.exchange || 'NSE').replace(/_EQ$/, '');
-        const quantity = uh.quantity || 0;
-        const avgPrice = parseFloat(uh.average_price || 0);
-        const currentPrice = parseFloat(uh.last_price || uh.close_price || 0);
-
-        if (!symbol || quantity <= 0) continue;
-
-        const key = `${symbol}:${exchange}`;
+      for (const [key, uh] of effectiveHoldings) {
         seenKeys.add(key);
-
         const existing = existingMap.get(key);
 
         if (existing) {
-          // Update if changed
           const oldQty = existing.quantity;
           const oldAvg = parseFloat(existing.avgPrice);
           const oldPrice = parseFloat(existing.currentPrice || 0);
 
-          if (oldQty !== quantity || Math.abs(oldAvg - avgPrice) > 0.01 || Math.abs(oldPrice - currentPrice) > 0.5) {
+          if (oldQty !== uh.quantity || Math.abs(oldAvg - uh.avgPrice) > 0.01 || Math.abs(oldPrice - uh.currentPrice) > 0.5) {
             await prisma.holding.update({
               where: { id: existing.id },
-              data: { quantity, avgPrice, currentPrice }
+              data: { quantity: uh.quantity, avgPrice: uh.avgPrice, currentPrice: uh.currentPrice }
             });
             synced++;
-            logger.info(`[Capital Guard] Upstox holding updated: ${symbol} qty=${oldQty}→${quantity}, avg=₹${oldAvg.toFixed(2)}→₹${avgPrice.toFixed(2)}, price=₹${currentPrice.toFixed(2)} (portfolio ${portfolio.id})`);
+            logger.info(`[Capital Guard] Upstox holding updated: ${uh.symbol} qty=${oldQty}→${uh.quantity}, avg=₹${oldAvg.toFixed(2)}→₹${uh.avgPrice.toFixed(2)}, price=₹${uh.currentPrice.toFixed(2)} (portfolio ${portfolio.id})`);
           }
         } else {
-          // Create new holding
           await prisma.holding.create({
             data: {
               portfolioId: portfolio.id,
-              symbol,
-              exchange,
-              quantity,
-              avgPrice,
-              currentPrice
+              symbol: uh.symbol,
+              exchange: uh.exchange,
+              quantity: uh.quantity,
+              avgPrice: uh.avgPrice,
+              currentPrice: uh.currentPrice
             }
           });
           created++;
-          logger.info(`[Capital Guard] Upstox holding created: ${symbol} ${quantity}x @ ₹${avgPrice.toFixed(2)} (portfolio ${portfolio.id})`);
+          logger.info(`[Capital Guard] Upstox holding created: ${uh.symbol} ${uh.quantity}x @ ₹${uh.avgPrice.toFixed(2)} (portfolio ${portfolio.id})`);
         }
       }
 
-      // Remove holdings that no longer exist in Upstox (fully sold)
+      // Remove holdings that no longer exist (fully sold)
       for (const [key, holding] of existingMap) {
         if (!seenKeys.has(key)) {
           await prisma.holding.delete({ where: { id: holding.id } });

@@ -392,3 +392,18 @@ export async function getHoldings(userId) {
     syncedAt: new Date().toISOString()
   };
 }
+
+/**
+ * Get short-term (intraday) positions from Upstox.
+ * Shows today's buy/sell activity — critical for detecting same-day sells
+ * before T+1 settlement updates long-term-holdings.
+ */
+export async function getPositions(userId) {
+  const integration = await getIntegration(userId);
+  const result = await upstoxRequest(
+    integration.accessToken,
+    'GET',
+    '/portfolio/short-term-positions'
+  );
+  return { positions: result.data || [] };
+}

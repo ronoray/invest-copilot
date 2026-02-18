@@ -1077,6 +1077,33 @@ router.post('/confirm-screenshot-trade', async (req, res) => {
       createdTrades.push(newTrade);
     }
 
+    // Update availableCash based on trade activity
+    let cashDelta = 0;
+    for (const trade of trades) {
+      const amount = parseInt(trade.quantity) * parseFloat(trade.price);
+      if (trade.tradeType === 'BUY') {
+        cashDelta -= amount;
+      } else if (trade.tradeType === 'SELL') {
+        cashDelta += amount;
+      }
+    }
+
+    if (cashDelta !== 0) {
+      await prisma.portfolio.update({
+        where: { id: parseInt(portfolioId) },
+        data: {
+          availableCash: { increment: cashDelta },
+          lastVerifiedAt: new Date()
+        }
+      });
+      logger.info(`Screenshot trade: portfolio ${portfolioId} cash delta ${cashDelta >= 0 ? '+' : ''}₹${cashDelta.toFixed(0)}, lastVerifiedAt updated`);
+    } else {
+      await prisma.portfolio.update({
+        where: { id: parseInt(portfolioId) },
+        data: { lastVerifiedAt: new Date() }
+      });
+    }
+
     // Mark screenshot as confirmed
     await prisma.tradeScreenshot.update({
       where: { id: screenshotId },

@@ -1048,6 +1048,17 @@ Use /mute to disable all alerts`;
         const mapped = actionMap[action];
         if (!mapped) return;
 
+        // Load signal with portfolio to check broker type
+        const signal = await prisma.tradeSignal.findUnique({
+          where: { id: signalId },
+          include: { portfolio: true }
+        });
+
+        if (!signal) {
+          await botInstance.answerCallbackQuery(query.id, { text: 'Signal not found' }).catch(() => {});
+          return;
+        }
+
         // Update signal status
         await prisma.tradeSignal.update({
           where: { id: signalId },
@@ -1062,6 +1073,27 @@ Use /mute to disable all alerts`;
             note: `Via Telegram by ${query.from.first_name || query.from.id}`
           }
         });
+
+        // For non-Upstox portfolios: update availableCash on ACK
+        if (action === 'ack' && signal.portfolio && signal.portfolio.broker !== 'UPSTOX') {
+          const price = parseFloat(signal.triggerPrice || signal.triggerLow || 0);
+          if (price > 0 && signal.quantity > 0) {
+            const amount = signal.quantity * price;
+            if (signal.side === 'BUY') {
+              await prisma.portfolio.update({
+                where: { id: signal.portfolioId },
+                data: { availableCash: { decrement: amount } }
+              });
+              logger.info(`[Capital] Non-Upstox ACK BUY: portfolio ${signal.portfolioId} cash -₹${amount.toFixed(0)} (${signal.symbol})`);
+            } else if (signal.side === 'SELL') {
+              await prisma.portfolio.update({
+                where: { id: signal.portfolioId },
+                data: { availableCash: { increment: amount } }
+              });
+              logger.info(`[Capital] Non-Upstox ACK SELL: portfolio ${signal.portfolioId} cash +₹${amount.toFixed(0)} (${signal.symbol})`);
+            }
+          }
+        }
 
         // Answer the callback (removes loading spinner on button)
         await botInstance.answerCallbackQuery(query.id, {

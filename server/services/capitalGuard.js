@@ -376,10 +376,16 @@ export async function syncUpstoxFunds(userId) {
       if (Math.abs(oldCash - availableMargin) > 0.01) {
         await prisma.portfolio.update({
           where: { id: portfolio.id },
-          data: { availableCash: availableMargin }
+          data: { availableCash: availableMargin, lastVerifiedAt: new Date() }
         });
         logger.info(`[Capital Guard] Upstox funds synced: portfolio ${portfolio.id} cash ₹${oldCash.toFixed(0)} → ₹${availableMargin.toFixed(0)}`);
         synced++;
+      } else {
+        // Cash unchanged but still mark as verified
+        await prisma.portfolio.update({
+          where: { id: portfolio.id },
+          data: { lastVerifiedAt: new Date() }
+        });
       }
     }
 
@@ -541,6 +547,14 @@ export async function syncUpstoxHoldings(userId) {
           logger.info(`[Capital Guard] Upstox holding removed (sold): ${holding.symbol} (portfolio ${portfolio.id})`);
         }
       }
+    }
+
+    // Mark all synced portfolios as verified
+    for (const portfolio of portfolios) {
+      await prisma.portfolio.update({
+        where: { id: portfolio.id },
+        data: { lastVerifiedAt: new Date() }
+      });
     }
 
     logger.info(`[Capital Guard] syncUpstoxHoldings: synced=${synced}, created=${created}, removed=${removed} for user ${userId}`);

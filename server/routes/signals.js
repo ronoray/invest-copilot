@@ -145,6 +145,27 @@ router.post('/:id/ack', async (req, res) => {
       }
     });
 
+    // For non-Upstox portfolios: update availableCash on ACK
+    if (action === 'ACK' && signal.portfolio.broker !== 'UPSTOX') {
+      const price = parseFloat(signal.triggerPrice || signal.triggerLow || 0);
+      if (price > 0 && signal.quantity > 0) {
+        const amount = signal.quantity * price;
+        if (signal.side === 'BUY') {
+          await prisma.portfolio.update({
+            where: { id: signal.portfolioId },
+            data: { availableCash: { decrement: amount } }
+          });
+          logger.info(`[Capital] Web ACK BUY: portfolio ${signal.portfolioId} cash -₹${amount.toFixed(0)} (${signal.symbol})`);
+        } else if (signal.side === 'SELL') {
+          await prisma.portfolio.update({
+            where: { id: signal.portfolioId },
+            data: { availableCash: { increment: amount } }
+          });
+          logger.info(`[Capital] Web ACK SELL: portfolio ${signal.portfolioId} cash +₹${amount.toFixed(0)} (${signal.symbol})`);
+        }
+      }
+    }
+
     res.json({ success: true, data: updated });
   } catch (error) {
     logger.error('POST /signals/:id/ack error:', error);

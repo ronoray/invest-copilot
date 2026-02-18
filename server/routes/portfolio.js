@@ -81,6 +81,7 @@ router.get('/', async (req, res) => {
           age: p.age,
           notes: p.notes,
           syncEnabled: p.syncEnabled,
+          lastVerifiedAt: p.lastVerifiedAt,
           displayName: `${p.name} (${p.ownerName})`,
           // Computed fields
           totalInvested,
@@ -407,7 +408,8 @@ router.post('/:id/update-capital', async (req, res) => {
         startingCapital: newCapital,
         availableCash: {
           increment: difference
-        }
+        },
+        lastVerifiedAt: new Date()
       }
     });
 

@@ -121,6 +121,9 @@ model Portfolio {
   monthlyIncome        Float?   // Monthly income for SIP sizing
   age                  Int?     // Investor age for risk calibration
 
+  // Capital Verification
+  lastVerifiedAt  DateTime?  // Last time capital/holdings were confirmed
+
   // Integration Status
   apiEnabled      Boolean  @default(false) // true for Upstox, false for SBI/HDFC
   syncEnabled     Boolean  @default(true)  // Enable auto-sync via API or screenshots

@@ -169,6 +169,65 @@ async function generateSignalsForAllPortfolios() {
     let totalSignals = 0;
     for (const portfolio of eligiblePortfolios) {
       try {
+        // Gate: non-Upstox portfolios must have recently verified capital
+        if (portfolio.broker !== 'UPSTOX') {
+          const lastVerified = portfolio.lastVerifiedAt;
+          const now = new Date();
+          const twoDaysMs = 2 * 24 * 60 * 60 * 1000;
+          const isStale = !lastVerified || (now.getTime() - new Date(lastVerified).getTime() > twoDaysMs);
+
+          if (isStale) {
+            const telegramUser = portfolio.user?.telegramUser;
+            if (telegramUser) {
+              // Check if we already sent a reminder today for this portfolio
+              const todayStart = new Date();
+              todayStart.setHours(0, 0, 0, 0);
+              const alreadySent = await prisma.alertHistory.count({
+                where: {
+                  telegramUserId: telegramUser.id,
+                  alertType: 'CAPITAL_STALE',
+                  symbol: `portfolio_${portfolio.id}`,
+                  createdAt: { gte: todayStart }
+                }
+              });
+
+              if (alreadySent === 0) {
+                const bot = getBot();
+                if (bot) {
+                  const daysOld = lastVerified
+                    ? Math.floor((now.getTime() - new Date(lastVerified).getTime()) / (24 * 60 * 60 * 1000))
+                    : null;
+                  const daysText = daysOld !== null ? `${daysOld} days old` : 'never verified';
+                  const portfolioName = portfolio.ownerName || portfolio.name;
+                  const brokerName = (portfolio.broker || 'Unknown').replace(/_/g, ' ');
+
+                  await bot.sendMessage(parseInt(telegramUser.telegramId),
+                    `📸 *Capital Data Stale*\n\nYour *${portfolioName}* (${brokerName}) capital data is ${daysText}.\n\nSignal generation is paused for this portfolio. Please upload a holdings screenshot at [invest.hungrytimes.in/plan](https://invest.hungrytimes.in/plan) or update capital manually to resume accurate signals.`,
+                    { parse_mode: 'Markdown', disable_web_page_preview: true }
+                  );
+
+                  // Record that we sent this reminder
+                  await prisma.alertHistory.create({
+                    data: {
+                      telegramUserId: telegramUser.id,
+                      alertType: 'CAPITAL_STALE',
+                      symbol: `portfolio_${portfolio.id}`,
+                      price: 0,
+                      message: `Capital stale reminder for ${portfolioName}`,
+                      sent: true
+                    }
+                  });
+
+                  logger.info(`Sent capital stale reminder for portfolio ${portfolio.id} (${portfolioName})`);
+                }
+              }
+            }
+
+            logger.info(`Skipping signal generation for portfolio ${portfolio.id}: capital data stale (lastVerifiedAt: ${lastVerified || 'null'})`);
+            continue;
+          }
+        }
+
         // Check if we already generated signals for this portfolio today
         const today = new Date();
         today.setHours(0, 0, 0, 0);

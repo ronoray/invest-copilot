@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { TrendingUp, TrendingDown, AlertCircle, CheckCircle, Clock, Lightbulb, ArrowRight, RefreshCw, Loader2, Zap, ExternalLink } from 'lucide-react';
+import { TrendingUp, TrendingDown, AlertCircle, CheckCircle, Clock, Lightbulb, ArrowRight, RefreshCw, Loader2, Zap, ExternalLink, Camera } from 'lucide-react';
 import { api } from '../utils/api';
 import { useAuth } from '../context/AuthContext';
 import PortfolioCompletenessAlert from '../components/PortfolioCompletenessAlert';
@@ -269,6 +269,36 @@ export default function Dashboard() {
               </span>
             </div>
             <PortfolioCompletenessAlert portfolio={sp} linkToPortfolio={true} />
+            {/* Capital staleness warning for non-Upstox portfolios */}
+            {sp.broker !== 'UPSTOX' && (() => {
+              const twoDaysMs = 2 * 24 * 60 * 60 * 1000;
+              const isStale = !sp.lastVerifiedAt || (Date.now() - new Date(sp.lastVerifiedAt).getTime() > twoDaysMs);
+              if (!isStale) return null;
+              const daysAgo = sp.lastVerifiedAt
+                ? Math.floor((Date.now() - new Date(sp.lastVerifiedAt).getTime()) / (24 * 60 * 60 * 1000))
+                : null;
+              return (
+                <div className="bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-700 rounded-xl px-4 py-3 flex items-center gap-3 text-sm">
+                  <AlertCircle className="w-5 h-5 text-amber-600 flex-shrink-0" />
+                  <div className="flex-1">
+                    <span className="font-medium text-amber-800 dark:text-amber-300">
+                      Portfolio data not verified recently.
+                    </span>
+                    <span className="text-amber-700 dark:text-amber-400 ml-1">
+                      {daysAgo !== null ? `Last verified ${daysAgo} day${daysAgo !== 1 ? 's' : ''} ago.` : 'Never verified.'}
+                      {' '}Signal generation is paused.
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => navigate('/plan')}
+                    className="flex items-center gap-1 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold rounded-lg transition-colors flex-shrink-0"
+                  >
+                    <Camera className="w-3 h-3" />
+                    Upload Screenshot
+                  </button>
+                </div>
+              );
+            })()}
           </>
         );
       })()}

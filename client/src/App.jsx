@@ -1,6 +1,7 @@
 import { Routes, Route, Link, useLocation } from 'react-router-dom';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Home, Briefcase, Eye, Lightbulb, Receipt, Target, LogOut, Menu, X, Brain, Layers, BarChart3, Sun, Moon } from 'lucide-react';
+import { api } from './utils/api';
 import { useAuth } from './context/AuthContext';
 import { useTheme } from './context/ThemeContext';
 import ProtectedRoute from './components/ProtectedRoute';
@@ -40,6 +41,21 @@ function AppLayout() {
   const { theme, toggleTheme } = useTheme();
   const location = useLocation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [pendingSignalCount, setPendingSignalCount] = useState(0);
+
+  useEffect(() => {
+    const fetchPendingCount = async () => {
+      try {
+        const data = await api.get('/signals/pending-count');
+        setPendingSignalCount(data.count || 0);
+      } catch (err) {
+        // Silently ignore — signals may not exist yet
+      }
+    };
+    fetchPendingCount();
+    const interval = setInterval(fetchPendingCount, 60000);
+    return () => clearInterval(interval);
+  }, [location.pathname]);
 
   const toggleMobileMenu = () => {
     setMobileMenuOpen(!mobileMenuOpen);
@@ -68,7 +84,7 @@ function AppLayout() {
 
               {/* Desktop Navigation */}
               <div className="hidden md:ml-6 md:flex md:space-x-4 lg:space-x-8">
-                <NavLink to="/" icon={<Home size={18} />} active={isActive('/')}>Dashboard</NavLink>
+                <NavLink to="/" icon={<Home size={18} />} active={isActive('/')} badge={pendingSignalCount}>Dashboard</NavLink>
                 <NavLink to="/portfolio" icon={<Briefcase size={18} />} active={isActive('/portfolio')}>Portfolio</NavLink>
                 <NavLink to="/plan" icon={<Target size={18} />} active={isActive('/plan')}>Plan</NavLink>
                 <NavLink to="/holdings" icon={<BarChart3 size={18} />} active={isActive('/holdings')}>Holdings</NavLink>
@@ -117,7 +133,7 @@ function AppLayout() {
         {mobileMenuOpen && (
           <div className="md:hidden border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
             <div className="px-2 pt-2 pb-3 space-y-1">
-              <MobileNavLink to="/" icon={<Home size={20} />} onClick={closeMobileMenu} active={isActive('/')}>Dashboard</MobileNavLink>
+              <MobileNavLink to="/" icon={<Home size={20} />} onClick={closeMobileMenu} active={isActive('/')} badge={pendingSignalCount}>Dashboard</MobileNavLink>
               <MobileNavLink to="/portfolio" icon={<Briefcase size={20} />} onClick={closeMobileMenu} active={isActive('/portfolio')}>Portfolio</MobileNavLink>
               <MobileNavLink to="/plan" icon={<Target size={20} />} onClick={closeMobileMenu} active={isActive('/plan')}>Your Plan</MobileNavLink>
               <MobileNavLink to="/holdings" icon={<BarChart3 size={20} />} onClick={closeMobileMenu} active={isActive('/holdings')}>Holdings Analyzer</MobileNavLink>
@@ -176,25 +192,32 @@ function AppLayout() {
 }
 
 // Desktop Navigation Link
-function NavLink({ to, icon, children, active }) {
+function NavLink({ to, icon, children, active, badge }) {
   return (
     <Link
       to={to}
       title={children}
-      className={`inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium whitespace-nowrap transition-colors ${
+      className={`inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium whitespace-nowrap transition-colors relative ${
         active
           ? 'border-blue-500 text-blue-600'
           : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300'
       }`}
     >
-      <span className="mr-1">{icon}</span>
+      <span className="mr-1 relative">
+        {icon}
+        {badge > 0 && (
+          <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center">
+            {badge > 9 ? '9+' : badge}
+          </span>
+        )}
+      </span>
       <span className="hidden lg:inline">{children}</span>
     </Link>
   );
 }
 
 // Mobile Navigation Link
-function MobileNavLink({ to, icon, children, onClick, active }) {
+function MobileNavLink({ to, icon, children, onClick, active, badge }) {
   return (
     <Link
       to={to}
@@ -205,7 +228,14 @@ function MobileNavLink({ to, icon, children, onClick, active }) {
           : 'text-gray-700 dark:text-gray-300 hover:text-blue-600 hover:bg-gray-50 dark:hover:bg-gray-700'
       }`}
     >
-      <span className="mr-3">{icon}</span>
+      <span className="mr-3 relative">
+        {icon}
+        {badge > 0 && (
+          <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center">
+            {badge > 9 ? '9+' : badge}
+          </span>
+        )}
+      </span>
       {children}
     </Link>
   );

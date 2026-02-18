@@ -4,7 +4,7 @@
 
 import prisma from './prisma.js';
 import logger from './logger.js';
-import { getFunds, getHoldings, getPositions } from './upstoxService.js';
+import { getFunds, getHoldings, getPositions, getOrderStatus } from './upstoxService.js';
 
 /**
  * Get effective cash for a portfolio, accounting for pending signal reservations.
@@ -537,6 +537,85 @@ export async function syncUpstoxHoldings(userId) {
   }
 }
 
+const TERMINAL_STATUSES = ['complete', 'traded', 'rejected', 'cancelled'];
+const SETTLED_SUCCESS = ['complete', 'traded'];
+const SETTLED_FAILURE = ['rejected', 'cancelled'];
+
+/**
+ * Poll Upstox order until it reaches a terminal state.
+ * Reusable by both Telegram bot and web API.
+ *
+ * @param {Object} opts
+ * @param {number} opts.userId - User ID for Upstox API auth
+ * @param {string} opts.orderId - Upstox order ID
+ * @param {number} opts.dbOrderId - DB UpstoxOrder record ID
+ * @param {number} opts.signalId - TradeSignal ID
+ * @param {Object} opts.signal - Signal object (symbol, side, quantity, triggerPrice, etc.)
+ * @param {Function} [opts.onSuccess] - Callback({ orderId, status, averagePrice }) on COMPLETE/TRADED
+ * @param {Function} [opts.onFailure] - Callback({ orderId, status, reason }) on REJECTED/CANCELLED
+ * @param {Function} [opts.onTimeout] - Callback({ orderId }) when polling exhausted
+ * @returns {Promise<{ settled: boolean, status: string }>}
+ */
+export async function pollOrderUntilSettled({ userId, orderId, dbOrderId, signalId, signal, onSuccess, onFailure, onTimeout }) {
+  const maxAttempts = 5;
+  const intervalMs = 3000;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, intervalMs));
+
+    try {
+      const status = await getOrderStatus(userId, orderId);
+      const orderStatus = (status.status || '').toLowerCase();
+
+      logger.info(`Poll attempt ${attempt}/${maxAttempts} for order ${orderId}: ${orderStatus}`);
+
+      if (SETTLED_SUCCESS.includes(orderStatus)) {
+        // Order confirmed — mark signal EXECUTED
+        await prisma.tradeSignal.update({
+          where: { id: signalId },
+          data: { status: 'EXECUTED' }
+        });
+
+        // Sync portfolio cash and holdings
+        await updateCashOnExecution(dbOrderId);
+        await upsertHoldingOnExecution(dbOrderId);
+
+        logger.info(`Signal #${signalId} confirmed: order ${orderId} = ${orderStatus}`);
+
+        if (onSuccess) {
+          await onSuccess({ orderId, status: orderStatus, averagePrice: status.averagePrice });
+        }
+        return { settled: true, status: orderStatus };
+      }
+
+      if (SETTLED_FAILURE.includes(orderStatus)) {
+        // Order rejected — roll back signal
+        await prisma.tradeSignal.update({
+          where: { id: signalId },
+          data: { status: 'PENDING', upstoxOrderId: null, lastNotifiedAt: null }
+        });
+
+        const reason = status.message || 'Unknown reason';
+        logger.warn(`Signal #${signalId} rolled back: order ${orderId} = ${orderStatus} — ${reason}`);
+
+        if (onFailure) {
+          await onFailure({ orderId, status: orderStatus, reason });
+        }
+        return { settled: true, status: orderStatus };
+      }
+    } catch (pollErr) {
+      logger.warn(`Poll attempt ${attempt} failed for order ${orderId}: ${pollErr.message}`);
+    }
+  }
+
+  // Timeout — still pending after all attempts
+  logger.info(`Signal #${signalId} order ${orderId} still pending after ${maxAttempts} polls`);
+  if (onTimeout) {
+    await onTimeout({ orderId });
+  }
+  return { settled: false, status: 'PENDING' };
+}
+
 export default {
   getEffectiveCash,
   validateSignals,
@@ -545,5 +624,6 @@ export default {
   updateCashOnExecution,
   upsertHoldingOnExecution,
   syncUpstoxFunds,
-  syncUpstoxHoldings
+  syncUpstoxHoldings,
+  pollOrderUntilSettled
 };

@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { TrendingUp, TrendingDown, AlertCircle, CheckCircle, Clock, Lightbulb, ArrowRight, RefreshCw, Loader2 } from 'lucide-react';
+import { TrendingUp, TrendingDown, AlertCircle, CheckCircle, Clock, Lightbulb, ArrowRight, RefreshCw, Loader2, Zap, ExternalLink } from 'lucide-react';
 import { api } from '../utils/api';
 import { useAuth } from '../context/AuthContext';
 import PortfolioCompletenessAlert from '../components/PortfolioCompletenessAlert';
@@ -17,15 +17,30 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
 
+  // Trade signals state
+  const [signals, setSignals] = useState([]);
+  const [recentExecuted, setRecentExecuted] = useState([]);
+  const [signalsLoading, setSignalsLoading] = useState(false);
+  const [executingSignalId, setExecutingSignalId] = useState(null);
+  const [signalActionId, setSignalActionId] = useState(null);
+  const [signalError, setSignalError] = useState(null);
+  const [signalSuccess, setSignalSuccess] = useState(null);
+
   // Load portfolios on mount
   useEffect(() => {
     loadPortfolios();
     loadRecommendations();
   }, []);
 
-  // Load holdings when portfolio changes
+  // Load holdings + signals when portfolio changes
   useEffect(() => {
     loadHoldings();
+    if (selectedPortfolioId !== 'all') {
+      loadSignals(selectedPortfolioId);
+    } else {
+      setSignals([]);
+      setRecentExecuted([]);
+    }
   }, [selectedPortfolioId]);
 
   const loadPortfolios = async () => {
@@ -48,7 +63,6 @@ export default function Dashboard() {
         const data = await api.get(`/portfolio/${selectedPortfolioId}/holdings`);
         const holdingsData = data.holdings || [];
         setHoldings(holdingsData);
-        // Calculate summary from holdings
         const totalInvested = holdingsData.reduce((s, h) => s + h.investedAmount, 0);
         const totalCurrent = holdingsData.reduce((s, h) => s + h.currentValue, 0);
         const unrealizedPL = totalCurrent - totalInvested;
@@ -65,6 +79,25 @@ export default function Dashboard() {
       setLoading(false);
     }
   };
+
+  const loadSignals = useCallback(async (portfolioId) => {
+    setSignalsLoading(true);
+    try {
+      const data = await api.get(`/signals?portfolioId=${portfolioId}`);
+      const allSignals = data.signals || [];
+      // Split into pending/actionable and recently executed (last 24h)
+      const now = Date.now();
+      const oneDayAgo = now - 24 * 60 * 60 * 1000;
+      setSignals(allSignals.filter(s => ['PENDING', 'SNOOZED', 'ACKED', 'PLACING'].includes(s.status)));
+      setRecentExecuted(allSignals.filter(s =>
+        s.status === 'EXECUTED' && new Date(s.updatedAt || s.createdAt).getTime() > oneDayAgo
+      ));
+    } catch (err) {
+      console.error('Failed to load signals:', err);
+    } finally {
+      setSignalsLoading(false);
+    }
+  }, []);
 
   const loadRecommendations = async () => {
     try {
@@ -84,6 +117,41 @@ export default function Dashboard() {
       console.error('Sync failed:', err);
     } finally {
       setSyncing(false);
+    }
+  };
+
+  const handleExecuteSignal = async (signalId) => {
+    setExecutingSignalId(signalId);
+    setSignalError(null);
+    setSignalSuccess(null);
+    try {
+      const data = await api.post(`/signals/${signalId}/execute`);
+      setSignalSuccess(`Order placed: ${data.data?.orderId || 'OK'}. Verifying with exchange...`);
+      // Reload signals + holdings after a short delay to allow polling
+      setTimeout(async () => {
+        await loadSignals(selectedPortfolioId);
+        await loadHoldings();
+        setSignalSuccess(null);
+      }, 5000);
+    } catch (err) {
+      setSignalError(err.message || 'Failed to execute signal');
+      setTimeout(() => setSignalError(null), 5000);
+    } finally {
+      setExecutingSignalId(null);
+    }
+  };
+
+  const handleSignalAction = async (signalId, action) => {
+    setSignalActionId(signalId);
+    setSignalError(null);
+    try {
+      await api.post(`/signals/${signalId}/ack`, { action });
+      await loadSignals(selectedPortfolioId);
+    } catch (err) {
+      setSignalError(err.message || `Failed to ${action.toLowerCase()} signal`);
+      setTimeout(() => setSignalError(null), 5000);
+    } finally {
+      setSignalActionId(null);
     }
   };
 
@@ -110,8 +178,8 @@ export default function Dashboard() {
   };
 
   const formatCurrency = (val) => {
-    if (val == null || isNaN(val)) return '—';
-    return `₹${Number(val).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+    if (val == null || isNaN(val)) return '\u2014';
+    return `\u20B9${Number(val).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
   };
 
   const plColor = (val) => {
@@ -126,8 +194,17 @@ export default function Dashboard() {
       : 'from-red-50 to-red-100 border-red-200 dark:from-red-900/30 dark:to-red-800/30 dark:border-red-700';
   };
 
+  const getTriggerLabel = (signal) => {
+    if (signal.triggerType === 'MARKET') return 'MARKET';
+    if (signal.triggerType === 'LIMIT') return `LIMIT @ \u20B9${parseFloat(signal.triggerPrice || 0).toFixed(2)}`;
+    if (signal.triggerType === 'ZONE') return `ZONE \u20B9${parseFloat(signal.triggerLow || 0).toFixed(2)}-\u20B9${parseFloat(signal.triggerHigh || 0).toFixed(2)}`;
+    return signal.triggerType || 'MARKET';
+  };
+
   const market = getMarketStatus();
   const userName = user?.name?.split(' ')[0] || 'Investor';
+  const selectedPortfolio = portfolios.find(p => p.id === selectedPortfolioId);
+  const isUpstoxPortfolio = selectedPortfolio?.broker === 'UPSTOX';
 
   // Aggregate all recommendations into a flat array
   const allRecs = recommendations
@@ -274,10 +351,10 @@ export default function Dashboard() {
                 {Number(summary?.unrealizedPL) >= 0 ? <TrendingUp className="w-5 h-5 text-green-600" /> : <TrendingDown className="w-5 h-5 text-red-600" />}
               </div>
               <p className={`text-3xl font-bold ${Number(summary?.unrealizedPL) >= 0 ? 'text-green-900' : 'text-red-900'}`}>
-                {summary ? formatCurrency(Math.abs(summary.unrealizedPL)) : '—'}
+                {summary ? formatCurrency(Math.abs(summary.unrealizedPL)) : '\u2014'}
               </p>
               <p className={`text-sm mt-1 font-semibold ${plColor(summary?.unrealizedPL)}`}>
-                {summary ? `${Number(summary.plPercent) >= 0 ? '+' : ''}${summary.plPercent}%` : '—'}
+                {summary ? `${Number(summary.plPercent) >= 0 ? '+' : ''}${summary.plPercent}%` : '\u2014'}
               </p>
             </div>
 
@@ -343,7 +420,7 @@ export default function Dashboard() {
                       </div>
                       <div>
                         <p className="text-gray-500 dark:text-gray-400 text-xs">Current</p>
-                        <p className="font-medium text-gray-900 dark:text-gray-100">₹{Number(h.currentPrice).toFixed(2)}</p>
+                        <p className="font-medium text-gray-900 dark:text-gray-100">{'\u20B9'}{Number(h.currentPrice).toFixed(2)}</p>
                       </div>
                       <div>
                         <p className="text-gray-500 dark:text-gray-400 text-xs">Invested</p>
@@ -381,11 +458,11 @@ export default function Dashboard() {
                       <tr key={h.id} className="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700">
                         <td className="py-3 px-3 font-semibold text-gray-900 dark:text-gray-100">{h.symbol}</td>
                         {selectedPortfolioId === 'all' && (
-                          <td className="py-3 px-3 text-gray-600 dark:text-gray-400 text-sm">{h.portfolioName || '—'}</td>
+                          <td className="py-3 px-3 text-gray-600 dark:text-gray-400 text-sm">{h.portfolioName || '\u2014'}</td>
                         )}
                         <td className="text-right py-3 px-3 text-gray-700 dark:text-gray-300">{h.quantity}</td>
-                        <td className="text-right py-3 px-3 text-gray-700 dark:text-gray-300">₹{Number(h.avgPrice).toFixed(2)}</td>
-                        <td className="text-right py-3 px-3 text-gray-700 dark:text-gray-300">₹{Number(h.currentPrice).toFixed(2)}</td>
+                        <td className="text-right py-3 px-3 text-gray-700 dark:text-gray-300">{'\u20B9'}{Number(h.avgPrice).toFixed(2)}</td>
+                        <td className="text-right py-3 px-3 text-gray-700 dark:text-gray-300">{'\u20B9'}{Number(h.currentPrice).toFixed(2)}</td>
                         <td className="text-right py-3 px-3 text-gray-700 dark:text-gray-300">{formatCurrency(h.investedAmount)}</td>
                         <td className="text-right py-3 px-3 text-gray-700 dark:text-gray-300">{formatCurrency(h.currentValue)}</td>
                         <td className={`text-right py-3 px-3 font-semibold ${plColor(h.unrealizedPL)}`}>
@@ -402,6 +479,155 @@ export default function Dashboard() {
               </>
             )}
           </div>
+
+          {/* Trade Signals */}
+          {selectedPortfolioId !== 'all' && (
+            <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-md border border-gray-200 dark:border-gray-700">
+              <div className="flex items-center gap-2 mb-4">
+                <Zap className="w-6 h-6 text-yellow-500" />
+                <h2 className="text-xl font-semibold text-gray-800 dark:text-gray-100">Trade Signals</h2>
+                {signals.length > 0 && (
+                  <span className="ml-2 px-2 py-0.5 bg-yellow-100 text-yellow-800 rounded-full text-xs font-semibold">
+                    {signals.filter(s => s.status === 'PENDING' || s.status === 'SNOOZED').length} pending
+                  </span>
+                )}
+                <button
+                  onClick={() => loadSignals(selectedPortfolioId)}
+                  className="ml-auto text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                  title="Refresh signals"
+                >
+                  <RefreshCw className={`w-4 h-4 ${signalsLoading ? 'animate-spin' : ''}`} />
+                </button>
+              </div>
+
+              {/* Toast messages */}
+              {signalError && (
+                <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 rounded-lg text-red-700 dark:text-red-300 text-sm">
+                  {signalError}
+                </div>
+              )}
+              {signalSuccess && (
+                <div className="mb-4 p-3 bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-700 rounded-lg text-green-700 dark:text-green-300 text-sm">
+                  {signalSuccess}
+                </div>
+              )}
+
+              {signalsLoading ? (
+                <div className="flex items-center justify-center py-6">
+                  <Loader2 className="w-5 h-5 animate-spin text-yellow-500" />
+                  <span className="ml-2 text-gray-500 dark:text-gray-400 text-sm">Loading signals...</span>
+                </div>
+              ) : signals.length === 0 && recentExecuted.length === 0 ? (
+                <div className="text-center py-6 text-gray-500 dark:text-gray-400">
+                  <Zap className="w-10 h-10 mx-auto mb-2 text-gray-300 dark:text-gray-600" />
+                  <p className="text-sm">No pending trade signals for this portfolio.</p>
+                  <p className="text-xs mt-1">Signals are generated automatically by the AI cron job.</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {/* Pending signals */}
+                  {signals.map(sig => (
+                    <div key={sig.id} className="bg-gray-50 dark:bg-gray-900 rounded-lg p-4 border border-gray-100 dark:border-gray-700">
+                      <div className="flex items-start justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <span className={`px-2 py-0.5 rounded text-xs font-bold ${
+                            sig.side === 'BUY' ? 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400' :
+                            'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-400'
+                          }`}>
+                            {sig.side}
+                          </span>
+                          <span className="font-bold text-gray-900 dark:text-gray-100">{sig.symbol}</span>
+                          <span className="text-gray-500 dark:text-gray-400 text-sm">{sig.quantity}x</span>
+                          {sig.status === 'PLACING' && (
+                            <span className="px-2 py-0.5 bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-400 rounded text-xs font-medium">
+                              Placing...
+                            </span>
+                          )}
+                          {sig.status === 'SNOOZED' && (
+                            <span className="px-2 py-0.5 bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400 rounded text-xs font-medium">
+                              Snoozed
+                            </span>
+                          )}
+                        </div>
+                        {sig.confidence && (
+                          <span className="text-sm font-semibold text-indigo-600 dark:text-indigo-400">
+                            {sig.confidence}%
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400 mb-2">
+                        <span className="px-2 py-0.5 bg-gray-200 dark:bg-gray-700 rounded font-medium">
+                          {getTriggerLabel(sig)}
+                        </span>
+                        <span>{sig.exchange}</span>
+                        <span>{new Date(sig.createdAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}</span>
+                      </div>
+
+                      {sig.rationale && (
+                        <p className="text-sm text-gray-600 dark:text-gray-400 mb-3 line-clamp-2">{sig.rationale}</p>
+                      )}
+
+                      {/* Action buttons */}
+                      {sig.status !== 'PLACING' && (
+                        <div className="flex items-center gap-2">
+                          {isUpstoxPortfolio && (
+                            <button
+                              onClick={() => handleExecuteSignal(sig.id)}
+                              disabled={executingSignalId === sig.id}
+                              className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg transition-colors disabled:opacity-50 flex items-center gap-1"
+                            >
+                              {executingSignalId === sig.id ? (
+                                <><Loader2 className="w-3 h-3 animate-spin" /> Executing...</>
+                              ) : (
+                                <><Zap className="w-3 h-3" /> Execute</>
+                              )}
+                            </button>
+                          )}
+                          <button
+                            onClick={() => handleSignalAction(sig.id, 'SNOOZE_30M')}
+                            disabled={signalActionId === sig.id}
+                            className="px-3 py-1.5 bg-amber-100 hover:bg-amber-200 text-amber-800 dark:bg-amber-900/50 dark:hover:bg-amber-900/70 dark:text-amber-300 text-xs font-semibold rounded-lg transition-colors disabled:opacity-50"
+                          >
+                            Snooze
+                          </button>
+                          <button
+                            onClick={() => handleSignalAction(sig.id, 'DISMISS')}
+                            disabled={signalActionId === sig.id}
+                            className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 dark:bg-gray-700 dark:hover:bg-gray-600 dark:text-gray-300 text-xs font-semibold rounded-lg transition-colors disabled:opacity-50"
+                          >
+                            Dismiss
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+
+                  {/* Recently executed signals */}
+                  {recentExecuted.length > 0 && (
+                    <>
+                      <div className="border-t border-gray-200 dark:border-gray-700 pt-3 mt-3">
+                        <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">Recently Executed (24h)</p>
+                      </div>
+                      {recentExecuted.map(sig => (
+                        <div key={sig.id} className="bg-green-50 dark:bg-green-900/20 rounded-lg p-3 border border-green-100 dark:border-green-800/50 opacity-75">
+                          <div className="flex items-center gap-2">
+                            <CheckCircle className="w-4 h-4 text-green-600" />
+                            <span className={`px-2 py-0.5 rounded text-xs font-bold ${
+                              sig.side === 'BUY' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                            }`}>{sig.side}</span>
+                            <span className="font-semibold text-gray-800 dark:text-gray-200 text-sm">{sig.symbol}</span>
+                            <span className="text-gray-500 dark:text-gray-400 text-xs">{sig.quantity}x</span>
+                            <span className="ml-auto text-xs text-green-600 font-medium">EXECUTED</span>
+                          </div>
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* AI Recommendations */}
           <div className="bg-gradient-to-br from-indigo-50 to-purple-50 dark:from-indigo-900/30 dark:to-purple-900/30 rounded-xl p-6 shadow-md border border-indigo-200 dark:border-indigo-700">
@@ -450,12 +676,12 @@ export default function Dashboard() {
                       <div className="space-y-2 mb-3">
                         <div className="flex justify-between text-sm">
                           <span className="text-gray-600 dark:text-gray-400">Price:</span>
-                          <span className="font-semibold text-gray-900 dark:text-gray-100">₹{rec.price}</span>
+                          <span className="font-semibold text-gray-900 dark:text-gray-100">{'\u20B9'}{rec.price}</span>
                         </div>
                         {rec.targetPrice && (
                           <div className="flex justify-between text-sm">
                             <span className="text-gray-600 dark:text-gray-400">Target:</span>
-                            <span className="font-semibold text-green-600">₹{rec.targetPrice}</span>
+                            <span className="font-semibold text-green-600">{'\u20B9'}{rec.targetPrice}</span>
                           </div>
                         )}
                       </div>
@@ -495,7 +721,7 @@ export default function Dashboard() {
           </div>
 
           {/* Quick Actions */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className={`grid grid-cols-2 ${isUpstoxPortfolio ? 'md:grid-cols-5' : 'md:grid-cols-4'} gap-4`}>
             <button
               onClick={() => navigate('/portfolio')}
               className="bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 border-2 border-gray-200 dark:border-gray-700 rounded-xl p-4 text-center transition-all hover:shadow-md"
@@ -531,6 +757,19 @@ export default function Dashboard() {
               </div>
               <p className="font-semibold text-gray-900 dark:text-gray-100">Tax Dashboard</p>
             </button>
+            {isUpstoxPortfolio && (
+              <a
+                href="https://pro.upstox.com/d/funds"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 border-2 border-gray-200 dark:border-gray-700 rounded-xl p-4 text-center transition-all hover:shadow-md"
+              >
+                <div className="text-2xl mb-2">
+                  <ExternalLink className="w-6 h-6 mx-auto text-green-600" />
+                </div>
+                <p className="font-semibold text-gray-900 dark:text-gray-100">Withdraw Funds</p>
+              </a>
+            )}
           </div>
         </>
       )}

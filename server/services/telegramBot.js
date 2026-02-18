@@ -4,8 +4,8 @@ import logger from './logger.js';
 import { getCurrentPrice } from './marketData.js';
 import { scanMarketForOpportunities, buildProfileBrief } from './advancedScreener.js';
 import { generateMultiAssetRecommendations } from './multiAssetRecommendations.js';
-import { placeOrder, getOrderStatus, getAuthorizationUrl, isTokenValid } from './upstoxService.js';
-import { preOrderCapitalCheck, updateCashOnExecution, upsertHoldingOnExecution, syncUpstoxFunds } from './capitalGuard.js';
+import { placeOrder, getAuthorizationUrl, isTokenValid } from './upstoxService.js';
+import { preOrderCapitalCheck, syncUpstoxFunds, pollOrderUntilSettled } from './capitalGuard.js';
 
 const prisma = new PrismaClient();
 
@@ -129,93 +129,53 @@ function portfolioLabel(p) {
 }
 
 // ============================================
-// ORDER POLLING AFTER PLACEMENT
+// ORDER POLLING AFTER PLACEMENT (Telegram wrapper)
 // ============================================
 
-const TERMINAL_STATUSES = ['complete', 'traded', 'rejected', 'cancelled'];
-const SETTLED_SUCCESS = ['complete', 'traded'];
-const SETTLED_FAILURE = ['rejected', 'cancelled'];
+function pollOrderViaTelegram(botInstance, chatId, userId, signalId, signal, orderId, dbOrderId) {
+  return pollOrderUntilSettled({
+    userId, orderId, dbOrderId, signalId, signal,
+    onSuccess: async ({ averagePrice }) => {
+      const avgPrice = averagePrice ? ` @ ${formatPrice(averagePrice)}` : '';
+      const successMsg = `✅ *ORDER CONFIRMED*\n\n${signal.side} ${signal.quantity}x *${signal.symbol}*${avgPrice}\nOrder ID: \`${orderId}\`\n\n_Exchange confirmed. Position is live._`;
 
-async function pollOrderUntilSettled(botInstance, chatId, userId, signalId, signal, orderId, dbOrderId) {
-  const maxAttempts = 5;
-  const intervalMs = 3000;
+      try {
+        await botInstance.editMessageReplyMarkup(
+          { inline_keyboard: [[{ text: `✅ Confirmed — ${orderId}`, callback_data: 'noop' }]] },
+          { chat_id: chatId, message_id: signal._messageId }
+        );
+      } catch (e) { /* message may be old */ }
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    await new Promise(resolve => setTimeout(resolve, intervalMs));
+      await botInstance.sendMessage(chatId, successMsg, { parse_mode: 'Markdown' });
+    },
+    onFailure: async ({ status, reason }) => {
+      const failureMsg = `🔴 *ORDER FAILED — THIS IS MY FAILURE*\n\n${signal.side} ${signal.symbol} @ ${formatPrice(signal.triggerPrice || signal.triggerLow || 0)} was *${status.toUpperCase()}*\nReason: _${reason}_\n\nI recommended a price the exchange rejected. I own this mistake.\nSignal reset — choose how to proceed:`;
 
-    try {
-      const status = await getOrderStatus(userId, orderId);
-      const orderStatus = (status.status || '').toLowerCase();
+      try {
+        await botInstance.editMessageReplyMarkup(
+          { inline_keyboard: [[{ text: `🔴 ${status.toUpperCase()} — reset`, callback_data: 'noop' }]] },
+          { chat_id: chatId, message_id: signal._messageId }
+        );
+      } catch (e) { /* message may be old */ }
 
-      logger.info(`Poll attempt ${attempt}/${maxAttempts} for order ${orderId}: ${orderStatus}`);
-
-      if (SETTLED_SUCCESS.includes(orderStatus)) {
-        // Order confirmed — mark signal EXECUTED
-        await prisma.tradeSignal.update({
-          where: { id: signalId },
-          data: { status: 'EXECUTED' }
-        });
-
-        // Sync portfolio cash and holdings
-        await updateCashOnExecution(dbOrderId);
-        await upsertHoldingOnExecution(dbOrderId);
-
-        const avgPrice = status.averagePrice ? ` @ ${formatPrice(status.averagePrice)}` : '';
-        const successMsg = `✅ *ORDER CONFIRMED*\n\n${signal.side} ${signal.quantity}x *${signal.symbol}*${avgPrice}\nOrder ID: \`${orderId}\`\n\n_Exchange confirmed. Position is live._`;
-
-        try {
-          await botInstance.editMessageReplyMarkup(
-            { inline_keyboard: [[{ text: `✅ Confirmed — ${orderId}`, callback_data: 'noop' }]] },
-            { chat_id: chatId, message_id: signal._messageId }
-          );
-        } catch (e) { /* message may be old */ }
-
-        await botInstance.sendMessage(chatId, successMsg, { parse_mode: 'Markdown' });
-        logger.info(`Signal #${signalId} confirmed: order ${orderId} = ${orderStatus}`);
-        return;
-      }
-
-      if (SETTLED_FAILURE.includes(orderStatus)) {
-        // Order rejected — roll back signal
-        await prisma.tradeSignal.update({
-          where: { id: signalId },
-          data: { status: 'PENDING', upstoxOrderId: null, lastNotifiedAt: null }
-        });
-
-        const reason = status.message || 'Unknown reason';
-        const failureMsg = `🔴 *ORDER FAILED — THIS IS MY FAILURE*\n\n${signal.side} ${signal.symbol} @ ${formatPrice(signal.triggerPrice || signal.triggerLow || 0)} was *${orderStatus.toUpperCase()}*\nReason: _${reason}_\n\nI recommended a price the exchange rejected. I own this mistake.\nSignal reset — choose how to proceed:`;
-
-        try {
-          await botInstance.editMessageReplyMarkup(
-            { inline_keyboard: [[{ text: `🔴 ${orderStatus.toUpperCase()} — reset`, callback_data: 'noop' }]] },
-            { chat_id: chatId, message_id: signal._messageId }
-          );
-        } catch (e) { /* message may be old */ }
-
-        await botInstance.sendMessage(chatId, failureMsg, {
-          parse_mode: 'Markdown',
-          reply_markup: {
-            inline_keyboard: [[
-              { text: '🔄 Retry as MARKET', callback_data: `sig_mkt_${signalId}` },
-              { text: '⏰ Snooze 1hr', callback_data: `sig_snooze_${signalId}` },
-              { text: '🚫 Dismiss', callback_data: `sig_dismiss_${signalId}` }
-            ]]
-          }
-        });
-        logger.warn(`Signal #${signalId} rolled back: order ${orderId} = ${orderStatus} — ${reason}`);
-        return;
-      }
-    } catch (pollErr) {
-      logger.warn(`Poll attempt ${attempt} failed for order ${orderId}: ${pollErr.message}`);
+      await botInstance.sendMessage(chatId, failureMsg, {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [[
+            { text: '🔄 Retry as MARKET', callback_data: `sig_mkt_${signalId}` },
+            { text: '⏰ Snooze 1hr', callback_data: `sig_snooze_${signalId}` },
+            { text: '🚫 Dismiss', callback_data: `sig_dismiss_${signalId}` }
+          ]]
+        }
+      });
+    },
+    onTimeout: async () => {
+      await botInstance.sendMessage(chatId,
+        `⏳ *Order Pending*\n\n${signal.side} ${signal.quantity}x *${signal.symbol}*\nOrder ID: \`${orderId}\`\n\n_Exchange hasn't confirmed yet. I'll keep monitoring and alert you when it settles._`,
+        { parse_mode: 'Markdown' }
+      );
     }
-  }
-
-  // Timeout — still pending after all attempts
-  await botInstance.sendMessage(chatId,
-    `⏳ *Order Pending*\n\n${signal.side} ${signal.quantity}x *${signal.symbol}*\nOrder ID: \`${orderId}\`\n\n_Exchange hasn't confirmed yet. I'll keep monitoring and alert you when it settles._`,
-    { parse_mode: 'Markdown' }
-  );
-  logger.info(`Signal #${signalId} order ${orderId} still pending after ${maxAttempts} polls — cron will follow up`);
+  });
 }
 
 // ============================================
@@ -405,7 +365,7 @@ async function handleExecuteSignal(botInstance, query, signalId) {
 
     // Poll for settlement (async, non-blocking for the callback response)
     signal._messageId = messageId;
-    pollOrderUntilSettled(botInstance, chatId, userId, signalId, signal, result.orderId, result.dbOrderId)
+    pollOrderViaTelegram(botInstance, chatId, userId, signalId, signal, result.orderId, result.dbOrderId)
       .catch(err => logger.error(`Polling failed for signal #${signalId}:`, err));
   } catch (error) {
     logger.error(`Failed to execute signal #${signalId}:`, error);
@@ -547,7 +507,7 @@ async function handleExecuteMarketFallback(botInstance, query, signalId) {
 
     // Poll for settlement
     signal._messageId = messageId;
-    pollOrderUntilSettled(botInstance, chatId, userId, signalId, signal, result.orderId, result.dbOrderId)
+    pollOrderViaTelegram(botInstance, chatId, userId, signalId, signal, result.orderId, result.dbOrderId)
       .catch(err => logger.error(`Polling failed for MARKET fallback signal #${signalId}:`, err));
   } catch (error) {
     logger.error(`Failed to execute MARKET fallback for signal #${signalId}:`, error);

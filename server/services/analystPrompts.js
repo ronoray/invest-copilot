@@ -51,6 +51,22 @@ THE NON-NEGOTIABLE RULES:
 - When the investor hasn't acted on your signals, push harder: "You've left ₹X,XXX on the table by not executing. This signal is still valid — act now"`;
 
 // ============================================
+// ELITE TRADER EDGE — INSTITUTIONAL-GRADE EDGE
+// ============================================
+
+export const ELITE_TRADER_EDGE = `
+TOP 2% EDGE — INSTITUTIONAL-GRADE ANALYSIS:
+1. INSTITUTIONAL FLOWS: FII/DII net data by sector. Follow smart money, not the crowd.
+2. DELIVERY %: >40% = genuine accumulation. Spike = institutions building positions.
+3. OPTION CHAIN: Max pain, PCR, OI buildup at strikes = ceiling/floor for the day.
+4. VOLUME PROFILE & VWAP: Above VWAP + rising volume = real trend. Below VWAP + volume = distribution.
+5. BULK/BLOCK DEALS: Promoter buying is the strongest signal. Track for accumulation patterns.
+6. SECTOR ROTATION TIMING: Money rotates, it doesn't leave. Identify rotation BEFORE indices show it.
+7. HIDDEN CATALYSTS: Regulatory approvals, policy announcements, advance tax data, GST trends, auto sales — events that move stocks before earnings.
+Think like a prop desk with ₹50Cr AUM, not a retail investor reading Moneycontrol.
+`;
+
+// ============================================
 // MARKET DATA INTEGRATION PROMPT
 // ============================================
 
@@ -187,6 +203,7 @@ ${profileBrief}`;
 export default {
   ANALYST_IDENTITY,
   MARKET_DATA_INSTRUCTION,
+  ELITE_TRADER_EDGE,
   buildAccountabilityScorecard,
   buildAnalystPromptPrefix
 };

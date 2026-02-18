@@ -4,7 +4,6 @@ import { getBot } from '../services/telegramBot.js';
 import { generateTradeSignals, expireOldSignals } from '../services/signalGenerator.js';
 import { isTokenValid, getAuthorizationUrl, getHoldings, getOrderStatus } from '../services/upstoxService.js';
 import { syncUpstoxFunds, syncUpstoxHoldings, getEffectiveCash } from '../services/capitalGuard.js';
-import { refreshAiTarget } from '../services/dailyTargetService.js';
 import { isTradingDay } from '../utils/marketHolidays.js';
 import logger from '../services/logger.js';
 
@@ -602,15 +601,14 @@ async function pollPendingOrders() {
 }
 
 /**
- * Auto-compute daily earning targets at market open.
- * Runs at 9:15 AM IST — ensures targets exist BEFORE the 10 AM hourly check.
+ * Conditional midday signal generation.
+ * Only fires if: no active pending/snoozed signals today OR target >30% behind.
+ * Saves 1 Claude call on good days.
  */
-async function computeMorningTargets() {
+async function generateSignalsConditional() {
   if (!isTradingDay(new Date())) return;
 
   try {
-    logger.info('Computing morning daily targets...');
-
     const portfolios = await prisma.portfolio.findMany({
       where: { isActive: true },
       include: {
@@ -620,55 +618,86 @@ async function computeMorningTargets() {
     });
 
     const eligible = portfolios.filter(p =>
-      p.holdings?.length > 0 &&
-      p.user?.telegramUser?.isActive &&
-      !p.user?.telegramUser?.isMuted
+      p.user?.telegramUser?.isActive && !p.user?.telegramUser?.isMuted
     );
 
-    if (eligible.length === 0) {
-      logger.info('No eligible portfolios for morning targets');
-      return;
-    }
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
 
-    const bot = getBot();
-    let created = 0;
-
+    let generated = 0;
     for (const portfolio of eligible) {
       try {
-        const target = await refreshAiTarget(portfolio.id);
-        created++;
+        // Check if there are active signals today
+        const activeSignals = await prisma.tradeSignal.count({
+          where: {
+            portfolioId: portfolio.id,
+            status: { in: ['PENDING', 'SNOOZED'] },
+            createdAt: { gte: today }
+          }
+        });
 
-        // Send target notification via Telegram
-        if (bot && target.aiTarget > 0) {
-          const chatId = parseInt(portfolio.user.telegramUser.telegramId);
-          const portfolioName = portfolio.ownerName || portfolio.name;
-          const broker = (portfolio.broker || 'Unknown').replace(/_/g, ' ');
-          const confidenceBar = '█'.repeat(Math.floor(target.aiConfidence / 10)) + '░'.repeat(10 - Math.floor(target.aiConfidence / 10));
+        // Check if target is >30% behind
+        const target = await prisma.dailyTarget.findUnique({
+          where: { portfolioId_date: { portfolioId: portfolio.id, date: today } }
+        });
 
-          const msg = `🎯 *DAILY TARGET SET*
-━━━━━━━━━━━━━━━━━━━
-📁 *${portfolioName}* — ${broker}
+        const targetAmount = parseFloat(target?.aiTarget || target?.userTarget || 0);
+        const earned = parseFloat(target?.earnedActual || 0);
+        const isBehind = targetAmount > 0 && earned < targetAmount * 0.7;
 
-💰 Today's Target: *₹${target.aiTarget.toFixed(0)}*
-Confidence: ${confidenceBar} ${target.aiConfidence}%
-
-${target.aiRationale || ''}
-
-I'll track progress hourly and generate recovery signals if we fall behind. Let's hit this target.`;
-
-          await bot.sendMessage(chatId, msg, { parse_mode: 'Markdown' });
+        if (activeSignals > 0 && !isBehind) {
+          logger.info(`Portfolio ${portfolio.id}: ${activeSignals} active signals + on track — skipping midday generation`);
+          continue;
         }
 
+        logger.info(`Portfolio ${portfolio.id}: midday signal generation triggered (signals: ${activeSignals}, behind: ${isBehind})`);
+        await generateSignalsForAllPortfoliosForOne(portfolio);
+        generated++;
         await new Promise(r => setTimeout(r, 2000));
       } catch (err) {
-        logger.error(`Morning target failed for portfolio ${portfolio.id}:`, err.message);
+        logger.error(`Conditional midday signals failed for portfolio ${portfolio.id}:`, err.message);
       }
     }
 
-    logger.info(`Morning targets computed: ${created}/${eligible.length} portfolios`);
+    logger.info(`Conditional midday signals: generated for ${generated}/${eligible.length} portfolios`);
   } catch (error) {
-    logger.error('Morning target computation error:', error);
+    logger.error('Conditional midday signal error:', error);
   }
+}
+
+/**
+ * Generate signals for a single portfolio (extracted from batch function).
+ */
+async function generateSignalsForAllPortfoliosForOne(portfolio) {
+  // Gate: non-Upstox portfolios must have recently verified capital
+  if (portfolio.broker !== 'UPSTOX') {
+    const lastVerified = portfolio.lastVerifiedAt;
+    const now = new Date();
+    const twoDaysMs = 2 * 24 * 60 * 60 * 1000;
+    const isStale = !lastVerified || (now.getTime() - new Date(lastVerified).getTime() > twoDaysMs);
+    if (isStale) {
+      logger.info(`Skipping midday signal for portfolio ${portfolio.id}: capital data stale`);
+      return;
+    }
+  }
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const existingToday = await prisma.tradeSignal.count({
+    where: {
+      portfolioId: portfolio.id,
+      createdAt: { gte: today },
+      status: { notIn: ['EXPIRED'] }
+    }
+  });
+
+  if (existingToday >= 3) {
+    logger.info(`Portfolio ${portfolio.id} already has ${existingToday} signals today, skipping`);
+    return;
+  }
+
+  const signals = await generateTradeSignals(portfolio.id);
+  logger.info(`[Midday Signals] Portfolio ${portfolio.id}: ${signals.length} signals generated`);
 }
 
 /**
@@ -694,15 +723,9 @@ export function initSignalNotifier() {
     timezone: 'Asia/Kolkata'
   });
 
-  // Compute daily earning targets at 9:16 AM (after Upstox auth, before signals)
-  cron.schedule('16 9 * * 1-5', async () => {
-    logger.info('Running morning target computation...');
-    await computeMorningTargets();
-  }, {
-    timezone: 'Asia/Kolkata'
-  });
+  // Morning targets now handled by War Room (9:00 AM in telegramAlerts.js)
 
-  // Generate signals at 9:30 AM and 1:00 PM IST (market open + midday)
+  // Generate signals at 9:30 AM (market open)
   cron.schedule('30 9 * * 1-5', async () => {
     logger.info('Running morning signal generation...');
     await generateSignalsForAllPortfolios();
@@ -710,9 +733,10 @@ export function initSignalNotifier() {
     timezone: 'Asia/Kolkata'
   });
 
+  // Conditional midday signals at 1:00 PM — only fires if needed
   cron.schedule('0 13 * * 1-5', async () => {
-    logger.info('Running midday signal generation...');
-    await generateSignalsForAllPortfolios();
+    logger.info('Running conditional midday signal generation...');
+    await generateSignalsConditional();
   }, {
     timezone: 'Asia/Kolkata'
   });
@@ -733,10 +757,10 @@ export function initSignalNotifier() {
 
   logger.info('Signal notifier initialized:');
   logger.info('  Upstox fund sync: 9:17 AM IST');
-  logger.info('  Morning targets: 9:16 AM IST');
-  logger.info('  Signal generation: 9:30 AM + 1:00 PM IST');
+  logger.info('  Morning targets: handled by War Room (9:00 AM)');
+  logger.info('  Signal generation: 9:30 AM + 1:00 PM (conditional) IST');
   logger.info('  Signal notifications: every 5 min, 9-3:30 PM IST');
   logger.info('  Order status polling: every 5 min, 9 AM-4 PM IST');
 }
 
-export default { initSignalNotifier, notifyPendingSignals, generateSignalsForAllPortfolios, pollPendingOrders, computeMorningTargets, syncAllUpstoxFunds };
+export default { initSignalNotifier, notifyPendingSignals, generateSignalsForAllPortfolios, pollPendingOrders, generateSignalsConditional, syncAllUpstoxFunds };

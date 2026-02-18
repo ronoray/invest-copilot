@@ -188,11 +188,27 @@ export async function getOrCreateTodayTarget(portfolioId) {
 
 /**
  * Refresh AI target for today (called on-demand or by cron).
+ * Checks for existing war room plan first to avoid duplicate AI calls.
  */
 export async function refreshAiTarget(portfolioId) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
+  // Check if war room plan already exists with target data
+  const existing = await prisma.dailyTarget.findUnique({
+    where: { portfolioId_date: { portfolioId, date: today } }
+  });
+
+  if (existing?.warRoomPlan) {
+    const plan = typeof existing.warRoomPlan === 'string' ? JSON.parse(existing.warRoomPlan) : existing.warRoomPlan;
+    if (plan.dailyTarget?.amount > 0) {
+      logger.info(`Using war room target for portfolio ${portfolioId}: ₹${plan.dailyTarget.amount}`);
+      // War room already populated aiTarget — return existing record
+      return existing;
+    }
+  }
+
+  // Fallback: compute AI target if war room hasn't run yet
   const aiResult = await computeAiTarget(portfolioId);
 
   const record = await prisma.dailyTarget.upsert({

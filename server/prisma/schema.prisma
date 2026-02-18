@@ -589,6 +589,10 @@ model DailyTarget {
   earnedActual    Float    @default(0)
   earnedUpdatedAt DateTime?
 
+  // War Room plan (structured JSON from morning AI call)
+  warRoomPlan        Json?
+  recalibrationCount Int    @default(0)
+
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

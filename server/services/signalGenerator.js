@@ -99,14 +99,16 @@ Respond in this EXACT JSON format (no markdown, no extra text):
       "exchange": "NSE",
       "side": "BUY",
       "quantity": 10,
+      "price": 150.00,
       "triggerType": "MARKET",
       "triggerPrice": null,
       "triggerLow": null,
       "triggerHigh": null,
       "confidence": 85,
-      "rationale": "THESIS: [why]. CATALYST: [what triggers]. R:R 2.5:1. Stop at ₹X invalidates if [condition]."
+      "rationale": "CAPITAL: 10×₹150=₹1,500. THESIS: [why]. CATALYST: [what triggers]. R:R 2.5:1. Stop at ₹X invalidates if [condition]."
     }
-  ]
+  ],
+  "capitalCheck": "Signal 1: 10×₹150=₹1,500. Total: ₹1,500 / ₹${effectiveCash.toLocaleString('en-IN')} available = OK"
 }
 
 Technical notes:

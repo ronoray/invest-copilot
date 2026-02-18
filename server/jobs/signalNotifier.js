@@ -3,7 +3,7 @@ import prisma from '../services/prisma.js';
 import { getBot } from '../services/telegramBot.js';
 import { generateTradeSignals, expireOldSignals } from '../services/signalGenerator.js';
 import { isTokenValid, getAuthorizationUrl, getHoldings, getOrderStatus } from '../services/upstoxService.js';
-import { syncUpstoxFunds } from '../services/capitalGuard.js';
+import { syncUpstoxFunds, syncUpstoxHoldings } from '../services/capitalGuard.js';
 import { refreshAiTarget } from '../services/dailyTargetService.js';
 import { isTradingDay } from '../utils/marketHolidays.js';
 import logger from '../services/logger.js';
@@ -81,6 +81,61 @@ async function syncAllUpstoxFunds() {
 }
 
 /**
+ * Sync Upstox holdings for all connected users, then expire any
+ * pending SELL signals whose stocks are no longer held.
+ */
+async function syncAllUpstoxHoldingsAndExpireStaleSignals() {
+  if (!isTradingDay(new Date())) return;
+
+  try {
+    const integrations = await prisma.upstoxIntegration.findMany({
+      where: { isConnected: true }
+    });
+
+    for (const integration of integrations) {
+      const valid = await isTokenValid(integration.userId);
+      if (!valid) continue;
+
+      try {
+        await syncUpstoxHoldings(integration.userId);
+      } catch (err) {
+        logger.error(`Holdings sync failed for user ${integration.userId}:`, err.message);
+      }
+    }
+
+    // Expire SELL signals for stocks no longer held (across all portfolios)
+    const pendingSells = await prisma.tradeSignal.findMany({
+      where: {
+        side: 'SELL',
+        status: { in: ['PENDING', 'SNOOZED', 'ACKED'] }
+      },
+      select: { id: true, symbol: true, portfolioId: true }
+    });
+
+    let expired = 0;
+    for (const sig of pendingSells) {
+      const holding = await prisma.holding.findFirst({
+        where: { portfolioId: sig.portfolioId, symbol: sig.symbol }
+      });
+      if (!holding || holding.quantity <= 0) {
+        await prisma.tradeSignal.update({
+          where: { id: sig.id },
+          data: { status: 'EXPIRED' }
+        });
+        expired++;
+        logger.info(`Auto-expired stale SELL signal #${sig.id}: ${sig.symbol} no longer held (portfolio ${sig.portfolioId})`);
+      }
+    }
+
+    if (expired > 0) {
+      logger.info(`[Signal Cleanup] Expired ${expired} stale SELL signals after holdings sync`);
+    }
+  } catch (error) {
+    logger.error('syncAllUpstoxHoldingsAndExpireStaleSignals error:', error);
+  }
+}
+
+/**
  * Auto-generate trade signals for all active portfolios.
  * Runs at 9:30 AM and 1:00 PM IST during market hours.
  */
@@ -88,8 +143,9 @@ async function generateSignalsForAllPortfolios() {
   if (!isTradingDay(new Date())) return;
 
   try {
-    // Sync Upstox funds before generating signals (freshest cash data)
+    // Sync Upstox funds and holdings before generating signals (freshest data)
     await syncAllUpstoxFunds();
+    await syncAllUpstoxHoldingsAndExpireStaleSignals();
 
     // Get all active portfolios that have holdings
     const portfolios = await prisma.portfolio.findMany({
@@ -243,10 +299,41 @@ async function notifyPendingSignals() {
       }
     });
 
+    // Build holdings map per portfolio for stale signal detection
+    const portfolioHoldingsCache = new Map();
+    async function getPortfolioHoldings(portfolioId) {
+      if (!portfolioHoldingsCache.has(portfolioId)) {
+        const holdings = await prisma.holding.findMany({
+          where: { portfolioId },
+          select: { symbol: true, quantity: true }
+        });
+        const map = new Map();
+        for (const h of holdings) map.set(h.symbol, h.quantity);
+        portfolioHoldingsCache.set(portfolioId, map);
+      }
+      return portfolioHoldingsCache.get(portfolioId);
+    }
+
     let sentCount = 0;
+    let expiredCount = 0;
     for (const signal of signals) {
       const telegramUser = signal.portfolio?.user?.telegramUser;
       if (!telegramUser || !telegramUser.isActive || telegramUser.isMuted) continue;
+
+      // Validate signal against current holdings before notifying
+      const holdingsMap = await getPortfolioHoldings(signal.portfolioId);
+      const heldQty = holdingsMap.get(signal.symbol) || 0;
+
+      if (signal.side === 'SELL' && heldQty <= 0) {
+        // Stock already sold — expire this signal silently
+        await prisma.tradeSignal.update({
+          where: { id: signal.id },
+          data: { status: 'EXPIRED' }
+        });
+        expiredCount++;
+        logger.info(`Signal #${signal.id} auto-expired: SELL ${signal.symbol} but no longer held (portfolio ${signal.portfolioId})`);
+        continue;
+      }
 
       try {
         const chatId = parseInt(telegramUser.telegramId);
@@ -323,9 +410,12 @@ ${signal.rationale || ''}${repeatNote}`;
       }
     }
 
+    if (expiredCount > 0) {
+      logger.info(`Auto-expired ${expiredCount} stale signals (holdings no longer exist)`);
+    }
     if (sentCount > 0) {
       logger.info(`Sent ${sentCount}/${signals.length} trade signal notifications`);
-    } else if (signals.length > 0) {
+    } else if (signals.length > 0 && expiredCount === 0) {
       logger.warn(`Found ${signals.length} pending signals but sent 0 (no linked Telegram users)`);
     }
   } catch (error) {

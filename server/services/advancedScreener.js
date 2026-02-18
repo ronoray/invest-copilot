@@ -59,6 +59,120 @@ ${holdingsList}`;
 }
 
 /**
+ * Build a detailed portfolio audit for AI signal generation.
+ * Shows holdings by weight, concentrations, idle cash analysis.
+ *
+ * @param {object} portfolio - Portfolio with holdings included
+ * @param {number} effectiveCash - Available cash after pending signal reservations
+ * @param {number} reservedCash - Cash reserved by pending signals
+ * @returns {string} Structured audit text block
+ */
+export function buildPortfolioAudit(portfolio, effectiveCash, reservedCash) {
+  if (!portfolio) return '';
+
+  const holdings = portfolio.holdings || [];
+  const totalInvested = holdings.reduce((sum, h) => sum + h.quantity * parseFloat(h.avgPrice), 0);
+  const totalCurrent = holdings.reduce((sum, h) => sum + h.quantity * parseFloat(h.currentPrice || h.avgPrice), 0);
+  const totalPortfolioValue = totalCurrent + effectiveCash;
+
+  // Per-holding metrics sorted by weight
+  const holdingRows = holdings
+    .map(h => {
+      const invested = h.quantity * parseFloat(h.avgPrice);
+      const current = h.quantity * parseFloat(h.currentPrice || h.avgPrice);
+      const plPct = invested > 0 ? ((current - invested) / invested * 100) : 0;
+      const weight = totalPortfolioValue > 0 ? (current / totalPortfolioValue * 100) : 0;
+      return { symbol: h.symbol, exchange: h.exchange, qty: h.quantity, avgPrice: parseFloat(h.avgPrice), currentPrice: parseFloat(h.currentPrice || h.avgPrice), plPct, value: current, weight };
+    })
+    .sort((a, b) => b.weight - a.weight);
+
+  // Exchange concentration
+  const exchangeGroups = {};
+  for (const h of holdingRows) {
+    const key = h.exchange || 'NSE';
+    exchangeGroups[key] = (exchangeGroups[key] || 0) + h.value;
+  }
+
+  const cashPct = totalPortfolioValue > 0 ? (effectiveCash / totalPortfolioValue * 100) : 100;
+  const investedPct = totalPortfolioValue > 0 ? (totalCurrent / totalPortfolioValue * 100) : 0;
+
+  const lastVerified = portfolio.lastVerifiedAt
+    ? new Date(portfolio.lastVerifiedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+    : 'NEVER';
+
+  let audit = `=== PORTFOLIO AUDIT ===
+Total Capital: ₹${totalPortfolioValue.toLocaleString('en-IN')} | Available Cash: ₹${effectiveCash.toLocaleString('en-IN')} (effective, ₹${reservedCash.toFixed(0)} reserved) | Invested: ₹${totalCurrent.toLocaleString('en-IN')}
+Cash Utilization: ${investedPct.toFixed(1)}% | Idle Cash: ${cashPct.toFixed(1)}%
+Last Verified: ${lastVerified}
+`;
+
+  if (holdingRows.length > 0) {
+    audit += `\nHOLDINGS BY WEIGHT:\n| Symbol | Qty | Avg ₹ | Current ₹ | P&L % | Value ₹ | Weight % |\n`;
+    for (const h of holdingRows) {
+      audit += `| ${h.symbol} | ${h.qty} | ${h.avgPrice.toFixed(0)} | ${h.currentPrice.toFixed(0)} | ${h.plPct >= 0 ? '+' : ''}${h.plPct.toFixed(1)}% | ${h.value.toLocaleString('en-IN')} | ${h.weight.toFixed(1)}% |\n`;
+    }
+
+    // Top concentrations
+    const overweight = holdingRows.filter(h => h.weight > 15);
+    if (overweight.length > 0) {
+      audit += `\nTOP CONCENTRATIONS:\n`;
+      for (const h of overweight) {
+        audit += `- ${h.symbol} = ${h.weight.toFixed(1)}% of portfolio (OVERWEIGHT >15%)\n`;
+      }
+    }
+  } else {
+    audit += `\nNO HOLDINGS — fresh portfolio, all capital is idle.\n`;
+  }
+
+  // Idle cash analysis
+  const riskProfile = portfolio.riskProfile || 'BALANCED';
+  let cashCommentary;
+  if (riskProfile === 'AGGRESSIVE') {
+    cashCommentary = cashPct > 10
+      ? `TOO MUCH IDLE CASH for aggressive growth. Deploy at least ${(cashPct - 5).toFixed(0)}% of this immediately.`
+      : `Cash reserve acceptable for aggressive portfolio.`;
+  } else if (riskProfile === 'CONSERVATIVE') {
+    cashCommentary = cashPct < 20
+      ? `Low cash reserve for conservative portfolio. Consider trimming to build 20% buffer.`
+      : `Healthy cash reserve for conservative portfolio.`;
+  } else {
+    cashCommentary = cashPct > 30
+      ? `Significant idle cash. Consider deploying to improve returns.`
+      : cashPct < 10
+        ? `Low cash buffer. Maintain at least 10% for opportunities.`
+        : `Cash level adequate for balanced portfolio.`;
+  }
+  audit += `\nIDLE CASH ANALYSIS:\n₹${effectiveCash.toLocaleString('en-IN')} idle = ${cashPct.toFixed(1)}% of capital. ${cashCommentary}\n`;
+
+  return audit;
+}
+
+/**
+ * Build growth directive text based on portfolio risk profile.
+ * This frames the AI's approach to signal generation.
+ *
+ * @param {object} portfolio - Portfolio object
+ * @returns {string} Growth directive text
+ */
+export function buildGrowthDirective(portfolio) {
+  const riskProfile = portfolio?.riskProfile || 'BALANCED';
+
+  if (riskProfile === 'AGGRESSIVE') {
+    return `GROWTH DIRECTIVE (AGGRESSIVE):
+Deploy ALL idle cash aggressively. Target 25%+ annual returns. Accept higher volatility. Prefer high-growth small/mid caps with momentum. If a holding is underperforming (P&L < -10% with no catalyst), EXIT and redeploy capital to better opportunities. Every idle rupee is a missed opportunity.`;
+  }
+
+  if (riskProfile === 'CONSERVATIVE') {
+    return `GROWTH DIRECTIVE (CONSERVATIVE):
+Maintain 20% cash reserve. Target 12-15% annual returns. Prefer large caps with dividends and strong fundamentals. Only exit positions below -20% or with fundamentally broken thesis. Prioritize capital preservation over aggressive growth.`;
+  }
+
+  // BALANCED / MODERATE / default
+  return `GROWTH DIRECTIVE (BALANCED):
+Deploy idle cash above 10% of capital. Target 15-20% annual returns. Balance growth and stability with a mix of large and mid caps. Trim underperformers below -15% that show no recovery signs. Maintain diversification across sectors.`;
+}
+
+/**
  * Build a brief for ALL portfolios (cross-portfolio view).
  */
 export function buildAllPortfoliosBrief(portfolios) {
@@ -340,4 +454,4 @@ export function getAllNSESymbols() {
   ];
 }
 
-export default { scanMarketForOpportunities, calculateTechnicals, getAllNSESymbols, buildProfileBrief, buildAllPortfoliosBrief };
+export default { scanMarketForOpportunities, calculateTechnicals, getAllNSESymbols, buildProfileBrief, buildAllPortfoliosBrief, buildPortfolioAudit, buildGrowthDirective };

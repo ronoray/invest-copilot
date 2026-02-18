@@ -1123,4 +1123,214 @@ router.post('/confirm-screenshot-trade', async (req, res) => {
   }
 });
 
+// ============================================
+// HOLDINGS SCREENSHOT RECONCILIATION
+// ============================================
+
+/**
+ * POST /api/ai/parse-holdings-screenshot
+ * Upload a full holdings page screenshot and extract ALL stock holdings via Claude Vision
+ */
+router.post('/parse-holdings-screenshot', upload.single('screenshot'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No screenshot uploaded' });
+    }
+
+    logger.info(`Processing holdings screenshot: ${req.file.filename}`);
+
+    const imageBuffer = readFileSync(req.file.path);
+    const base64Image = imageBuffer.toString('base64');
+    const mediaType = req.file.mimetype;
+
+    const message = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 4000,
+      messages: [{
+        role: 'user',
+        content: [
+          {
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: mediaType,
+              data: base64Image
+            }
+          },
+          {
+            type: 'text',
+            text: `Extract ALL stock holdings from this broker holdings/portfolio page screenshot. This is an Indian stock brokerage account.
+
+For EACH holding visible, extract:
+- symbol: NSE trading symbol (e.g., HDFCBANK, RELIANCE, TCS). Use standard NSE format.
+- exchange: "NSE" or "BSE" based on what's shown
+- quantity: number of shares held
+- avgPrice: average buy price per share
+- currentPrice: current market price per share (if visible)
+- pnl: profit/loss amount (if visible, otherwise null)
+
+Return ONLY valid JSON (no markdown):
+{
+  "holdings": [
+    { "symbol": "HDFCBANK", "exchange": "NSE", "quantity": 10, "avgPrice": 1650.50, "currentPrice": 1720.00, "pnl": 695.00 }
+  ],
+  "broker": "detected broker name",
+  "confidence": 0.85,
+  "notes": "any issues or ambiguities"
+}
+
+If you cannot read the image clearly, return { "error": "reason" }.
+Extract EVERY row visible — do not skip any holdings.`
+          }
+        ]
+      }]
+    });
+
+    const responseText = message.content[0].text;
+    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+
+    if (!jsonMatch) {
+      return res.status(422).json({ error: 'Could not extract holdings data from screenshot' });
+    }
+
+    const result = JSON.parse(jsonMatch[0]);
+
+    if (result.error) {
+      return res.status(422).json({ error: result.error });
+    }
+
+    logger.info(`Holdings screenshot processed: ${(result.holdings || []).length} holdings extracted`);
+
+    res.json({
+      success: true,
+      holdings: result.holdings || [],
+      broker: result.broker,
+      confidence: result.confidence,
+      notes: result.notes
+    });
+
+  } catch (error) {
+    logger.error('Holdings screenshot parse error:', error.message);
+    res.status(500).json({ error: 'Failed to process holdings screenshot' });
+  }
+});
+
+/**
+ * POST /api/ai/confirm-holdings-reconcile
+ * Reconcile parsed holdings against current DB state:
+ * - Add new holdings
+ * - Update existing holdings (qty, avgPrice, currentPrice)
+ * - Remove holdings not present in screenshot
+ * - Recalculate cash and set lastVerifiedAt
+ */
+router.post('/confirm-holdings-reconcile', async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { portfolioId, holdings: parsedHoldings } = req.body;
+
+    if (!portfolioId || !parsedHoldings || !Array.isArray(parsedHoldings)) {
+      return res.status(400).json({ error: 'portfolioId and holdings array are required' });
+    }
+
+    // Verify portfolio belongs to user
+    const portfolio = await prisma.portfolio.findFirst({
+      where: { id: parseInt(portfolioId), userId },
+      include: { holdings: true }
+    });
+
+    if (!portfolio) {
+      return res.status(404).json({ error: 'Portfolio not found' });
+    }
+
+    const existingHoldings = portfolio.holdings || [];
+    const existingMap = new Map();
+    for (const h of existingHoldings) {
+      existingMap.set(`${h.symbol}_${h.exchange}`, h);
+    }
+
+    const parsedKeys = new Set();
+    let added = 0;
+    let updated = 0;
+    let removed = 0;
+
+    // Process each parsed holding
+    for (const ph of parsedHoldings) {
+      const symbol = (ph.symbol || '').toUpperCase();
+      const exchange = (ph.exchange || 'NSE').toUpperCase();
+      const key = `${symbol}_${exchange}`;
+      parsedKeys.add(key);
+
+      const qty = parseInt(ph.quantity) || 0;
+      const avgPrice = parseFloat(ph.avgPrice) || 0;
+      const currentPrice = parseFloat(ph.currentPrice) || avgPrice;
+
+      if (qty <= 0) continue;
+
+      const existing = existingMap.get(key);
+      if (existing) {
+        // Update existing holding
+        await prisma.holding.update({
+          where: { id: existing.id },
+          data: { quantity: qty, avgPrice, currentPrice }
+        });
+        updated++;
+      } else {
+        // Create new holding
+        await prisma.holding.create({
+          data: {
+            portfolioId: parseInt(portfolioId),
+            symbol,
+            exchange,
+            quantity: qty,
+            avgPrice,
+            currentPrice
+          }
+        });
+        added++;
+      }
+    }
+
+    // Remove holdings not in parsed list
+    for (const [key, existing] of existingMap) {
+      if (!parsedKeys.has(key)) {
+        await prisma.holding.delete({ where: { id: existing.id } });
+        removed++;
+      }
+    }
+
+    // Recalculate total invested from updated holdings
+    const updatedHoldings = await prisma.holding.findMany({
+      where: { portfolioId: parseInt(portfolioId) }
+    });
+    const totalInvested = updatedHoldings.reduce((sum, h) => sum + h.quantity * parseFloat(h.avgPrice), 0);
+    const startingCapital = parseFloat(portfolio.startingCapital || 0);
+    const newCash = Math.max(0, startingCapital - totalInvested);
+
+    // Update portfolio cash and verification timestamp
+    await prisma.portfolio.update({
+      where: { id: parseInt(portfolioId) },
+      data: {
+        availableCash: newCash,
+        lastVerifiedAt: new Date()
+      }
+    });
+
+    logger.info(`Holdings reconciled for portfolio ${portfolioId}: ${added} added, ${updated} updated, ${removed} removed. Cash: ₹${newCash.toFixed(0)}`);
+
+    res.json({
+      success: true,
+      added,
+      updated,
+      removed,
+      totalHoldings: updatedHoldings.length,
+      newCash: parseFloat(newCash.toFixed(2)),
+      totalInvested: parseFloat(totalInvested.toFixed(2))
+    });
+
+  } catch (error) {
+    logger.error('Holdings reconcile error:', error.message);
+    res.status(500).json({ error: 'Failed to reconcile holdings' });
+  }
+});
+
 export default router;

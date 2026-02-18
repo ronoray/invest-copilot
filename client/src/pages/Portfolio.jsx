@@ -38,12 +38,23 @@ export default function Portfolio() {
 
   // Screenshot upload state
   const [showScreenshotModal, setShowScreenshotModal] = useState(false);
+  const [screenshotTab, setScreenshotTab] = useState('trade'); // 'trade' | 'holdings'
   const [screenshotFile, setScreenshotFile] = useState(null);
   const [screenshotPreview, setScreenshotPreview] = useState(null);
   const [screenshotLoading, setScreenshotLoading] = useState(false);
   const [screenshotResult, setScreenshotResult] = useState(null);
   const [editedTrades, setEditedTrades] = useState([]);
   const fileInputRef = useRef(null);
+
+  // Holdings reconciliation state
+  const [holdingsFile, setHoldingsFile] = useState(null);
+  const [holdingsPreview, setHoldingsPreview] = useState(null);
+  const [holdingsLoading, setHoldingsLoading] = useState(false);
+  const [parsedHoldings, setParsedHoldings] = useState(null);
+  const [editedHoldings, setEditedHoldings] = useState([]);
+  const [holdingsDiff, setHoldingsDiff] = useState(null);
+  const [reconcileResult, setReconcileResult] = useState(null);
+  const holdingsFileRef = useRef(null);
 
   useEffect(() => { loadPortfolios(); }, []);
 
@@ -173,12 +184,81 @@ export default function Portfolio() {
     }
   };
 
+  // Holdings screenshot handlers
+  const handleHoldingsSelect = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setHoldingsFile(file);
+    setHoldingsPreview(URL.createObjectURL(file));
+    setParsedHoldings(null);
+    setReconcileResult(null);
+  };
+
+  const handleHoldingsUpload = async () => {
+    if (!holdingsFile) return;
+    setHoldingsLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append('screenshot', holdingsFile);
+
+      const token = localStorage.getItem('accessToken');
+      const response = await fetch('/api/ai/parse-holdings-screenshot', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+        body: formData
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Upload failed');
+      setParsedHoldings(data);
+      setEditedHoldings((data.holdings || []).map(h => ({ ...h })));
+
+      // Compute diff against current holdings
+      const currentSymbols = new Set(holdings.map(h => `${h.symbol}_${h.exchange}`));
+      const parsedSymbols = new Set((data.holdings || []).map(h => `${(h.symbol || '').toUpperCase()}_${(h.exchange || 'NSE').toUpperCase()}`));
+      const newCount = [...parsedSymbols].filter(k => !currentSymbols.has(k)).length;
+      const removedCount = [...currentSymbols].filter(k => !parsedSymbols.has(k)).length;
+      const updatedCount = [...parsedSymbols].filter(k => currentSymbols.has(k)).length;
+      setHoldingsDiff({ added: newCount, updated: updatedCount, removed: removedCount });
+    } catch (err) {
+      setParsedHoldings({ error: err.message });
+    } finally {
+      setHoldingsLoading(false);
+    }
+  };
+
+  const handleConfirmReconcile = async () => {
+    if (!editedHoldings.length) return;
+    setHoldingsLoading(true);
+    try {
+      const data = await api.post('/ai/confirm-holdings-reconcile', {
+        portfolioId: selectedPortfolioId,
+        holdings: editedHoldings
+      });
+      setReconcileResult(data);
+    } catch (err) {
+      alert('Reconciliation failed: ' + (err.message || 'Unknown error'));
+    } finally {
+      setHoldingsLoading(false);
+    }
+  };
+
   const closeScreenshotModal = () => {
     setShowScreenshotModal(false);
+    setScreenshotTab('trade');
     setScreenshotFile(null);
     setScreenshotPreview(null);
     setScreenshotResult(null);
     setEditedTrades([]);
+    setHoldingsFile(null);
+    setHoldingsPreview(null);
+    setParsedHoldings(null);
+    setEditedHoldings([]);
+    setHoldingsDiff(null);
+    setReconcileResult(null);
+    if (reconcileResult) {
+      loadHoldings();
+      loadPortfolios();
+    }
   };
 
   const selectedPortfolio = portfolios.find(p => p.id === selectedPortfolioId);
@@ -474,168 +554,271 @@ export default function Portfolio() {
         onSuccess={handleCapitalUpdated}
       />
 
-      {/* Screenshot Upload Modal */}
+      {/* Screenshot Upload Modal — Tabbed: Trade Confirmation + Holdings Page */}
       {showScreenshotModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-xl p-6 w-full max-w-lg shadow-2xl max-h-[90vh] overflow-y-auto">
+          <div className="bg-white dark:bg-gray-800 rounded-xl p-6 w-full max-w-2xl shadow-2xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-xl font-bold text-gray-900 dark:text-gray-100">Upload Trade Screenshot</h3>
+              <h3 className="text-xl font-bold text-gray-900 dark:text-gray-100">Upload Screenshot</h3>
               <button onClick={closeScreenshotModal} className="text-gray-400 hover:text-gray-600">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="space-y-4">
-              {/* File input */}
-              <div
-                onClick={() => fileInputRef.current?.click()}
-                className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-8 text-center cursor-pointer hover:border-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-colors"
+            {/* Tabs */}
+            <div className="flex border-b border-gray-200 dark:border-gray-700 mb-4">
+              <button
+                onClick={() => setScreenshotTab('trade')}
+                className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${screenshotTab === 'trade' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
               >
-                {screenshotPreview ? (
-                  <img src={screenshotPreview} alt="Preview" className="max-h-48 mx-auto rounded-lg" />
+                Trade Confirmation
+              </button>
+              <button
+                onClick={() => setScreenshotTab('holdings')}
+                className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${screenshotTab === 'holdings' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+              >
+                Holdings Page
+              </button>
+            </div>
+
+            {/* Trade Confirmation Tab (existing) */}
+            {screenshotTab === 'trade' && (
+              <div className="space-y-4">
+                <div
+                  onClick={() => fileInputRef.current?.click()}
+                  className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-8 text-center cursor-pointer hover:border-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-colors"
+                >
+                  {screenshotPreview ? (
+                    <img src={screenshotPreview} alt="Preview" className="max-h-48 mx-auto rounded-lg" />
+                  ) : (
+                    <>
+                      <Upload className="w-10 h-10 mx-auto text-gray-400 mb-3" />
+                      <p className="text-gray-600 dark:text-gray-400">Click to upload trade screenshot</p>
+                      <p className="text-xs text-gray-400 mt-1">JPEG, PNG, WebP (max 10MB)</p>
+                    </>
+                  )}
+                </div>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,image/gif"
+                  onChange={handleScreenshotSelect}
+                  className="hidden"
+                />
+
+                {screenshotFile && !screenshotResult && (
+                  <button
+                    onClick={handleScreenshotUpload}
+                    disabled={screenshotLoading}
+                    className="w-full px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                  >
+                    {screenshotLoading ? (
+                      <><RefreshCw className="w-4 h-4 animate-spin" /> Analyzing with AI...</>
+                    ) : (
+                      <><Camera className="w-4 h-4" /> Extract Trade Data</>
+                    )}
+                  </button>
+                )}
+
+                {screenshotResult && !screenshotResult.error && (
+                  <div className="space-y-3">
+                    <div className="bg-green-50 dark:bg-green-900/30 rounded-lg p-4">
+                      <p className="font-semibold text-green-800 mb-1">Review Extracted Trade(s)</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+                        AI confidence: {Math.round((screenshotResult.confidence || 0) * 100)}%. Edit any incorrect values before confirming.
+                      </p>
+                      {editedTrades.map((t, i) => (
+                        <div key={i} className="bg-white dark:bg-gray-800 rounded-lg p-4 mb-3 border border-green-200 space-y-3">
+                          {editedTrades.length > 1 && <p className="text-xs font-semibold text-gray-400 uppercase">Trade {i + 1}</p>}
+                          <div className="grid grid-cols-2 gap-3">
+                            <div>
+                              <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Symbol</label>
+                              <input type="text" value={t.symbol || ''} onChange={(e) => { const u = [...editedTrades]; u[i] = { ...u[i], symbol: e.target.value.toUpperCase() }; setEditedTrades(u); }}
+                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm font-semibold focus:ring-2 focus:ring-green-500 focus:border-green-500" />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Type</label>
+                              <select value={t.tradeType || 'BUY'} onChange={(e) => { const u = [...editedTrades]; u[i] = { ...u[i], tradeType: e.target.value }; setEditedTrades(u); }}
+                                className={`w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm font-semibold focus:ring-2 focus:ring-green-500 focus:border-green-500 ${t.tradeType === 'BUY' ? 'text-green-700' : 'text-red-700'}`}>
+                                <option value="BUY">BUY</option>
+                                <option value="SELL">SELL</option>
+                              </select>
+                            </div>
+                            <div>
+                              <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Quantity</label>
+                              <input type="number" min="1" value={t.quantity || ''} onChange={(e) => { const u = [...editedTrades]; u[i] = { ...u[i], quantity: parseInt(e.target.value) || '' }; setEditedTrades(u); }}
+                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm font-semibold focus:ring-2 focus:ring-green-500 focus:border-green-500" />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Price (INR)</label>
+                              <input type="number" step="0.01" min="0" value={t.price || ''} onChange={(e) => { const u = [...editedTrades]; u[i] = { ...u[i], price: parseFloat(e.target.value) || '' }; setEditedTrades(u); }}
+                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm font-semibold focus:ring-2 focus:ring-green-500 focus:border-green-500" />
+                            </div>
+                          </div>
+                          {t.broker && <p className="text-xs text-gray-400">Detected broker: {t.broker}</p>}
+                        </div>
+                      ))}
+                    </div>
+                    <div className="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 rounded-lg p-3 text-sm text-yellow-800">
+                      Please verify the details above are correct. Confirming will add these trades to your portfolio.
+                    </div>
+                    <div className="flex gap-3">
+                      <button onClick={() => { setScreenshotResult(null); setScreenshotFile(null); setScreenshotPreview(null); setEditedTrades([]); }}
+                        className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700">
+                        Discard
+                      </button>
+                      <button onClick={handleConfirmScreenshotTrade}
+                        disabled={screenshotLoading || editedTrades.some(t => !t.symbol || !t.quantity || !t.price)}
+                        className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 font-semibold">
+                        {screenshotLoading ? 'Saving...' : 'Confirm & Add to Portfolio'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {screenshotResult?.error && (
+                  <div className="bg-red-50 dark:bg-red-900/30 rounded-lg p-3 text-sm text-red-700">Error: {screenshotResult.error}</div>
+                )}
+              </div>
+            )}
+
+            {/* Holdings Page Tab (new) */}
+            {screenshotTab === 'holdings' && (
+              <div className="space-y-4">
+                {reconcileResult ? (
+                  <div className="space-y-4">
+                    <div className="bg-green-50 dark:bg-green-900/30 rounded-lg p-6 text-center">
+                      <p className="text-lg font-bold text-green-800 mb-2">Reconciliation Complete</p>
+                      <div className="flex justify-center gap-4 mb-3">
+                        {reconcileResult.added > 0 && <span className="px-3 py-1 bg-green-200 text-green-800 rounded-full text-sm font-semibold">{reconcileResult.added} added</span>}
+                        {reconcileResult.updated > 0 && <span className="px-3 py-1 bg-blue-200 text-blue-800 rounded-full text-sm font-semibold">{reconcileResult.updated} updated</span>}
+                        {reconcileResult.removed > 0 && <span className="px-3 py-1 bg-red-200 text-red-800 rounded-full text-sm font-semibold">{reconcileResult.removed} removed</span>}
+                      </div>
+                      <p className="text-sm text-gray-600 dark:text-gray-400">
+                        Total holdings: {reconcileResult.totalHoldings} | Cash: {formatCurrency(reconcileResult.newCash)}
+                      </p>
+                    </div>
+                    <button onClick={closeScreenshotModal} className="w-full px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold">
+                      Done
+                    </button>
+                  </div>
                 ) : (
                   <>
-                    <Upload className="w-10 h-10 mx-auto text-gray-400 mb-3" />
-                    <p className="text-gray-600 dark:text-gray-400">Click to upload screenshot</p>
-                    <p className="text-xs text-gray-400 mt-1">JPEG, PNG, WebP (max 10MB)</p>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                      Upload your broker's full holdings page. AI will extract all stocks and reconcile with your portfolio — adding new stocks, updating quantities, and removing sold stocks.
+                    </p>
+
+                    <div
+                      onClick={() => holdingsFileRef.current?.click()}
+                      className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-8 text-center cursor-pointer hover:border-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-colors"
+                    >
+                      {holdingsPreview ? (
+                        <img src={holdingsPreview} alt="Preview" className="max-h-48 mx-auto rounded-lg" />
+                      ) : (
+                        <>
+                          <Upload className="w-10 h-10 mx-auto text-gray-400 mb-3" />
+                          <p className="text-gray-600 dark:text-gray-400">Click to upload holdings page</p>
+                          <p className="text-xs text-gray-400 mt-1">JPEG, PNG, WebP (max 10MB)</p>
+                        </>
+                      )}
+                    </div>
+                    <input ref={holdingsFileRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" onChange={handleHoldingsSelect} className="hidden" />
+
+                    {holdingsFile && !parsedHoldings && (
+                      <button onClick={handleHoldingsUpload} disabled={holdingsLoading}
+                        className="w-full px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2">
+                        {holdingsLoading ? (<><RefreshCw className="w-4 h-4 animate-spin" /> Extracting holdings...</>) : (<><Camera className="w-4 h-4" /> Extract All Holdings</>)}
+                      </button>
+                    )}
+
+                    {parsedHoldings && !parsedHoldings.error && (
+                      <div className="space-y-3">
+                        {/* Diff badges */}
+                        {holdingsDiff && (
+                          <div className="flex gap-2 flex-wrap">
+                            {holdingsDiff.added > 0 && <span className="px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm font-semibold">{holdingsDiff.added} new</span>}
+                            {holdingsDiff.updated > 0 && <span className="px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm font-semibold">{holdingsDiff.updated} updated</span>}
+                            {holdingsDiff.removed > 0 && <span className="px-3 py-1 bg-red-100 text-red-700 rounded-full text-sm font-semibold">{holdingsDiff.removed} removed</span>}
+                            <span className="px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-sm">
+                              AI confidence: {Math.round((parsedHoldings.confidence || 0) * 100)}%
+                            </span>
+                          </div>
+                        )}
+
+                        {/* Editable holdings table */}
+                        <div className="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700 overflow-x-auto">
+                          <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-sm">
+                            <thead className="bg-gray-50 dark:bg-gray-800">
+                              <tr>
+                                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Symbol</th>
+                                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Exch</th>
+                                <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Qty</th>
+                                <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Avg Price</th>
+                                <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Current</th>
+                                <th className="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase">Del</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                              {editedHoldings.map((h, i) => (
+                                <tr key={i} className="hover:bg-gray-50 dark:hover:bg-gray-800">
+                                  <td className="px-3 py-2">
+                                    <input type="text" value={h.symbol || ''} onChange={(e) => { const u = [...editedHoldings]; u[i] = { ...u[i], symbol: e.target.value.toUpperCase() }; setEditedHoldings(u); }}
+                                      className="w-24 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-sm font-semibold" />
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <select value={h.exchange || 'NSE'} onChange={(e) => { const u = [...editedHoldings]; u[i] = { ...u[i], exchange: e.target.value }; setEditedHoldings(u); }}
+                                      className="w-16 px-1 py-1 border border-gray-300 dark:border-gray-600 rounded text-sm">
+                                      <option value="NSE">NSE</option>
+                                      <option value="BSE">BSE</option>
+                                    </select>
+                                  </td>
+                                  <td className="px-3 py-2 text-right">
+                                    <input type="number" min="0" value={h.quantity || ''} onChange={(e) => { const u = [...editedHoldings]; u[i] = { ...u[i], quantity: parseInt(e.target.value) || '' }; setEditedHoldings(u); }}
+                                      className="w-20 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-sm text-right" />
+                                  </td>
+                                  <td className="px-3 py-2 text-right">
+                                    <input type="number" step="0.01" min="0" value={h.avgPrice || ''} onChange={(e) => { const u = [...editedHoldings]; u[i] = { ...u[i], avgPrice: parseFloat(e.target.value) || '' }; setEditedHoldings(u); }}
+                                      className="w-24 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-sm text-right" />
+                                  </td>
+                                  <td className="px-3 py-2 text-right">
+                                    <input type="number" step="0.01" min="0" value={h.currentPrice || ''} onChange={(e) => { const u = [...editedHoldings]; u[i] = { ...u[i], currentPrice: parseFloat(e.target.value) || '' }; setEditedHoldings(u); }}
+                                      className="w-24 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-sm text-right" />
+                                  </td>
+                                  <td className="px-3 py-2 text-center">
+                                    <button onClick={() => { const u = editedHoldings.filter((_, idx) => idx !== i); setEditedHoldings(u); }}
+                                      className="text-red-400 hover:text-red-600"><Trash2 size={14} /></button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+
+                        <div className="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 rounded-lg p-3 text-sm text-yellow-800">
+                          {holdingsDiff?.removed > 0 && <p className="font-semibold mb-1">{holdingsDiff.removed} existing stock(s) will be removed (not in screenshot).</p>}
+                          Confirming will replace all holdings in this portfolio with the data above and recalculate available cash.
+                        </div>
+
+                        <div className="flex gap-3">
+                          <button onClick={() => { setParsedHoldings(null); setHoldingsFile(null); setHoldingsPreview(null); setEditedHoldings([]); setHoldingsDiff(null); }}
+                            className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700">
+                            Discard
+                          </button>
+                          <button onClick={handleConfirmReconcile}
+                            disabled={holdingsLoading || editedHoldings.length === 0 || editedHoldings.some(h => !h.symbol || !h.quantity || !h.avgPrice)}
+                            className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 font-semibold">
+                            {holdingsLoading ? 'Reconciling...' : 'Confirm & Reconcile'}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {parsedHoldings?.error && (
+                      <div className="bg-red-50 dark:bg-red-900/30 rounded-lg p-3 text-sm text-red-700">Error: {parsedHoldings.error}</div>
+                    )}
                   </>
                 )}
               </div>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/jpeg,image/png,image/webp,image/gif"
-                onChange={handleScreenshotSelect}
-                className="hidden"
-              />
-
-              {/* Upload button */}
-              {screenshotFile && !screenshotResult && (
-                <button
-                  onClick={handleScreenshotUpload}
-                  disabled={screenshotLoading}
-                  className="w-full px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
-                >
-                  {screenshotLoading ? (
-                    <>
-                      <RefreshCw className="w-4 h-4 animate-spin" />
-                      Analyzing with AI...
-                    </>
-                  ) : (
-                    <>
-                      <Camera className="w-4 h-4" />
-                      Extract Trade Data
-                    </>
-                  )}
-                </button>
-              )}
-
-              {/* Results — editable review */}
-              {screenshotResult && !screenshotResult.error && (
-                <div className="space-y-3">
-                  <div className="bg-green-50 dark:bg-green-900/30 rounded-lg p-4">
-                    <p className="font-semibold text-green-800 mb-1">Review Extracted Trade(s)</p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
-                      AI confidence: {Math.round((screenshotResult.confidence || 0) * 100)}%. Edit any incorrect values before confirming.
-                    </p>
-
-                    {editedTrades.map((t, i) => (
-                      <div key={i} className="bg-white dark:bg-gray-800 rounded-lg p-4 mb-3 border border-green-200 space-y-3">
-                        {editedTrades.length > 1 && (
-                          <p className="text-xs font-semibold text-gray-400 uppercase">Trade {i + 1}</p>
-                        )}
-                        <div className="grid grid-cols-2 gap-3">
-                          <div>
-                            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Symbol</label>
-                            <input
-                              type="text"
-                              value={t.symbol || ''}
-                              onChange={(e) => {
-                                const updated = [...editedTrades];
-                                updated[i] = { ...updated[i], symbol: e.target.value.toUpperCase() };
-                                setEditedTrades(updated);
-                              }}
-                              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm font-semibold focus:ring-2 focus:ring-green-500 focus:border-green-500"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Type</label>
-                            <select
-                              value={t.tradeType || 'BUY'}
-                              onChange={(e) => {
-                                const updated = [...editedTrades];
-                                updated[i] = { ...updated[i], tradeType: e.target.value };
-                                setEditedTrades(updated);
-                              }}
-                              className={`w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm font-semibold focus:ring-2 focus:ring-green-500 focus:border-green-500 ${t.tradeType === 'BUY' ? 'text-green-700' : 'text-red-700'}`}
-                            >
-                              <option value="BUY">BUY</option>
-                              <option value="SELL">SELL</option>
-                            </select>
-                          </div>
-                          <div>
-                            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Quantity</label>
-                            <input
-                              type="number"
-                              min="1"
-                              value={t.quantity || ''}
-                              onChange={(e) => {
-                                const updated = [...editedTrades];
-                                updated[i] = { ...updated[i], quantity: parseInt(e.target.value) || '' };
-                                setEditedTrades(updated);
-                              }}
-                              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm font-semibold focus:ring-2 focus:ring-green-500 focus:border-green-500"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Price (INR)</label>
-                            <input
-                              type="number"
-                              step="0.01"
-                              min="0"
-                              value={t.price || ''}
-                              onChange={(e) => {
-                                const updated = [...editedTrades];
-                                updated[i] = { ...updated[i], price: parseFloat(e.target.value) || '' };
-                                setEditedTrades(updated);
-                              }}
-                              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm font-semibold focus:ring-2 focus:ring-green-500 focus:border-green-500"
-                            />
-                          </div>
-                        </div>
-                        {t.broker && <p className="text-xs text-gray-400">Detected broker: {t.broker}</p>}
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 rounded-lg p-3 text-sm text-yellow-800">
-                    Please verify the details above are correct. Confirming will add these trades to your portfolio.
-                  </div>
-
-                  <div className="flex gap-3">
-                    <button
-                      onClick={() => { setScreenshotResult(null); setScreenshotFile(null); setScreenshotPreview(null); setEditedTrades([]); }}
-                      className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700"
-                    >
-                      Discard
-                    </button>
-                    <button
-                      onClick={handleConfirmScreenshotTrade}
-                      disabled={screenshotLoading || editedTrades.some(t => !t.symbol || !t.quantity || !t.price)}
-                      className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 font-semibold"
-                    >
-                      {screenshotLoading ? 'Saving...' : 'Confirm & Add to Portfolio'}
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {screenshotResult?.error && (
-                <div className="bg-red-50 dark:bg-red-900/30 rounded-lg p-3 text-sm text-red-700">
-                  Error: {screenshotResult.error}
-                </div>
-              )}
-            </div>
+            )}
           </div>
         </div>
       )}

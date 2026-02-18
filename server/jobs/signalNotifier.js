@@ -3,7 +3,7 @@ import prisma from '../services/prisma.js';
 import { getBot } from '../services/telegramBot.js';
 import { generateTradeSignals, expireOldSignals } from '../services/signalGenerator.js';
 import { isTokenValid, getAuthorizationUrl, getHoldings, getOrderStatus } from '../services/upstoxService.js';
-import { syncUpstoxFunds, syncUpstoxHoldings } from '../services/capitalGuard.js';
+import { syncUpstoxFunds, syncUpstoxHoldings, getEffectiveCash } from '../services/capitalGuard.js';
 import { refreshAiTarget } from '../services/dailyTargetService.js';
 import { isTradingDay } from '../utils/marketHolidays.js';
 import logger from '../services/logger.js';
@@ -298,9 +298,23 @@ async function generateSignalsForAllPortfolios() {
           }
         }
 
+        // Pre-signal audit logging
+        try {
+          const { effectiveCash: eCash } = await getEffectiveCash(portfolio.id);
+          const invested = (portfolio.holdings || []).reduce((s, h) => s + h.quantity * parseFloat(h.avgPrice), 0);
+          logger.info(`[Signal Pre-Audit] Portfolio ${portfolio.id} "${portfolio.ownerName || portfolio.name}": capital=₹${parseFloat(portfolio.startingCapital || 0).toFixed(0)}, effectiveCash=₹${eCash.toFixed(0)}, holdings=${(portfolio.holdings || []).length}, invested=₹${invested.toFixed(0)}, lastVerified=${portfolio.lastVerifiedAt || 'never'}`);
+        } catch (logErr) {
+          logger.warn(`Pre-audit logging failed for portfolio ${portfolio.id}:`, logErr.message);
+        }
+
         const signals = await generateTradeSignals(portfolio.id, extraContext);
         totalSignals += signals.length;
-        logger.info(`Generated ${signals.length} signals for portfolio ${portfolio.id} (${portfolio.ownerName || portfolio.name})`);
+
+        // Post-signal logging
+        const buySignals = signals.filter(s => s.side === 'BUY');
+        const sellSignals = signals.filter(s => s.side === 'SELL');
+        const buyTotal = buySignals.reduce((s, sig) => s + (sig.quantity * (parseFloat(sig.triggerPrice) || 0)), 0);
+        logger.info(`[Signal Post-Gen] Portfolio ${portfolio.id}: ${signals.length} signals generated (${buySignals.length} BUY ₹${buyTotal.toFixed(0)}, ${sellSignals.length} SELL)`);
 
         // Small delay between portfolios to avoid API rate limits
         await new Promise(resolve => setTimeout(resolve, 2000));

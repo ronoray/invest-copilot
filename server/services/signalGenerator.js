@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import prisma from './prisma.js';
-import { buildProfileBrief } from './advancedScreener.js';
+import { buildProfileBrief, buildPortfolioAudit, buildGrowthDirective } from './advancedScreener.js';
 import { fetchMarketContext } from './marketData.js';
 import { ANALYST_IDENTITY, MARKET_DATA_INSTRUCTION, buildAccountabilityScorecard } from './analystPrompts.js';
 import { getEffectiveCash, validateSignals } from './capitalGuard.js';
@@ -31,6 +31,10 @@ export async function generateTradeSignals(portfolioId, extraContext = '') {
   const profileBrief = buildProfileBrief(portfolio);
   const { effectiveCash, reservedCash, rawCash } = await getEffectiveCash(portfolioId);
 
+  // Build portfolio audit and growth directive
+  const portfolioAudit = buildPortfolioAudit(portfolio, effectiveCash, reservedCash);
+  const growthDirective = buildGrowthDirective(portfolio);
+
   // Get today's target for context
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -60,16 +64,26 @@ export async function generateTradeSignals(portfolioId, extraContext = '') {
 
   const prompt = `${ANALYST_IDENTITY}
 
+${growthDirective}
+
 ${marketContext}
 ${MARKET_DATA_INSTRUCTION}
 
 ${scorecard}
+
+${portfolioAudit}
 
 ${profileBrief}
 
 HARD CAPITAL LIMIT: ₹${effectiveCash.toLocaleString('en-IN')} available cash (₹${reservedCash.toFixed(0)} reserved by pending signals). Total cost of ALL BUY signals MUST NOT exceed ₹${effectiveCash.toLocaleString('en-IN')}. This is a hard constraint — violating it means orders will be rejected.
 ${targetContext}
 ${extraContext}
+
+PORTFOLIO AUDIT DIRECTIVE: Before generating signals, analyze the audit above. Identify:
+1. UNDERPERFORMERS to SELL — holdings with broken thesis, P&L below threshold per growth directive, no catalyst
+2. OVERWEIGHT positions to TRIM — any single stock >15% of portfolio
+3. IDLE CASH to DEPLOY — generate BUY signals that move toward the growth target
+Your signals must collectively improve portfolio health and growth trajectory.
 
 GENERATE TRADE SIGNALS NOW.
 

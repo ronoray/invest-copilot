@@ -227,10 +227,18 @@ export default function Portfolio() {
               <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${RISK_COLORS[p.riskProfile] || 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400'}`}>
                 {p.riskProfile}
               </span>
+              <span className="text-xs text-gray-500 dark:text-gray-400">{p.holdingsCount || 0} stocks</span>
             </div>
-            <p className="text-sm font-bold text-gray-900 dark:text-gray-100 mt-2">
-              {formatCurrency(p.startingCapital)}
-            </p>
+            {p.totalInvested > 0 ? (
+              <div className="mt-2">
+                <p className="text-sm font-bold text-gray-900 dark:text-gray-100">{formatCurrency(p.totalCurrentValue)}</p>
+                <p className={`text-xs font-semibold ${(p.unrealizedPL || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                  {(p.unrealizedPL || 0) >= 0 ? '+' : ''}{formatCurrency(p.unrealizedPL)} ({p.unrealizedPLPercent > 0 ? '+' : ''}{p.unrealizedPLPercent || 0}%)
+                </p>
+              </div>
+            ) : (
+              <p className="text-sm text-gray-400 mt-2">No holdings</p>
+            )}
           </button>
         ))}
         {/* Add card */}
@@ -269,9 +277,16 @@ export default function Portfolio() {
               {selectedPortfolio.investmentExperience && (
                 <span className="text-sm text-gray-600 dark:text-gray-400">{selectedPortfolio.investmentExperience}</span>
               )}
-              <span className="text-sm font-semibold text-gray-800 dark:text-gray-100">
-                Capital: {formatCurrency(selectedPortfolio.startingCapital)}
-              </span>
+              {selectedPortfolio.totalInvested > 0 && (
+                <span className="text-sm font-semibold text-gray-800 dark:text-gray-100">
+                  Invested: {formatCurrency(selectedPortfolio.totalInvested)}
+                </span>
+              )}
+              {selectedPortfolio.totalInvested > 0 && (
+                <span className={`text-sm font-semibold ${(selectedPortfolio.unrealizedPL || 0) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                  P&L: {(selectedPortfolio.unrealizedPL || 0) >= 0 ? '+' : ''}{formatCurrency(selectedPortfolio.unrealizedPL)} ({selectedPortfolio.unrealizedPLPercent > 0 ? '+' : ''}{selectedPortfolio.unrealizedPLPercent || 0}%)
+                </span>
+              )}
               <span className="text-sm text-green-700 font-medium">
                 Cash: {formatCurrency(selectedPortfolio.availableCash)}
               </span>

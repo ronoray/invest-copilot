@@ -176,11 +176,19 @@ export default function Dashboard() {
               {sp.investmentGoal && (
                 <span className="text-gray-500 dark:text-gray-400">{sp.investmentGoal.replace(/_/g, ' ')}</span>
               )}
-              <span className="ml-auto font-semibold text-gray-800 dark:text-gray-100">
-                Capital: &#8377;{sp.startingCapital?.toLocaleString('en-IN')}
-              </span>
-              <span className="text-green-700 font-medium">
-                Cash: &#8377;{sp.availableCash?.toLocaleString('en-IN')}
+              <span className="text-gray-600 dark:text-gray-400">{sp.holdingsCount || 0} holdings</span>
+              {sp.totalInvested > 0 && (
+                <span className="font-semibold text-gray-800 dark:text-gray-100">
+                  Invested: {formatCurrency(sp.totalInvested)}
+                </span>
+              )}
+              {sp.totalInvested > 0 && (
+                <span className={`font-semibold ${(sp.unrealizedPL || 0) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                  P&L: {(sp.unrealizedPL || 0) >= 0 ? '+' : ''}{formatCurrency(sp.unrealizedPL)} ({sp.unrealizedPLPercent > 0 ? '+' : ''}{sp.unrealizedPLPercent || 0}%)
+                </span>
+              )}
+              <span className="ml-auto text-green-700 font-medium">
+                Cash: {formatCurrency(sp.availableCash)}
               </span>
             </div>
             <PortfolioCompletenessAlert portfolio={sp} linkToPortfolio={true} />
@@ -201,6 +209,9 @@ export default function Dashboard() {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {portfolios.map(p => {
                 const brokerShort = (p.broker || '').replace(/_/g, ' ');
+                const pl = p.unrealizedPL || 0;
+                const plPct = p.unrealizedPLPercent || 0;
+                const isProfit = pl >= 0;
                 return (
                   <button
                     key={p.id}
@@ -218,12 +229,22 @@ export default function Dashboard() {
                         'bg-blue-100 text-blue-700'
                       }`}>{p.riskProfile}</span>
                     </div>
-                    <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+                    <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400 mb-2">
                       <span>{brokerShort}</span>
                       <span className="text-gray-300">|</span>
-                      <span className="font-semibold text-gray-800 dark:text-gray-100">&#8377;{p.startingCapital?.toLocaleString('en-IN')}</span>
-                      <span className="text-green-600 ml-auto">Cash: &#8377;{p.availableCash?.toLocaleString('en-IN')}</span>
+                      <span>{p.holdingsCount || 0} holdings</span>
+                      <span className="text-green-600 ml-auto">Cash: {formatCurrency(p.availableCash)}</span>
                     </div>
+                    {(p.totalInvested > 0) ? (
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-semibold text-gray-800 dark:text-gray-100">Value: {formatCurrency(p.totalCurrentValue)}</span>
+                        <span className={`font-semibold ${isProfit ? 'text-green-600' : 'text-red-600'}`}>
+                          {isProfit ? '+' : ''}{formatCurrency(pl)} ({plPct > 0 ? '+' : ''}{plPct}%)
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="text-xs text-gray-400">No holdings</div>
+                    )}
                   </button>
                 );
               })}

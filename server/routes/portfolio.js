@@ -2,6 +2,7 @@ import express from 'express';
 import { PrismaClient } from '@prisma/client';
 import { getCurrentPrice } from '../services/marketData.js';
 import logger from '../services/logger.js';
+import { syncUpstoxHoldings, syncUpstoxFunds } from '../services/capitalGuard.js';
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -15,46 +16,60 @@ router.get('/', async (req, res) => {
     const { all } = req.query;
     // const userId = req.userId; // UNCOMMENT when authenticate middleware is added
 
-    // ==================== NEW: Portfolio list for dropdown ====================
+    // ==================== Portfolio list for dropdown (with computed values) ====================
     if (all === 'true') {
+      const userId = req.userId;
+
+      // Sync Upstox portfolios in background (best-effort, don't block on failure)
+      if (userId) {
+        try {
+          const hasUpstox = await prisma.upstoxIntegration.findFirst({
+            where: { userId, isActive: true }
+          });
+          if (hasUpstox) {
+            await Promise.all([
+              syncUpstoxHoldings(userId),
+              syncUpstoxFunds(userId)
+            ]);
+          }
+        } catch (err) {
+          logger.warn('Upstox sync during portfolio list failed (non-blocking):', err.message);
+        }
+      }
+
       const portfolios = await prisma.portfolio.findMany({
         where: {
-          // userId, // UNCOMMENT when authenticate middleware is added
-          isActive: true
+          isActive: true,
+          ...(userId ? { userId } : {})
         },
-        select: {
-          id: true,
-          name: true,
-          ownerName: true,
-          broker: true,
-          startingCapital: true,
-          currentValue: true,
-          availableCash: true,
-          markets: true,
-          currency: true,
-          apiEnabled: true,
-          riskProfile: true,
-          investmentGoal: true,
-          investmentExperience: true,
-          monthlyIncome: true,
-          age: true,
-          notes: true,
-          syncEnabled: true
+        include: {
+          holdings: {
+            select: { quantity: true, avgPrice: true, currentPrice: true }
+          }
         },
         orderBy: {
           id: 'asc'
         }
       });
 
-      return res.json({
-        success: true,
-        portfolios: portfolios.map(p => ({
+      const portfolioResults = portfolios.map(p => {
+        // Compute real values from actual holdings
+        let totalInvested = 0;
+        let totalCurrentValue = 0;
+        for (const h of p.holdings) {
+          totalInvested += h.quantity * parseFloat(h.avgPrice || 0);
+          totalCurrentValue += h.quantity * parseFloat(h.currentPrice || h.avgPrice || 0);
+        }
+        const unrealizedPL = totalCurrentValue - totalInvested;
+        const unrealizedPLPercent = totalInvested > 0 ? (unrealizedPL / totalInvested) * 100 : 0;
+
+        return {
           id: p.id,
           name: p.name,
           ownerName: p.ownerName,
           broker: p.broker,
           startingCapital: parseFloat(p.startingCapital),
-          currentValue: parseFloat(p.currentValue),
+          currentValue: totalCurrentValue,
           availableCash: parseFloat(p.availableCash),
           markets: p.markets,
           currency: p.currency,
@@ -66,8 +81,29 @@ router.get('/', async (req, res) => {
           age: p.age,
           notes: p.notes,
           syncEnabled: p.syncEnabled,
-          displayName: `${p.name} (${p.ownerName})`
-        }))
+          displayName: `${p.name} (${p.ownerName})`,
+          // Computed fields
+          totalInvested,
+          totalCurrentValue,
+          unrealizedPL,
+          unrealizedPLPercent: parseFloat(unrealizedPLPercent.toFixed(2)),
+          holdingsCount: p.holdings.length
+        };
+      });
+
+      // Update Portfolio.currentValue in DB so other consumers stay fresh (fire-and-forget)
+      for (const pr of portfolioResults) {
+        if (pr.totalCurrentValue > 0) {
+          prisma.portfolio.update({
+            where: { id: pr.id },
+            data: { currentValue: pr.totalCurrentValue }
+          }).catch(() => {});
+        }
+      }
+
+      return res.json({
+        success: true,
+        portfolios: portfolioResults
       });
     }
     const holdings = await prisma.holding.findMany({
@@ -271,18 +307,27 @@ router.post('/sync', async (req, res) => {
 router.get('/:portfolioId/holdings', async (req, res) => {
   try {
     const { portfolioId } = req.params;
-    // const userId = req.userId; // UNCOMMENT when authenticate middleware is added
+    const userId = req.userId;
 
     // Verify portfolio exists
     const portfolio = await prisma.portfolio.findFirst({
-      where: { 
+      where: {
         id: parseInt(portfolioId),
-        // userId // UNCOMMENT when authenticate middleware is added
+        ...(userId ? { userId } : {})
       }
     });
 
     if (!portfolio) {
       return res.status(404).json({ error: 'Portfolio not found' });
+    }
+
+    // Sync from Upstox if this is an Upstox portfolio
+    if (portfolio.broker === 'UPSTOX' && userId) {
+      try {
+        await syncUpstoxHoldings(userId);
+      } catch (err) {
+        logger.warn(`Upstox holdings sync failed for portfolio ${portfolioId} (non-blocking):`, err.message);
+      }
     }
 
     const holdings = await prisma.holding.findMany({

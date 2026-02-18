@@ -4,7 +4,7 @@
 
 import prisma from './prisma.js';
 import logger from './logger.js';
-import { getFunds } from './upstoxService.js';
+import { getFunds, getHoldings } from './upstoxService.js';
 
 /**
  * Get effective cash for a portfolio, accounting for pending signal reservations.
@@ -390,6 +390,101 @@ export async function syncUpstoxFunds(userId) {
   }
 }
 
+/**
+ * Sync holdings from Upstox API into the DB for all UPSTOX portfolios of a user.
+ * Creates missing holdings, updates qty/avgPrice/currentPrice, removes sold-off holdings.
+ *
+ * @param {number} userId
+ * @returns {{ synced: number, created: number, removed: number }}
+ */
+export async function syncUpstoxHoldings(userId) {
+  try {
+    const { holdings: upstoxHoldings } = await getHoldings(userId);
+
+    if (!upstoxHoldings || upstoxHoldings.length === 0) {
+      logger.info(`[Capital Guard] syncUpstoxHoldings: no Upstox holdings for user ${userId}`);
+    }
+
+    // Find all active UPSTOX portfolios for this user
+    const portfolios = await prisma.portfolio.findMany({
+      where: { userId, broker: 'UPSTOX', isActive: true },
+      include: { holdings: true }
+    });
+
+    let synced = 0, created = 0, removed = 0;
+
+    for (const portfolio of portfolios) {
+      const existingMap = new Map();
+      for (const h of portfolio.holdings) {
+        existingMap.set(`${h.symbol}:${h.exchange}`, h);
+      }
+
+      const seenKeys = new Set();
+
+      for (const uh of (upstoxHoldings || [])) {
+        // Upstox format: tradingsymbol, exchange, quantity, average_price, last_price
+        const symbol = uh.tradingsymbol || uh.trading_symbol || '';
+        const exchange = (uh.exchange || 'NSE').replace(/_EQ$/, '');
+        const quantity = uh.quantity || 0;
+        const avgPrice = parseFloat(uh.average_price || 0);
+        const currentPrice = parseFloat(uh.last_price || uh.close_price || 0);
+
+        if (!symbol || quantity <= 0) continue;
+
+        const key = `${symbol}:${exchange}`;
+        seenKeys.add(key);
+
+        const existing = existingMap.get(key);
+
+        if (existing) {
+          // Update if changed
+          const oldQty = existing.quantity;
+          const oldAvg = parseFloat(existing.avgPrice);
+          const oldPrice = parseFloat(existing.currentPrice || 0);
+
+          if (oldQty !== quantity || Math.abs(oldAvg - avgPrice) > 0.01 || Math.abs(oldPrice - currentPrice) > 0.5) {
+            await prisma.holding.update({
+              where: { id: existing.id },
+              data: { quantity, avgPrice, currentPrice }
+            });
+            synced++;
+            logger.info(`[Capital Guard] Upstox holding updated: ${symbol} qty=${oldQty}→${quantity}, avg=₹${oldAvg.toFixed(2)}→₹${avgPrice.toFixed(2)}, price=₹${currentPrice.toFixed(2)} (portfolio ${portfolio.id})`);
+          }
+        } else {
+          // Create new holding
+          await prisma.holding.create({
+            data: {
+              portfolioId: portfolio.id,
+              symbol,
+              exchange,
+              quantity,
+              avgPrice,
+              currentPrice
+            }
+          });
+          created++;
+          logger.info(`[Capital Guard] Upstox holding created: ${symbol} ${quantity}x @ ₹${avgPrice.toFixed(2)} (portfolio ${portfolio.id})`);
+        }
+      }
+
+      // Remove holdings that no longer exist in Upstox (fully sold)
+      for (const [key, holding] of existingMap) {
+        if (!seenKeys.has(key)) {
+          await prisma.holding.delete({ where: { id: holding.id } });
+          removed++;
+          logger.info(`[Capital Guard] Upstox holding removed (sold): ${holding.symbol} (portfolio ${portfolio.id})`);
+        }
+      }
+    }
+
+    logger.info(`[Capital Guard] syncUpstoxHoldings: synced=${synced}, created=${created}, removed=${removed} for user ${userId}`);
+    return { synced, created, removed };
+  } catch (error) {
+    logger.error(`[Capital Guard] syncUpstoxHoldings failed for user ${userId}:`, error.message);
+    return { synced: 0, created: 0, removed: 0 };
+  }
+}
+
 export default {
   getEffectiveCash,
   validateSignals,
@@ -397,5 +492,6 @@ export default {
   preOrderCapitalCheck,
   updateCashOnExecution,
   upsertHoldingOnExecution,
-  syncUpstoxFunds
+  syncUpstoxFunds,
+  syncUpstoxHoldings
 };

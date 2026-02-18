@@ -137,11 +137,10 @@ async function getSafePortfolioSummary(portfolioId = null, userId = null) {
     const totalPL = totalValue - totalInvested;
     const totalPLPercent = totalInvested > 0 ? (totalPL / totalInvested) * 100 : 0;
 
-    // NEW: Portfolio-specific data
+    // Portfolio-specific data — use computed values, not stale DB currentValue
     if (isSinglePortfolio) {
       const startingCapital = parseFloat(portfolio.startingCapital);
       const availableCash = parseFloat(portfolio.availableCash);
-      const currentValue = parseFloat(portfolio.currentValue);
 
       return {
         portfolioId: portfolio.id,
@@ -150,13 +149,14 @@ async function getSafePortfolioSummary(portfolioId = null, userId = null) {
         broker: portfolio.broker,
         startingCapital,
         availableCash,
-        currentValue,
+        currentValue: totalValue,
         totalInvested,
+        totalValue,
         totalProfitLoss: totalPL,
         profitLossPercent: totalPLPercent,
         holdings: allHoldings,
         totalStocks: allHoldings.length,
-        reinvestmentCapacity: Math.max(availableCash * 0.7, 0) // 70% of available cash
+        reinvestmentCapacity: Math.max(availableCash * 0.7, 0)
       };
     }
 
@@ -454,11 +454,11 @@ Return ONLY JSON (no markdown):
         broker: summary.broker,
         startingCapital: summary.startingCapital,
         availableCash: availableCash,
-        currentValue: summary.currentValue,
+        currentValue: summary.totalValue || summary.currentValue,
         totalInvested: summary.totalInvested,
         totalPL: summary.totalProfitLoss,
         totalPLPercent: summary.profitLossPercent,
-        totalValue: summary.currentValue,
+        totalValue: summary.totalValue || summary.currentValue,
         totalStocks: summary.totalStocks
       },
       reinvestment: {

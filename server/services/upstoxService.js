@@ -114,8 +114,21 @@ async function upstoxRequest(accessToken, method, endpoint, data = null) {
     config.data = data;
   }
 
-  const response = await axios(config);
-  return response.data;
+  try {
+    const response = await axios(config);
+    return response.data;
+  } catch (error) {
+    const status = error.response?.status;
+    const body = error.response?.data;
+    logger.error(`Upstox API ${method} ${endpoint} failed [${status}]:`, JSON.stringify(body));
+
+    // Throw a more useful error with the Upstox error message
+    const upstoxMsg = body?.errors?.[0]?.message || body?.message || body?.error || error.message;
+    const enriched = new Error(`Upstox API [${status}]: ${upstoxMsg}`);
+    enriched.status = status;
+    enriched.upstoxBody = body;
+    throw enriched;
+  }
 }
 
 /**
@@ -139,16 +152,16 @@ export async function placeOrder(userId, orderParams) {
   const instrumentKey = await resolveInstrumentKey(symbol, exchange);
 
   const orderData = {
-    quantity,
+    quantity: parseInt(quantity),
     product: 'D', // Delivery
     validity: 'DAY',
-    price: orderType === 'LIMIT' ? price : 0,
+    price: orderType === 'LIMIT' ? parseFloat(price) : 0,
     tag: `invest-copilot-${Date.now()}`,
     instrument_token: instrumentKey,
     order_type: orderType,
     transaction_type: transactionType,
     disclosed_quantity: 0,
-    trigger_price: triggerPrice,
+    trigger_price: parseFloat(triggerPrice) || 0,
     is_amo: false
   };
 

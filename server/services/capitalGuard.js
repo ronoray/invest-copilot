@@ -610,6 +610,27 @@ export async function pollOrderUntilSettled({ userId, orderId, dbOrderId, signal
 
         logger.info(`Signal #${signalId} confirmed: order ${orderId} = ${orderStatus}`);
 
+        // DDPI: After SELL confirmed, expire any duplicate SELL signals for same stock
+        if (signal?.side === 'SELL' && signal?.portfolioId && signal?.symbol) {
+          try {
+            const dupeResult = await prisma.tradeSignal.updateMany({
+              where: {
+                portfolioId: signal.portfolioId,
+                symbol: signal.symbol,
+                side: 'SELL',
+                status: { in: ['PENDING', 'SNOOZED'] },
+                id: { not: signalId }
+              },
+              data: { status: 'EXPIRED' }
+            });
+            if (dupeResult.count > 0) {
+              logger.info(`[Capital Guard] Expired ${dupeResult.count} duplicate SELL signal(s) for ${signal.symbol} after execution`);
+            }
+          } catch (dupeErr) {
+            logger.warn(`[Capital Guard] Failed to expire duplicate SELL signals: ${dupeErr.message}`);
+          }
+        }
+
         if (onSuccess) {
           await onSuccess({ orderId, status: orderStatus, averagePrice: status.averagePrice });
         }

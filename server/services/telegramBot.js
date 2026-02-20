@@ -1,11 +1,13 @@
 import TelegramBot from 'node-telegram-bot-api';
+import Anthropic from '@anthropic-ai/sdk';
 import { PrismaClient } from '@prisma/client';
 import logger from './logger.js';
 import { getCurrentPrice } from './marketData.js';
 import { scanMarketForOpportunities, buildProfileBrief } from './advancedScreener.js';
 import { generateMultiAssetRecommendations } from './multiAssetRecommendations.js';
 import { placeOrder, getAuthorizationUrl, isTokenValid } from './upstoxService.js';
-import { preOrderCapitalCheck, syncUpstoxFunds, pollOrderUntilSettled } from './capitalGuard.js';
+import { preOrderCapitalCheck, syncUpstoxFunds, syncUpstoxHoldings, pollOrderUntilSettled } from './capitalGuard.js';
+import { getSystemPauseState, setPauseState, clearPauseState } from './pauseState.js';
 
 const prisma = new PrismaClient();
 
@@ -281,6 +283,33 @@ async function handleExecuteSignal(botInstance, query, signalId) {
       logger.warn(`Pre-execution fund sync failed for signal #${signalId}: ${syncErr.message}`);
     }
 
+    // DDPI: For SELL orders, do a live holdings sync to catch mid-day sells
+    if (signal.side === 'SELL') {
+      try {
+        await syncUpstoxHoldings(userId);
+        logger.info(`Pre-SELL holdings sync completed for signal #${signalId}`);
+      } catch (syncErr) {
+        logger.warn(`Pre-SELL holdings sync failed (non-blocking) for signal #${signalId}: ${syncErr.message}`);
+      }
+
+      // Re-verify holding from freshly synced DB
+      const freshHolding = await prisma.holding.findFirst({
+        where: { portfolioId: signal.portfolioId, symbol: signal.symbol }
+      });
+      if (!freshHolding || freshHolding.quantity <= 0) {
+        await prisma.tradeSignal.update({ where: { id: signalId }, data: { status: 'EXPIRED' } });
+        await botInstance.editMessageReplyMarkup(
+          { inline_keyboard: [[{ text: '⚠️ Already Sold', callback_data: 'noop' }]] },
+          { chat_id: chatId, message_id: messageId }
+        ).catch(() => {});
+        await botInstance.sendMessage(chatId,
+          `⚠️ *Signal Expired*\n\n${signal.symbol} is no longer in your holdings — it may have already been sold. Signal has been expired.`,
+          { parse_mode: 'Markdown' }
+        );
+        return;
+      }
+    }
+
     // Capital check for BUY orders
     if (signal.side === 'BUY') {
       let estimatedPrice = price; // LIMIT price
@@ -517,6 +546,96 @@ async function handleExecuteMarketFallback(botInstance, query, signalId) {
 }
 
 // ============================================
+// PAUSE / RESUME BRIEFING
+// ============================================
+
+async function generateResumeBriefing(pauseState) {
+  const pausedAt = new Date(pauseState.pausedAt);
+  const durationMin = Math.round((Date.now() - pausedAt.getTime()) / 60000);
+  const durationText = durationMin < 60
+    ? `${durationMin} min`
+    : `${Math.round(durationMin / 60)}h ${durationMin % 60}m`;
+
+  // Gather data generated during the pause
+  const pendingSignals = await prisma.tradeSignal.findMany({
+    where: {
+      status: { in: ['PENDING', 'SNOOZED'] },
+      createdAt: { gte: pausedAt }
+    },
+    include: { portfolio: { select: { ownerName: true, name: true } } }
+  });
+
+  const expiredDuringPause = await prisma.tradeSignal.findMany({
+    where: {
+      status: 'EXPIRED',
+      updatedAt: { gte: pausedAt }
+    },
+    select: { symbol: true, side: true, confidence: true, triggerPrice: true }
+  });
+
+  const pendingList = pendingSignals.map(s => {
+    const px = s.triggerPrice ? ` @ ₹${parseFloat(s.triggerPrice).toFixed(0)}` : '';
+    return `${s.side} ${s.quantity}x ${s.symbol}${px} (${s.confidence}% conf) — ${s.portfolio?.ownerName || s.portfolio?.name}`;
+  }).join('\n');
+
+  const expiredList = expiredDuringPause.map(s =>
+    `${s.side} ${s.symbol} (${s.confidence}% conf)`
+  ).join('\n');
+
+  try {
+    const anthropic = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
+    const response = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 400,
+      messages: [{
+        role: 'user',
+        content: `You are an investment assistant. The user just resumed their Invest Co-Pilot system after being away.
+
+Pause details:
+- Duration: ${durationText}
+- Reason: ${pauseState.reason}
+- Paused at: ${pausedAt.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}
+
+Signals generated while paused (still actionable):
+${pendingList || '(none)'}
+
+Signals that expired while paused (missed opportunities):
+${expiredList || '(none)'}
+
+Write a concise, friendly resume briefing (max 200 words) in Telegram Markdown format.
+- Acknowledge the pause reason intelligently
+- Summarize what was missed and what's actionable now
+- Prioritize any high-confidence signals
+- End with a motivating note
+- Use *bold* and _italic_ but avoid headers
+- No bullet symbols — use inline text`
+      }]
+    });
+    return response.content[0].text;
+  } catch (aiErr) {
+    logger.warn('Resume AI briefing failed, using fallback:', aiErr.message);
+    // Fallback: structured text briefing
+    let msg = `▶️ *Welcome back!* Paused for *${durationText}* (_${pauseState.reason}_)\n\n`;
+    if (pendingSignals.length > 0) {
+      msg += `📊 *${pendingSignals.length} signal(s) ready to act on:*\n`;
+      pendingSignals.forEach(s => {
+        const px = s.triggerPrice ? ` @ ₹${parseFloat(s.triggerPrice).toFixed(0)}` : '';
+        msg += `${s.side === 'BUY' ? '🟢' : '🔴'} ${s.side} ${s.quantity}x *${s.symbol}*${px} (${s.confidence}% conf)\n`;
+      });
+      msg += '\n';
+    }
+    if (expiredDuringPause.length > 0) {
+      msg += `⌛ *${expiredDuringPause.length} signal(s) expired* while paused\n\n`;
+    }
+    if (pendingSignals.length === 0 && expiredDuringPause.length === 0) {
+      msg += `_No signals were generated while you were away._\n\n`;
+    }
+    msg += `_Signal notifications are now active._`;
+    return msg;
+  }
+}
+
+// ============================================
 // BOT COMMANDS
 // ============================================
 
@@ -592,6 +711,10 @@ Let's build wealth! 💰`;
 
 *Trading:*
 /auth - Login to Upstox (daily refresh)
+
+*System:*
+/pause [reason] - Pause signal generation
+/resume - Resume + AI briefing of missed signals
 
 *Settings:*
 /settings - Alert preferences
@@ -969,6 +1092,79 @@ Use /mute to disable all alerts`;
       } catch (error) {
         logger.error('Unmute error:', error);
         await botInstance.sendMessage(msg.chat.id, '❌ Failed to unmute').catch(() => {});
+      }
+    });
+
+    // /pause [reason] — Pause signal generation and notifications
+    botInstance.onText(/^\/pause(?:\s+(.+))?$/, async (msg) => {
+      const reason = msg.text.replace(/^\/pause\s*/i, '').trim() || 'unspecified reason';
+      const chatId = msg.chat.id;
+      try {
+        const existing = await getSystemPauseState();
+        if (existing) {
+          const pausedAt = new Date(existing.pausedAt);
+          const mins = Math.round((Date.now() - pausedAt.getTime()) / 60000);
+          await botInstance.sendMessage(chatId,
+            `⏸ Already paused for *${mins} min* (reason: _${existing.reason}_)\n\nUse /resume to restart.`,
+            { parse_mode: 'Markdown' }
+          );
+          return;
+        }
+        await setPauseState({ reason, pausedByTelegramId: msg.from.id.toString() });
+        await botInstance.sendMessage(chatId,
+          `⏸ *Invest Co-Pilot Paused*\n\nReason: _${reason}_\n\nSignal generation and notifications are stopped. Holdings and funds will continue to sync in the background.\n\nUse /resume when you're ready.`,
+          { parse_mode: 'Markdown' }
+        );
+        logger.info(`System paused by Telegram user ${msg.from.id}: ${reason}`);
+      } catch (err) {
+        logger.error('Pause command error:', err);
+        await botInstance.sendMessage(chatId, '❌ Failed to pause. Please try again.').catch(() => {});
+      }
+    });
+
+    // /resume — Resume signal generation with AI briefing of missed signals
+    botInstance.onText(/^\/resume$/, async (msg) => {
+      const chatId = msg.chat.id;
+      try {
+        const pauseState = await getSystemPauseState();
+        if (!pauseState) {
+          await botInstance.sendMessage(chatId, '✅ System is already active. Signals are running normally.');
+          return;
+        }
+
+        await botInstance.sendMessage(chatId, '▶️ Resuming... generating your briefing...');
+        await clearPauseState();
+
+        // If paused > 18 hours (crossed a trading day), expire stale signals
+        const pauseDurationMs = Date.now() - new Date(pauseState.pausedAt).getTime();
+        let freshGenNeeded = false;
+        if (pauseDurationMs > 18 * 60 * 60 * 1000) {
+          const expiredCount = await prisma.tradeSignal.updateMany({
+            where: { status: { in: ['PENDING', 'SNOOZED'] } },
+            data: { status: 'EXPIRED' }
+          });
+          if (expiredCount.count > 0) {
+            freshGenNeeded = true;
+            logger.info(`Resume: expired ${expiredCount.count} stale signals (paused > 18h)`);
+          }
+        }
+
+        const briefing = await generateResumeBriefing(pauseState);
+        await botInstance.sendMessage(chatId, briefing, { parse_mode: 'Markdown' }).catch(async () => {
+          // Fallback if Markdown parse fails
+          await botInstance.sendMessage(chatId, briefing.replace(/[*_`]/g, '')).catch(() => {});
+        });
+
+        if (freshGenNeeded) {
+          await botInstance.sendMessage(chatId, '🔄 Old signals expired. Fresh signals will be generated at the next market cycle.');
+        } else {
+          await botInstance.sendMessage(chatId, '📡 Signal notifications will resume within 5 minutes.');
+        }
+
+        logger.info(`System resumed by Telegram user ${msg.from.id}`);
+      } catch (err) {
+        logger.error('Resume command error:', err);
+        await botInstance.sendMessage(chatId, '❌ Failed to resume. Please try again.').catch(() => {});
       }
     });
 

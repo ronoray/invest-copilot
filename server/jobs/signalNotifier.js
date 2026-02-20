@@ -5,6 +5,7 @@ import { generateTradeSignals, expireOldSignals } from '../services/signalGenera
 import { isTokenValid, getAuthorizationUrl, getHoldings, getOrderStatus } from '../services/upstoxService.js';
 import { syncUpstoxFunds, syncUpstoxHoldings, getEffectiveCash } from '../services/capitalGuard.js';
 import { isTradingDay } from '../utils/marketHolidays.js';
+import { getSystemPauseState } from '../services/pauseState.js';
 import logger from '../services/logger.js';
 
 /**
@@ -140,6 +141,12 @@ async function syncAllUpstoxHoldingsAndExpireStaleSignals() {
  */
 async function generateSignalsForAllPortfolios() {
   if (!isTradingDay(new Date())) return;
+
+  const pauseState = await getSystemPauseState();
+  if (pauseState) {
+    logger.info(`[Signal Generator] Paused (${pauseState.reason}) — skipping generation`);
+    return;
+  }
 
   try {
     // Sync Upstox funds and holdings before generating signals (freshest data)
@@ -335,6 +342,12 @@ async function generateSignalsForAllPortfolios() {
  */
 async function notifyPendingSignals() {
   if (!isTradingDay(new Date())) return;
+
+  const pauseState = await getSystemPauseState();
+  if (pauseState) {
+    logger.info(`[Signal Notifier] Paused (${pauseState.reason}) — skipping notifications`);
+    return;
+  }
 
   const bot = getBot();
   if (!bot) return;
@@ -608,6 +621,12 @@ async function pollPendingOrders() {
 async function generateSignalsConditional() {
   if (!isTradingDay(new Date())) return;
 
+  const pauseState = await getSystemPauseState();
+  if (pauseState) {
+    logger.info(`[Signal Generator] Paused (${pauseState.reason}) — skipping conditional midday generation`);
+    return;
+  }
+
   try {
     const portfolios = await prisma.portfolio.findMany({
       where: { isActive: true },
@@ -755,12 +774,23 @@ export function initSignalNotifier() {
     timezone: 'Asia/Kolkata'
   });
 
+  // Mid-day holdings sync every 30 min during market hours (DDPI SELL awareness)
+  // Runs even when paused so data is fresh on resume
+  cron.schedule('*/30 9-15 * * 1-5', async () => {
+    if (!isTradingDay(new Date())) return;
+    logger.info('Running mid-day Upstox holdings sync...');
+    await syncAllUpstoxHoldingsAndExpireStaleSignals();
+  }, {
+    timezone: 'Asia/Kolkata'
+  });
+
   logger.info('Signal notifier initialized:');
   logger.info('  Upstox fund sync: 9:17 AM IST');
   logger.info('  Morning targets: handled by War Room (9:00 AM)');
   logger.info('  Signal generation: 9:30 AM + 1:00 PM (conditional) IST');
   logger.info('  Signal notifications: every 5 min, 9-3:30 PM IST');
   logger.info('  Order status polling: every 5 min, 9 AM-4 PM IST');
+  logger.info('  Mid-day holdings sync (DDPI): every 30 min, 9-3:30 PM IST');
 }
 
 export default { initSignalNotifier, notifyPendingSignals, generateSignalsForAllPortfolios, pollPendingOrders, generateSignalsConditional, syncAllUpstoxFunds };

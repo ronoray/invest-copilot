@@ -1169,12 +1169,33 @@ Use /mute to disable all alerts`;
       }
     });
 
-    // /upstox — Live Upstox account snapshot
-    botInstance.onText(/^\/upstox$/, async (msg) => {
+    // /upstox [capital AMOUNT] — Live Upstox account snapshot
+    // /upstox capital 8000 — update starting capital then show snapshot
+    botInstance.onText(/^\/upstox(?:\s+(.+))?$/, async (msg) => {
       const chatId = msg.chat.id;
+      const args = msg.text.trim().split(/\s+/);
+
       try {
         const telegramUser = await getOrCreateUser(msg.from.id, msg.from.username, msg.from.first_name);
         const userId = telegramUser.user.id;
+
+        // Sub-command: /upstox capital 8000
+        if (args[1] === 'capital' && args[2]) {
+          const newCapital = parseFloat(args[2]);
+          if (isNaN(newCapital) || newCapital <= 0) {
+            await botInstance.sendMessage(chatId, '❌ Invalid amount. Usage: `/upstox capital 8000`', { parse_mode: 'Markdown' });
+            return;
+          }
+          const updated = await prisma.portfolio.updateMany({
+            where: { userId, broker: 'UPSTOX', isActive: true },
+            data: { startingCapital: newCapital }
+          });
+          if (updated.count === 0) {
+            await botInstance.sendMessage(chatId, '❌ No Upstox portfolio found to update.');
+            return;
+          }
+          await botInstance.sendMessage(chatId, `✅ Capital updated to ₹${newCapital.toLocaleString('en-IN')}. Fetching snapshot...`);
+        }
 
         // Check Upstox connected + token valid
         const integration = await prisma.upstoxIntegration.findUnique({ where: { userId } });
@@ -1188,9 +1209,11 @@ Use /mute to disable all alerts`;
           return;
         }
 
-        await botInstance.sendMessage(chatId, '📡 Fetching live Upstox data...');
+        if (args.length === 1) {
+          await botInstance.sendMessage(chatId, '📡 Fetching live Upstox data...');
+        }
 
-        // Fetch all three APIs in parallel
+        // Fetch all three Upstox APIs + portfolio in parallel
         const [fundsResult, holdingsResult, positionsResult, portfolio] = await Promise.all([
           getFunds(userId),
           getHoldings(userId),
@@ -1199,14 +1222,13 @@ Use /mute to disable all alerts`;
         ]);
 
         const startingCapital = parseFloat(portfolio?.startingCapital || 0);
-        const availableCash = fundsResult.availableMargin;
-        const usedMargin = fundsResult.usedMargin;
+        const availableCash = fundsResult.availableMargin;   // what you can trade with right now
+        const usedMargin    = fundsResult.usedMargin;        // locked in open positions
 
-        // Build effective holdings map: demat (T+1) adjusted by today's positions
-        // Key: tradingsymbol → { symbol, qty, avgPrice, lastPrice, pnl, source }
+        // ── Build effective holdings ──
+        // Long-term demat holdings (T+1 settled) adjusted for today's intraday activity
         const holdingsMap = new Map();
 
-        // Start with long-term demat holdings
         for (const h of (holdingsResult.holdings || [])) {
           const sym = (h.tradingsymbol || h.trading_symbol || '').replace(/-EQ$/, '');
           if (!sym) continue;
@@ -1214,98 +1236,151 @@ Use /mute to disable all alerts`;
             symbol: sym,
             qty: h.quantity || 0,
             avgPrice: parseFloat(h.average_price || 0),
-            lastPrice: parseFloat(h.last_price || 0),
-            pnl: parseFloat(h.pnl || 0),
+            lastPrice: parseFloat(h.last_price || h.close_price || 0),
+            settledPnl: parseFloat(h.pnl || 0),   // demat P&L vs avg buy price
+            t1Qty: h.t1_quantity || 0,
             source: 'demat'
           });
         }
 
-        // Overlay today's positions — adjust for same-day buys/sells
+        // Track today's activity for display in "Today's Trades" section
+        const todayTrades = [];
+
         for (const pos of (positionsResult.positions || [])) {
           const sym = (pos.tradingsymbol || pos.trading_symbol || '').replace(/-EQ$/, '');
-          if (!sym || !pos.quantity) continue;
+          if (!sym) continue;
 
-          const netQty = pos.quantity; // positive = net long, negative = net sold
+          const netQty       = pos.quantity || 0;
+          const daySellQty   = pos.day_sell_quantity || 0;
+          const dayBuyQty    = pos.day_buy_quantity || 0;
+          const daySellPrice = parseFloat(pos.day_sell_price || 0);
+          const dayBuyPrice  = parseFloat(pos.day_buy_price || 0);
+          const lastPrice    = parseFloat(pos.last_price || 0);
+          const unrealised   = parseFloat(pos.unrealised || 0);
+
+          // Record today's activity for the trades section
+          if (daySellQty > 0) {
+            todayTrades.push({ sym, action: 'SOLD', qty: daySellQty, price: daySellPrice, proceeds: daySellQty * daySellPrice });
+          }
+          if (dayBuyQty > 0 && !holdingsMap.has(sym)) {
+            // Same-day buy not yet in demat
+            todayTrades.push({ sym, action: 'BOUGHT', qty: dayBuyQty, price: dayBuyPrice, proceeds: 0 });
+          }
+
           const existing = holdingsMap.get(sym);
-
           if (existing) {
-            // Demat holding exists — adjust quantity for today's activity
-            const effectiveQty = existing.qty + netQty; // netQty is negative if sold today
-            if (effectiveQty <= 0) {
-              holdingsMap.delete(sym); // Fully sold today
+            // Adjust demat qty for today's sells (not yet reflected in long-term holdings)
+            const effective = existing.qty + netQty; // netQty negative if sold today
+            if (effective <= 0) {
+              holdingsMap.delete(sym);
             } else {
-              existing.qty = effectiveQty;
-              existing.lastPrice = parseFloat(pos.last_price || existing.lastPrice);
-              existing.source = 'demat+position';
+              existing.qty = effective;
+              existing.lastPrice = lastPrice || existing.lastPrice;
+              existing.source = 'demat+today';
             }
           } else if (netQty > 0) {
-            // New same-day buy, not in demat yet
+            // Same-day buy — not yet in demat
             holdingsMap.set(sym, {
               symbol: sym,
               qty: netQty,
-              avgPrice: parseFloat(pos.buy_price || pos.average_price || 0),
-              lastPrice: parseFloat(pos.last_price || 0),
-              pnl: parseFloat(pos.unrealised || 0),
+              avgPrice: dayBuyPrice,
+              lastPrice,
+              settledPnl: unrealised,
+              t1Qty: netQty,
               source: 'today'
             });
           }
         }
 
-        // Calculate holding values
+        // ── Calculate totals ──
         let totalHoldingValue = 0;
-        let totalHoldingCost = 0;
+        let totalHoldingCost  = 0;
+        let totalUnrealised   = 0;
         const holdingLines = [];
 
         for (const h of holdingsMap.values()) {
-          const value = h.qty * h.lastPrice;
-          const cost = h.qty * h.avgPrice;
-          const pnl = value - cost;
-          const pnlPct = cost > 0 ? (pnl / cost) * 100 : 0;
-          const pnlSign = pnl >= 0 ? '+' : '';
-          const tag = h.source === 'today' ? ' _(settling tomorrow)_' : '';
+          const value  = h.qty * h.lastPrice;
+          const cost   = h.qty * h.avgPrice;
+          const unrealPnl    = value - cost;
+          const unrealPnlPct = cost > 0 ? (unrealPnl / cost) * 100 : 0;
+          const pnlSign      = unrealPnl >= 0 ? '+' : '';
+          const pnlEmoji     = unrealPnl >= 0 ? '▲' : '▼';
+          const settleNote   = h.source === 'today' ? '\n   _⏳ Settling tomorrow (T+1)_' : '';
 
           totalHoldingValue += value;
-          totalHoldingCost += cost;
+          totalHoldingCost  += cost;
+          totalUnrealised   += unrealPnl;
 
           holdingLines.push(
-            `*${h.symbol}* — ${h.qty} shares @ ₹${h.avgPrice.toFixed(2)}\n` +
-            `  Now: ₹${h.lastPrice.toFixed(2)} | Value: ₹${value.toFixed(0)} | P&L: ${pnlSign}₹${pnl.toFixed(0)} (${pnlSign}${pnlPct.toFixed(2)}%)${tag}`
+            `*${h.symbol}*  ${h.qty} shares\n` +
+            `   Avg buy: ₹${h.avgPrice.toFixed(2)}  →  Now: ₹${h.lastPrice.toFixed(2)}\n` +
+            `   Invested: ₹${cost.toFixed(0)}  |  Value: ₹${value.toFixed(0)}\n` +
+            `   ${pnlEmoji} Unrealised P&L: ${pnlSign}₹${Math.abs(unrealPnl).toFixed(0)} (${pnlSign}${unrealPnlPct.toFixed(2)}%)${settleNote}`
           );
         }
 
-        // Overall P&L vs starting capital
+        // Overall P&L = total current value vs what you put in
         const totalPortfolioValue = availableCash + totalHoldingValue;
-        const overallPnL = totalPortfolioValue - startingCapital;
-        const overallPnLPct = startingCapital > 0 ? (overallPnL / startingCapital) * 100 : 0;
-        const pnlEmoji = overallPnL >= 0 ? '📈' : '📉';
-        const pnlSign = overallPnL >= 0 ? '+' : '';
+        const overallPnL    = startingCapital > 0 ? totalPortfolioValue - startingCapital : null;
+        const overallPnLPct = startingCapital > 0 ? (overallPnL / startingCapital) * 100 : null;
+        const overallEmoji  = overallPnL === null ? '❓' : overallPnL >= 0 ? '📈' : '📉';
 
-        // Build output message
-        let output = `💼 *UPSTOX — Live Snapshot*\n`;
-        output += `━━━━━━━━━━━━━━━━━━━\n`;
-        output += `🏦 *Capital Invested:* ₹${startingCapital.toLocaleString('en-IN')}\n`;
-        output += `💰 *Free Cash:* ₹${availableCash.toFixed(2)}\n`;
-        output += `📊 *In Holdings:* ₹${totalHoldingValue.toFixed(0)}`;
-        if (usedMargin > 0 && Math.abs(usedMargin - totalHoldingValue) > 1) {
-          output += ` _(margin: ₹${usedMargin.toFixed(0)})_`;
-        }
-        output += `\n`;
-        output += `💼 *Total Value:* ₹${totalPortfolioValue.toFixed(0)}\n`;
-        output += `${pnlEmoji} *Overall P&L:* ${pnlSign}₹${Math.abs(overallPnL).toFixed(0)} (${pnlSign}${overallPnLPct.toFixed(2)}%)\n`;
-        output += `━━━━━━━━━━━━━━━━━━━\n`;
+        // ── Build output ──
+        const ts = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
+        let out = `💼 *UPSTOX — Live Snapshot*  _${ts} IST_\n`;
+        out += `━━━━━━━━━━━━━━━━━━━\n`;
 
-        if (holdingLines.length > 0) {
-          output += `*Holdings (${holdingLines.length}):*\n\n`;
-          output += holdingLines.join('\n\n');
-          output += '\n';
+        // Capital & overall P&L
+        if (startingCapital > 0) {
+          out += `🏦 *Your Capital:* ₹${startingCapital.toLocaleString('en-IN')}\n`;
         } else {
-          output += `_No holdings — fully in cash_\n`;
+          out += `🏦 *Your Capital:* _not set — use_ \`/upstox capital 7000\`\n`;
+        }
+        out += `📊 *Portfolio Value:* ₹${totalPortfolioValue.toFixed(0)}\n`;
+        if (overallPnL !== null) {
+          const sign = overallPnL >= 0 ? '+' : '';
+          out += `${overallEmoji} *Overall P&L:* ${sign}₹${Math.abs(overallPnL).toFixed(0)} (${sign}${overallPnLPct.toFixed(2)}%)\n`;
+        }
+        out += `━━━━━━━━━━━━━━━━━━━\n`;
+
+        // Cash & invested split
+        out += `💵 *Free Cash:* ₹${availableCash.toFixed(2)}  _← trade with this_\n`;
+        if (totalHoldingValue > 0) {
+          out += `📦 *In Holdings:* ₹${totalHoldingValue.toFixed(0)}`;
+          if (totalUnrealised !== 0) {
+            const uSign = totalUnrealised >= 0 ? '+' : '';
+            out += `  (${uSign}₹${Math.abs(totalUnrealised).toFixed(0)} unrealised)`;
+          }
+          out += '\n';
+        }
+        out += `━━━━━━━━━━━━━━━━━━━\n`;
+
+        // Holdings detail
+        if (holdingLines.length > 0) {
+          out += `*📌 Holdings (${holdingLines.length}):*\n\n`;
+          out += holdingLines.join('\n\n');
+          out += '\n';
+        } else {
+          out += `_No open positions — fully in cash_\n`;
         }
 
-        output += `━━━━━━━━━━━━━━━━━━━\n`;
-        output += `_Live from Upstox API · ${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })} IST_`;
+        // Today's trades
+        if (todayTrades.length > 0) {
+          out += `━━━━━━━━━━━━━━━━━━━\n`;
+          out += `*🔄 Today's Trades:*\n`;
+          for (const t of todayTrades) {
+            if (t.action === 'SOLD') {
+              out += `  ${t.sym}: Sold ${t.qty} @ ₹${t.price.toFixed(2)} = ₹${t.proceeds.toFixed(0)}\n`;
+            } else {
+              out += `  ${t.sym}: Bought ${t.qty} @ ₹${t.price.toFixed(2)}\n`;
+            }
+          }
+        }
 
-        await botInstance.sendMessage(chatId, output, { parse_mode: 'Markdown' });
+        out += `━━━━━━━━━━━━━━━━━━━\n`;
+        out += `_To update capital: /upstox capital 8000_`;
+
+        await botInstance.sendMessage(chatId, out, { parse_mode: 'Markdown' });
       } catch (err) {
         logger.error('/upstox command error:', err);
         await botInstance.sendMessage(chatId, '❌ Failed to fetch Upstox data. Try again or use /auth if token expired.').catch(() => {});

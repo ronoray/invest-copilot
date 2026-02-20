@@ -1280,32 +1280,32 @@ Use /mute to disable all alerts`;
         const pnlEmoji = overallPnL >= 0 ? '📈' : '📉';
         const pnlSign = overallPnL >= 0 ? '+' : '';
 
-        // Build message
-        let msg = `💼 *UPSTOX — Live Snapshot*\n`;
-        msg += `━━━━━━━━━━━━━━━━━━━\n`;
-        msg += `🏦 *Capital Invested:* ₹${startingCapital.toLocaleString('en-IN')}\n`;
-        msg += `💰 *Free Cash:* ₹${availableCash.toFixed(2)}\n`;
-        msg += `📊 *In Holdings:* ₹${totalHoldingValue.toFixed(0)}`;
+        // Build output message
+        let output = `💼 *UPSTOX — Live Snapshot*\n`;
+        output += `━━━━━━━━━━━━━━━━━━━\n`;
+        output += `🏦 *Capital Invested:* ₹${startingCapital.toLocaleString('en-IN')}\n`;
+        output += `💰 *Free Cash:* ₹${availableCash.toFixed(2)}\n`;
+        output += `📊 *In Holdings:* ₹${totalHoldingValue.toFixed(0)}`;
         if (usedMargin > 0 && Math.abs(usedMargin - totalHoldingValue) > 1) {
-          msg += ` _(margin: ₹${usedMargin.toFixed(0)})_`;
+          output += ` _(margin: ₹${usedMargin.toFixed(0)})_`;
         }
-        msg += `\n`;
-        msg += `💼 *Total Value:* ₹${totalPortfolioValue.toFixed(0)}\n`;
-        msg += `${pnlEmoji} *Overall P&L:* ${pnlSign}₹${Math.abs(overallPnL).toFixed(0)} (${pnlSign}${overallPnLPct.toFixed(2)}%)\n`;
-        msg += `━━━━━━━━━━━━━━━━━━━\n`;
+        output += `\n`;
+        output += `💼 *Total Value:* ₹${totalPortfolioValue.toFixed(0)}\n`;
+        output += `${pnlEmoji} *Overall P&L:* ${pnlSign}₹${Math.abs(overallPnL).toFixed(0)} (${pnlSign}${overallPnLPct.toFixed(2)}%)\n`;
+        output += `━━━━━━━━━━━━━━━━━━━\n`;
 
         if (holdingLines.length > 0) {
-          msg += `*Holdings (${holdingLines.length}):*\n\n`;
-          msg += holdingLines.join('\n\n');
-          msg += '\n';
+          output += `*Holdings (${holdingLines.length}):*\n\n`;
+          output += holdingLines.join('\n\n');
+          output += '\n';
         } else {
-          msg += `_No holdings — fully in cash_\n`;
+          output += `_No holdings — fully in cash_\n`;
         }
 
-        msg += `━━━━━━━━━━━━━━━━━━━\n`;
-        msg += `_Live from Upstox API · ${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })} IST_`;
+        output += `━━━━━━━━━━━━━━━━━━━\n`;
+        output += `_Live from Upstox API · ${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })} IST_`;
 
-        await botInstance.sendMessage(chatId, msg, { parse_mode: 'Markdown' });
+        await botInstance.sendMessage(chatId, output, { parse_mode: 'Markdown' });
       } catch (err) {
         logger.error('/upstox command error:', err);
         await botInstance.sendMessage(chatId, '❌ Failed to fetch Upstox data. Try again or use /auth if token expired.').catch(() => {});

@@ -5,7 +5,7 @@ import logger from './logger.js';
 import { getCurrentPrice } from './marketData.js';
 import { scanMarketForOpportunities, buildProfileBrief } from './advancedScreener.js';
 import { generateMultiAssetRecommendations } from './multiAssetRecommendations.js';
-import { placeOrder, getAuthorizationUrl, isTokenValid } from './upstoxService.js';
+import { placeOrder, getAuthorizationUrl, isTokenValid, getFunds, getHoldings, getPositions } from './upstoxService.js';
 import { preOrderCapitalCheck, syncUpstoxFunds, syncUpstoxHoldings, pollOrderUntilSettled } from './capitalGuard.js';
 import { getSystemPauseState, setPauseState, clearPauseState } from './pauseState.js';
 
@@ -710,6 +710,7 @@ Let's build wealth! 💰`;
 /multi [N] - Multi-asset allocation for portfolio #N
 
 *Trading:*
+/upstox - Live account snapshot (cash, holdings, P&L)
 /auth - Login to Upstox (daily refresh)
 
 *System:*
@@ -1165,6 +1166,149 @@ Use /mute to disable all alerts`;
       } catch (err) {
         logger.error('Resume command error:', err);
         await botInstance.sendMessage(chatId, '❌ Failed to resume. Please try again.').catch(() => {});
+      }
+    });
+
+    // /upstox — Live Upstox account snapshot
+    botInstance.onText(/^\/upstox$/, async (msg) => {
+      const chatId = msg.chat.id;
+      try {
+        const telegramUser = await getOrCreateUser(msg.from.id, msg.from.username, msg.from.first_name);
+        const userId = telegramUser.user.id;
+
+        // Check Upstox connected + token valid
+        const integration = await prisma.upstoxIntegration.findUnique({ where: { userId } });
+        if (!integration?.isConnected || !integration?.accessToken) {
+          await botInstance.sendMessage(chatId, '❌ Upstox not connected. Use /auth to login.');
+          return;
+        }
+        const valid = await isTokenValid(userId);
+        if (!valid) {
+          await botInstance.sendMessage(chatId, '🔐 Upstox token expired. Use /auth to refresh.');
+          return;
+        }
+
+        await botInstance.sendMessage(chatId, '📡 Fetching live Upstox data...');
+
+        // Fetch all three APIs in parallel
+        const [fundsResult, holdingsResult, positionsResult, portfolio] = await Promise.all([
+          getFunds(userId),
+          getHoldings(userId),
+          getPositions(userId),
+          prisma.portfolio.findFirst({ where: { userId, broker: 'UPSTOX', isActive: true } })
+        ]);
+
+        const startingCapital = parseFloat(portfolio?.startingCapital || 0);
+        const availableCash = fundsResult.availableMargin;
+        const usedMargin = fundsResult.usedMargin;
+
+        // Build effective holdings map: demat (T+1) adjusted by today's positions
+        // Key: tradingsymbol → { symbol, qty, avgPrice, lastPrice, pnl, source }
+        const holdingsMap = new Map();
+
+        // Start with long-term demat holdings
+        for (const h of (holdingsResult.holdings || [])) {
+          const sym = (h.tradingsymbol || h.trading_symbol || '').replace(/-EQ$/, '');
+          if (!sym) continue;
+          holdingsMap.set(sym, {
+            symbol: sym,
+            qty: h.quantity || 0,
+            avgPrice: parseFloat(h.average_price || 0),
+            lastPrice: parseFloat(h.last_price || 0),
+            pnl: parseFloat(h.pnl || 0),
+            source: 'demat'
+          });
+        }
+
+        // Overlay today's positions — adjust for same-day buys/sells
+        for (const pos of (positionsResult.positions || [])) {
+          const sym = (pos.tradingsymbol || pos.trading_symbol || '').replace(/-EQ$/, '');
+          if (!sym || !pos.quantity) continue;
+
+          const netQty = pos.quantity; // positive = net long, negative = net sold
+          const existing = holdingsMap.get(sym);
+
+          if (existing) {
+            // Demat holding exists — adjust quantity for today's activity
+            const effectiveQty = existing.qty + netQty; // netQty is negative if sold today
+            if (effectiveQty <= 0) {
+              holdingsMap.delete(sym); // Fully sold today
+            } else {
+              existing.qty = effectiveQty;
+              existing.lastPrice = parseFloat(pos.last_price || existing.lastPrice);
+              existing.source = 'demat+position';
+            }
+          } else if (netQty > 0) {
+            // New same-day buy, not in demat yet
+            holdingsMap.set(sym, {
+              symbol: sym,
+              qty: netQty,
+              avgPrice: parseFloat(pos.buy_price || pos.average_price || 0),
+              lastPrice: parseFloat(pos.last_price || 0),
+              pnl: parseFloat(pos.unrealised || 0),
+              source: 'today'
+            });
+          }
+        }
+
+        // Calculate holding values
+        let totalHoldingValue = 0;
+        let totalHoldingCost = 0;
+        const holdingLines = [];
+
+        for (const h of holdingsMap.values()) {
+          const value = h.qty * h.lastPrice;
+          const cost = h.qty * h.avgPrice;
+          const pnl = value - cost;
+          const pnlPct = cost > 0 ? (pnl / cost) * 100 : 0;
+          const pnlSign = pnl >= 0 ? '+' : '';
+          const tag = h.source === 'today' ? ' _(settling tomorrow)_' : '';
+
+          totalHoldingValue += value;
+          totalHoldingCost += cost;
+
+          holdingLines.push(
+            `*${h.symbol}* — ${h.qty} shares @ ₹${h.avgPrice.toFixed(2)}\n` +
+            `  Now: ₹${h.lastPrice.toFixed(2)} | Value: ₹${value.toFixed(0)} | P&L: ${pnlSign}₹${pnl.toFixed(0)} (${pnlSign}${pnlPct.toFixed(2)}%)${tag}`
+          );
+        }
+
+        // Overall P&L vs starting capital
+        const totalPortfolioValue = availableCash + totalHoldingValue;
+        const overallPnL = totalPortfolioValue - startingCapital;
+        const overallPnLPct = startingCapital > 0 ? (overallPnL / startingCapital) * 100 : 0;
+        const pnlEmoji = overallPnL >= 0 ? '📈' : '📉';
+        const pnlSign = overallPnL >= 0 ? '+' : '';
+
+        // Build message
+        let msg = `💼 *UPSTOX — Live Snapshot*\n`;
+        msg += `━━━━━━━━━━━━━━━━━━━\n`;
+        msg += `🏦 *Capital Invested:* ₹${startingCapital.toLocaleString('en-IN')}\n`;
+        msg += `💰 *Free Cash:* ₹${availableCash.toFixed(2)}\n`;
+        msg += `📊 *In Holdings:* ₹${totalHoldingValue.toFixed(0)}`;
+        if (usedMargin > 0 && Math.abs(usedMargin - totalHoldingValue) > 1) {
+          msg += ` _(margin: ₹${usedMargin.toFixed(0)})_`;
+        }
+        msg += `\n`;
+        msg += `💼 *Total Value:* ₹${totalPortfolioValue.toFixed(0)}\n`;
+        msg += `${pnlEmoji} *Overall P&L:* ${pnlSign}₹${Math.abs(overallPnL).toFixed(0)} (${pnlSign}${overallPnLPct.toFixed(2)}%)\n`;
+        msg += `━━━━━━━━━━━━━━━━━━━\n`;
+
+        if (holdingLines.length > 0) {
+          msg += `*Holdings (${holdingLines.length}):*\n\n`;
+          msg += holdingLines.join('\n\n');
+          msg += '\n';
+        } else {
+          msg += `_No holdings — fully in cash_\n`;
+        }
+
+        msg += `━━━━━━━━━━━━━━━━━━━\n`;
+        msg += `_Live from Upstox API · ${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })} IST_`;
+
+        await botInstance.sendMessage(chatId, msg, { parse_mode: 'Markdown' });
+      } catch (err) {
+        logger.error('/upstox command error:', err);
+        await botInstance.sendMessage(chatId, '❌ Failed to fetch Upstox data. Try again or use /auth if token expired.').catch(() => {});
       }
     });
 

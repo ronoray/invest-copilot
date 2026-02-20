@@ -1169,7 +1169,7 @@ Use /mute to disable all alerts`;
       }
     });
 
-    // /upstox [capital AMOUNT] — Live Upstox account snapshot
+    // /upstox [capital AMOUNT] — Complete live Upstox account snapshot
     // /upstox capital 8000 — update starting capital then show snapshot
     botInstance.onText(/^\/upstox(?:\s+(.+))?$/, async (msg) => {
       const chatId = msg.chat.id;
@@ -1222,163 +1222,186 @@ Use /mute to disable all alerts`;
         ]);
 
         const startingCapital = parseFloat(portfolio?.startingCapital || 0);
-        const availableCash = fundsResult.availableMargin;   // what you can trade with right now
-        const usedMargin    = fundsResult.usedMargin;        // locked in open positions
+        // availableMargin = cash you can place a new order with RIGHT NOW
+        // usedMargin      = cash locked in open positions (delivery buys held today)
+        const availableCash = fundsResult.availableMargin;
+        const usedMargin    = fundsResult.usedMargin;
 
-        // ── Build effective holdings ──
-        // Long-term demat holdings (T+1 settled) adjusted for today's intraday activity
-        const holdingsMap = new Map();
-
+        // ── Step 1: Map demat (long-term) holdings ──
+        // These are positions you were holding BEFORE today (overnight).
+        // They do NOT reflect today's buys/sells yet — that's T+1.
+        const dematMap = new Map();
         for (const h of (holdingsResult.holdings || [])) {
           const sym = (h.tradingsymbol || h.trading_symbol || '').replace(/-EQ$/, '');
           if (!sym) continue;
-          holdingsMap.set(sym, {
+          dematMap.set(sym, {
             symbol: sym,
             qty: h.quantity || 0,
             avgPrice: parseFloat(h.average_price || 0),
             lastPrice: parseFloat(h.last_price || h.close_price || 0),
-            settledPnl: parseFloat(h.pnl || 0),   // demat P&L vs avg buy price
-            t1Qty: h.t1_quantity || 0,
-            source: 'demat'
+            dematPnl: parseFloat(h.pnl || 0)
           });
         }
 
-        // Track today's activity for display in "Today's Trades" section
-        const todayTrades = [];
+        // ── Step 2: Process today's positions ──
+        // positions show all intraday activity:
+        //   day_buy_quantity  / day_buy_price  = what you bought today
+        //   day_sell_quantity / day_sell_price = what you sold today
+        //   quantity = net (positive = still holding, negative = sold from demat)
+        //   realised  = locked-in P&L from closed intraday portion
+        //   unrealised = open P&L on net remaining quantity
+        const effectiveHoldings = new Map(); // what you actually hold right now
+        const activityLines = [];            // for "Today's Activity" section
+        let totalRealisedToday = 0;
 
         for (const pos of (positionsResult.positions || [])) {
-          const sym = (pos.tradingsymbol || pos.trading_symbol || '').replace(/-EQ$/, '');
+          const sym         = (pos.tradingsymbol || pos.trading_symbol || '').replace(/-EQ$/, '');
           if (!sym) continue;
 
-          const netQty       = pos.quantity || 0;
-          const daySellQty   = pos.day_sell_quantity || 0;
-          const dayBuyQty    = pos.day_buy_quantity || 0;
-          const daySellPrice = parseFloat(pos.day_sell_price || 0);
-          const dayBuyPrice  = parseFloat(pos.day_buy_price || 0);
-          const lastPrice    = parseFloat(pos.last_price || 0);
-          const unrealised   = parseFloat(pos.unrealised || 0);
+          const netQty      = pos.quantity || 0;
+          const dayBuyQty   = pos.day_buy_quantity || 0;
+          const daySellQty  = pos.day_sell_quantity || 0;
+          const dayBuyPrice = parseFloat(pos.day_buy_price || 0);
+          const daySellPrice= parseFloat(pos.day_sell_price || 0);
+          const lastPrice   = parseFloat(pos.last_price || 0);
+          const realised    = parseFloat(pos.realised || 0);
+          const unrealised  = parseFloat(pos.unrealised || 0);
+          const demat       = dematMap.get(sym);
 
-          // Record today's activity for the trades section
+          totalRealisedToday += realised;
+
+          // Build human-readable activity line for this symbol
+          let actLine = `*${sym}*: `;
+          if (dayBuyQty > 0)  actLine += `Bought ${dayBuyQty} @ ₹${dayBuyPrice.toFixed(2)}`;
+          if (dayBuyQty > 0 && daySellQty > 0) actLine += `  ·  `;
           if (daySellQty > 0) {
-            todayTrades.push({ sym, action: 'SOLD', qty: daySellQty, price: daySellPrice, proceeds: daySellQty * daySellPrice });
+            const source = demat ? 'from demat' : 'intraday';
+            actLine += `Sold ${daySellQty} @ ₹${daySellPrice.toFixed(2)} _(${source})_`;
           }
-          if (dayBuyQty > 0 && !holdingsMap.has(sym)) {
-            // Same-day buy not yet in demat
-            todayTrades.push({ sym, action: 'BOUGHT', qty: dayBuyQty, price: dayBuyPrice, proceeds: 0 });
+          if (realised !== 0) {
+            const rSign = realised >= 0 ? '+' : '';
+            actLine += `\n   Realised P&L: ${rSign}₹${realised.toFixed(2)}`;
           }
+          activityLines.push(actLine);
 
-          const existing = holdingsMap.get(sym);
-          if (existing) {
-            // Adjust demat qty for today's sells (not yet reflected in long-term holdings)
-            const effective = existing.qty + netQty; // netQty negative if sold today
-            if (effective <= 0) {
-              holdingsMap.delete(sym);
-            } else {
-              existing.qty = effective;
-              existing.lastPrice = lastPrice || existing.lastPrice;
-              existing.source = 'demat+today';
+          // Determine effective holding
+          if (netQty > 0) {
+            // Still holding something after today's trades
+            let avgCost = dayBuyPrice; // default: today's buy price
+            if (demat && dayBuyQty === 0) {
+              // Holding entirely from demat (no buy today, partial sell from demat)
+              avgCost = demat.avgPrice;
+            } else if (demat && dayBuyQty > 0) {
+              // Mixed: some demat + some bought today
+              const dematHeld = netQty - dayBuyQty + daySellQty;
+              const dematCost = Math.max(0, dematHeld) * demat.avgPrice;
+              const todayCost = dayBuyQty * dayBuyPrice;
+              avgCost = (dematCost + todayCost) / netQty;
             }
-          } else if (netQty > 0) {
-            // Same-day buy — not yet in demat
-            holdingsMap.set(sym, {
-              symbol: sym,
-              qty: netQty,
-              avgPrice: dayBuyPrice,
-              lastPrice,
-              settledPnl: unrealised,
-              t1Qty: netQty,
-              source: 'today'
+            effectiveHoldings.set(sym, {
+              symbol: sym, qty: netQty, avgPrice: avgCost,
+              lastPrice, unrealised,
+              source: demat ? (dayBuyQty > 0 ? 'mixed' : 'demat-partial') : 'today'
+            });
+          }
+          // If netQty <= 0 — position fully closed today, nothing to hold
+        }
+
+        // Also include overnight demat holdings that had NO activity today
+        for (const [sym, h] of dematMap) {
+          if (!effectiveHoldings.has(sym) && !positionsResult.positions.some(
+            p => (p.tradingsymbol || p.trading_symbol || '').replace(/-EQ$/, '') === sym
+          )) {
+            effectiveHoldings.set(sym, {
+              symbol: sym, qty: h.qty, avgPrice: h.avgPrice,
+              lastPrice: h.lastPrice, unrealised: h.dematPnl,
+              source: 'demat'
             });
           }
         }
 
-        // ── Calculate totals ──
-        let totalHoldingValue = 0;
-        let totalHoldingCost  = 0;
-        let totalUnrealised   = 0;
-        const holdingLines = [];
+        // ── Step 3: Calculate totals ──
+        let totalHoldingValue  = 0;
+        let totalHoldingCost   = 0;
+        let totalUnrealised    = 0;
+        const holdingLines     = [];
 
-        for (const h of holdingsMap.values()) {
-          const value  = h.qty * h.lastPrice;
-          const cost   = h.qty * h.avgPrice;
-          const unrealPnl    = value - cost;
-          const unrealPnlPct = cost > 0 ? (unrealPnl / cost) * 100 : 0;
-          const pnlSign      = unrealPnl >= 0 ? '+' : '';
-          const pnlEmoji     = unrealPnl >= 0 ? '▲' : '▼';
-          const settleNote   = h.source === 'today' ? '\n   _⏳ Settling tomorrow (T+1)_' : '';
+        for (const h of effectiveHoldings.values()) {
+          const value      = h.qty * h.lastPrice;
+          const cost       = h.qty * h.avgPrice;
+          const unreal     = value - cost;
+          const unrPct     = cost > 0 ? (unreal / cost) * 100 : 0;
+          const uSign      = unreal >= 0 ? '+' : '';
+          const uEmoji     = unreal >= 0 ? '▲' : '▼';
 
           totalHoldingValue += value;
           totalHoldingCost  += cost;
-          totalUnrealised   += unrealPnl;
+          totalUnrealised   += unreal;
+
+          let note = '';
+          if (h.source === 'today')         note = '\n   _⏳ Bought today — moves to demat tomorrow_';
+          if (h.source === 'demat-partial') note = '\n   _⏳ Partially sold today — settles tomorrow_';
+          if (h.source === 'mixed')         note = '\n   _⏳ Mix of demat + today\'s buy — settles tomorrow_';
 
           holdingLines.push(
             `*${h.symbol}*  ${h.qty} shares\n` +
-            `   Avg buy: ₹${h.avgPrice.toFixed(2)}  →  Now: ₹${h.lastPrice.toFixed(2)}\n` +
+            `   Avg cost: ₹${h.avgPrice.toFixed(2)}  →  Now: ₹${h.lastPrice.toFixed(2)}\n` +
             `   Invested: ₹${cost.toFixed(0)}  |  Value: ₹${value.toFixed(0)}\n` +
-            `   ${pnlEmoji} Unrealised P&L: ${pnlSign}₹${Math.abs(unrealPnl).toFixed(0)} (${pnlSign}${unrealPnlPct.toFixed(2)}%)${settleNote}`
+            `   ${uEmoji} Unrealised: ${uSign}₹${Math.abs(unreal).toFixed(0)} (${uSign}${unrPct.toFixed(2)}%)${note}`
           );
         }
 
-        // Overall P&L = total current value vs what you put in
+        // ── Step 4: Overall P&L ──
         const totalPortfolioValue = availableCash + totalHoldingValue;
         const overallPnL    = startingCapital > 0 ? totalPortfolioValue - startingCapital : null;
         const overallPnLPct = startingCapital > 0 ? (overallPnL / startingCapital) * 100 : null;
-        const overallEmoji  = overallPnL === null ? '❓' : overallPnL >= 0 ? '📈' : '📉';
+        const oEmoji        = overallPnL === null ? '❓' : overallPnL >= 0 ? '📈' : '📉';
+        const oSign         = overallPnL !== null && overallPnL >= 0 ? '+' : '';
 
-        // ── Build output ──
+        // ── Step 5: Build message ──
         const ts = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
         let out = `💼 *UPSTOX — Live Snapshot*  _${ts} IST_\n`;
         out += `━━━━━━━━━━━━━━━━━━━\n`;
 
-        // Capital & overall P&L
         if (startingCapital > 0) {
           out += `🏦 *Your Capital:* ₹${startingCapital.toLocaleString('en-IN')}\n`;
         } else {
-          out += `🏦 *Your Capital:* _not set — use_ \`/upstox capital 7000\`\n`;
+          out += `🏦 *Capital:* _not set — use /upstox capital 7000_\n`;
         }
         out += `📊 *Portfolio Value:* ₹${totalPortfolioValue.toFixed(0)}\n`;
         if (overallPnL !== null) {
-          const sign = overallPnL >= 0 ? '+' : '';
-          out += `${overallEmoji} *Overall P&L:* ${sign}₹${Math.abs(overallPnL).toFixed(0)} (${sign}${overallPnLPct.toFixed(2)}%)\n`;
+          out += `${oEmoji} *Overall P&L:* ${oSign}₹${Math.abs(overallPnL).toFixed(0)} (${oSign}${overallPnLPct.toFixed(2)}%)\n`;
         }
+        if (totalRealisedToday !== 0) {
+          const rSign = totalRealisedToday >= 0 ? '+' : '';
+          out += `🔒 *Today's Realised:* ${rSign}₹${totalRealisedToday.toFixed(2)}\n`;
+        }
+
+        out += `━━━━━━━━━━━━━━━━━━━\n`;
+        out += `💵 *Free Cash:* ₹${availableCash.toFixed(2)}  _← can place orders now_\n`;
+        if (usedMargin > 0) {
+          out += `🔐 *Locked in positions:* ₹${usedMargin.toFixed(0)}\n`;
+        }
+
         out += `━━━━━━━━━━━━━━━━━━━\n`;
 
-        // Cash & invested split
-        out += `💵 *Free Cash:* ₹${availableCash.toFixed(2)}  _← trade with this_\n`;
-        if (totalHoldingValue > 0) {
-          out += `📦 *In Holdings:* ₹${totalHoldingValue.toFixed(0)}`;
-          if (totalUnrealised !== 0) {
-            const uSign = totalUnrealised >= 0 ? '+' : '';
-            out += `  (${uSign}₹${Math.abs(totalUnrealised).toFixed(0)} unrealised)`;
-          }
-          out += '\n';
-        }
-        out += `━━━━━━━━━━━━━━━━━━━\n`;
-
-        // Holdings detail
         if (holdingLines.length > 0) {
-          out += `*📌 Holdings (${holdingLines.length}):*\n\n`;
+          out += `*📌 Open Positions (${holdingLines.length}):*\n\n`;
           out += holdingLines.join('\n\n');
           out += '\n';
         } else {
           out += `_No open positions — fully in cash_\n`;
         }
 
-        // Today's trades
-        if (todayTrades.length > 0) {
+        if (activityLines.length > 0) {
           out += `━━━━━━━━━━━━━━━━━━━\n`;
-          out += `*🔄 Today's Trades:*\n`;
-          for (const t of todayTrades) {
-            if (t.action === 'SOLD') {
-              out += `  ${t.sym}: Sold ${t.qty} @ ₹${t.price.toFixed(2)} = ₹${t.proceeds.toFixed(0)}\n`;
-            } else {
-              out += `  ${t.sym}: Bought ${t.qty} @ ₹${t.price.toFixed(2)}\n`;
-            }
-          }
+          out += `*🔄 Today's Activity:*\n`;
+          out += activityLines.join('\n');
+          out += '\n';
         }
 
         out += `━━━━━━━━━━━━━━━━━━━\n`;
-        out += `_To update capital: /upstox capital 8000_`;
+        out += `_Update capital: /upstox capital 8000_`;
 
         await botInstance.sendMessage(chatId, out, { parse_mode: 'Markdown' });
       } catch (err) {

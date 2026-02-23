@@ -79,6 +79,14 @@ HARD CAPITAL LIMIT: ₹${effectiveCash.toLocaleString('en-IN')} available cash (
 ${targetContext}
 ${extraContext}
 
+${portfolio.broker === 'UPSTOX' && portfolio.apiEnabled ? `UPSTOX LIVE TRADING — SIGNALS ARE DIRECTLY EXECUTABLE:
+The investor will receive these signals in Telegram with a single Execute button. Pressing it places the order via Upstox API immediately. This means:
+1. ONLY CNC delivery equity (NSE_EQ). No intraday, no F&O, no futures, no options.
+2. LIMIT orders strongly preferred — gives the investor a better entry and a moment to review before execution.
+3. Signals must be actionable TODAY: clear entry level, realistic for current market price.
+4. Small capital — size each position to 10–20% of available cash max. Better to have 2–3 focused trades than 5 stretched ones.
+5. Since orders execute immediately on tap, stop-loss and target MUST be clearly communicated in the rationale.
+` : ''}
 PORTFOLIO AUDIT DIRECTIVE: Before generating signals, analyze the audit above. Identify:
 1. UNDERPERFORMERS to SELL — holdings with broken thesis, P&L below threshold per growth directive, no catalyst
 2. OVERWEIGHT positions to TRIM — any single stock >15% of portfolio

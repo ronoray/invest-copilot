@@ -522,7 +522,7 @@ router.get('/comprehensive-analysis', async (req, res) => {
       });
     } else {
       portfolios = await prisma.portfolio.findMany({
-        where: { userId, isActive: true },
+        where: { userId, isActive: true, isPaused: false },
         include: { holdings: true }
       });
     }

@@ -175,7 +175,13 @@ You MUST respond with ONLY valid JSON (no markdown, no extra text) in this exact
   }
 }
 
-CAPITAL RULES:
+${portfolio.broker === 'UPSTOX' && portfolio.apiEnabled ? `UPSTOX LIVE TRADING CONTEXT:
+- All opening plays will be sent to Telegram with a 1-tap Execute button. Orders go live on Upstox immediately.
+- Product: CNC delivery equity ONLY. No intraday, no F&O. Stocks are held T+1 or longer.
+- "openingPlays" BUY orders: LIMIT preferred. Price = the level to buy at, not the current price.
+- Size each opening play: 10-20% of available cash ₹${effectiveCash.toFixed(0)} per position max.
+- holdings actions (ADD/EXIT/TRIM) will also be sent as executable signals — be precise with price levels.
+` : ''}CAPITAL RULES:
 - Opening plays BUY total must NOT exceed effective cash ₹${effectiveCash.toFixed(0)}
 - Each BUY order must be affordable: quantity * price <= effective cash
 - SELL only stocks that are held (see holdings above)
@@ -606,7 +612,11 @@ Target: ₹${targetAmount.toFixed(0)} | Earned: ${earnedActual >= 0 ? '+' : ''}�
 CURRENT HOLDINGS:
 ${holdingsBreakdown || 'No holdings'}
 
-TASK: Generate the EVENING PLAYBOOK. This replaces both the evening review AND tomorrow's game plan.
+${portfolio.broker === 'UPSTOX' && portfolio.apiEnabled ? `UPSTOX LIVE TRADING:
+- "tomorrowPlays" orders will be delivered to Telegram as executable signals. LIMIT orders only.
+- CNC delivery equity only — no intraday, no F&O. Hold period T+1 or longer.
+- Size each tomorrow play to 10-20% of available cash. Do not over-leverage.
+` : ''}TASK: Generate the EVENING PLAYBOOK. This replaces both the evening review AND tomorrow's game plan.
 
 Respond with ONLY valid JSON (no markdown):
 {

@@ -35,6 +35,30 @@ export function buildProfileBrief(portfolio) {
   const totalCurrent = portfolio.holdings?.reduce((sum, h) => sum + h.quantity * parseFloat(h.currentPrice || h.avgPrice), 0) || 0;
   const totalPL = totalCurrent - totalInvested;
 
+  // Broker-specific execution context
+  const availableCash = parseFloat(portfolio.availableCash || 0);
+  const startingCapital = parseFloat(portfolio.startingCapital || 0);
+  let executionContext = '';
+  if (portfolio.broker === 'UPSTOX' && portfolio.apiEnabled) {
+    // Typical affordable position size given the capital
+    const maxSinglePosition = Math.min(Math.round(availableCash * 0.25 / 100) * 100, 5000);
+    executionContext = `
+**EXECUTION MODE: UPSTOX LIVE API — SIGNALS ARE DIRECTLY EXECUTABLE**
+- Signals generated here are delivered to Telegram within minutes with a 1-tap Execute button
+- Orders are placed via Upstox API automatically — no manual broker login required
+- Product: CNC (Cash and Carry = delivery equity). ONLY equity delivery on NSE. NO intraday, NO F&O, NO futures, NO options
+- Every BUY signal must be affordable: quantity × price ≤ ₹${availableCash.toLocaleString('en-IN')} (hard limit enforced by system)
+- Position sizing for ₹${startingCapital.toLocaleString('en-IN')} capital: target ₹500–₹${maxSinglePosition.toLocaleString('en-IN')} per position (5–15% of capital per trade)
+- Prefer LIMIT orders over MARKET orders — gives the investor a better entry and time to review
+- SELL signals only for stocks actually held (see holdings). Do NOT suggest sells without a real holding`;
+  } else {
+    executionContext = `
+**EXECUTION MODE: MANUAL (no API trading)**
+- Broker: ${(portfolio.broker || 'UNKNOWN').replace(/_/g, ' ')}
+- Signals are advisory only — investor must log in to broker to execute
+- Verify actual account balance before sizing positions`;
+  }
+
   return `**INVESTOR PROFILE:**
 - Name: ${portfolio.ownerName || 'Unknown'}
 - Portfolio: "${portfolio.name || 'Unnamed'}"
@@ -44,12 +68,12 @@ export function buildProfileBrief(portfolio) {
 - Experience Level: ${portfolio.investmentExperience || 'Not specified'}
 - Monthly Income: ${portfolio.monthlyIncome ? '₹' + parseFloat(portfolio.monthlyIncome).toLocaleString('en-IN') : 'Not disclosed'}
 - Age: ${portfolio.age || 'Not specified'}
-- API Trading: ${portfolio.apiEnabled ? 'YES (can auto-execute orders)' : 'NO (manual trades only)'}
 - Markets: ${(portfolio.markets || ['NSE']).join(', ')}
+${executionContext}
 
 **CAPITAL:**
-- Starting Capital: ₹${parseFloat(portfolio.startingCapital || 0).toLocaleString('en-IN')}
-- Available Cash: ₹${parseFloat(portfolio.availableCash || 0).toLocaleString('en-IN')}
+- Starting Capital: ₹${startingCapital.toLocaleString('en-IN')}
+- Available Cash: ₹${availableCash.toLocaleString('en-IN')}
 - Currently Invested: ₹${totalInvested.toLocaleString('en-IN')}
 - Current Value: ₹${totalCurrent.toLocaleString('en-IN')}
 - Unrealized P&L: ${totalPL >= 0 ? '+' : ''}₹${totalPL.toLocaleString('en-IN')}
@@ -180,18 +204,29 @@ export function buildAllPortfoliosBrief(portfolios) {
     return 'No portfolios found.';
   }
 
-  const sections = portfolios.map((p, i) => {
+  // Exclude paused portfolios from AI analysis
+  const active = portfolios.filter(p => !p.isPaused);
+  const pausedCount = portfolios.length - active.length;
+
+  if (active.length === 0) {
+    return 'All portfolios are currently on hold. No active portfolios to analyze.';
+  }
+
+  const pausedNote = pausedCount > 0
+    ? `\nNOTE: ${pausedCount} portfolio(s) are currently ON HOLD and excluded from this analysis. Focus exclusively on the active portfolio(s) below.\n`
+    : '';
+
+  const sections = active.map((p, i) => {
     return `--- Portfolio ${i + 1}: ${p.name} ---\n${buildProfileBrief(p)}`;
   });
 
-  const totalCapital = portfolios.reduce((s, p) => s + parseFloat(p.startingCapital || 0), 0);
-  const totalCash = portfolios.reduce((s, p) => s + parseFloat(p.availableCash || 0), 0);
-  const allHoldings = portfolios.flatMap(p => p.holdings || []);
+  const totalCapital = active.reduce((s, p) => s + parseFloat(p.startingCapital || 0), 0);
+  const totalCash = active.reduce((s, p) => s + parseFloat(p.availableCash || 0), 0);
+  const allHoldings = active.flatMap(p => p.holdings || []);
   const totalInvested = allHoldings.reduce((s, h) => s + h.quantity * parseFloat(h.avgPrice), 0);
   const totalCurrent = allHoldings.reduce((s, h) => s + h.quantity * parseFloat(h.currentPrice || h.avgPrice), 0);
 
-  return `**FAMILY INVESTMENT OVERVIEW:**
-- Total Portfolios: ${portfolios.length}
+  return `**ACTIVE PORTFOLIO OVERVIEW (${active.length} active${pausedCount > 0 ? `, ${pausedCount} on hold` : ''}):**${pausedNote}
 - Total Capital: ₹${totalCapital.toLocaleString('en-IN')}
 - Total Available Cash: ₹${totalCash.toLocaleString('en-IN')}
 - Total Invested: ₹${totalInvested.toLocaleString('en-IN')}

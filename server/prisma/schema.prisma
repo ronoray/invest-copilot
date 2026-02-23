@@ -124,6 +124,10 @@ model Portfolio {
   // Capital Verification
   lastVerifiedAt  DateTime?  // Last time capital/holdings were confirmed
 
+  // Profit-Taking
+  profitTargetPct Float    @default(10)  // % gain to recommend bank withdrawal (e.g. 10 = 10%)
+  totalWithdrawn  Float    @default(0)   // Cumulative amount withdrawn to bank
+
   // Integration Status
   apiEnabled      Boolean  @default(false) // true for Upstox, false for SBI/HDFC
   syncEnabled     Boolean  @default(true)  // Enable auto-sync via API or screenshots

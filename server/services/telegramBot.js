@@ -713,6 +713,8 @@ Let's build wealth! 💰`;
 /upstox - Live snapshot (cash, holdings, P&L, pending orders)
 /upstox sync - Reset P&L baseline to current portfolio value
 /upstox capital N - Manually set starting capital to ₹N
+/upstox withdraw N - Record ₹N sent to bank (adjusts baseline)
+/upstox target N - Set profit-taking threshold to N%
 /auth - Login to Upstox (daily refresh)
 
 *System:*
@@ -1198,6 +1200,55 @@ Use /mute to disable all alerts`;
           await botInstance.sendMessage(chatId, `✅ Capital updated to ₹${newCapital.toLocaleString('en-IN')}. Fetching snapshot...`);
         }
 
+        // Sub-command: /upstox target 15 — set profit-taking threshold to 15%
+        if (args[1] === 'target' && args[2]) {
+          const pct = parseFloat(args[2]);
+          if (isNaN(pct) || pct <= 0 || pct > 200) {
+            await botInstance.sendMessage(chatId, '❌ Invalid %. Usage: `/upstox target 10`', { parse_mode: 'Markdown' });
+            return;
+          }
+          await prisma.portfolio.updateMany({
+            where: { userId, broker: 'UPSTOX', isActive: true },
+            data: { profitTargetPct: pct }
+          });
+          await botInstance.sendMessage(chatId, `🎯 Profit target set to *${pct}%*\nI'll alert you to withdraw when we hit this.`, { parse_mode: 'Markdown' });
+          return;
+        }
+
+        // Sub-command: /upstox withdraw 2000 — record a bank withdrawal
+        if (args[1] === 'withdraw' && args[2]) {
+          const amount = parseFloat(args[2]);
+          if (isNaN(amount) || amount <= 0) {
+            await botInstance.sendMessage(chatId, '❌ Invalid amount. Usage: `/upstox withdraw 2000`', { parse_mode: 'Markdown' });
+            return;
+          }
+          const p = await prisma.portfolio.findFirst({ where: { userId, broker: 'UPSTOX', isActive: true } });
+          if (!p) {
+            await botInstance.sendMessage(chatId, '❌ No Upstox portfolio found.');
+            return;
+          }
+          const newTotalWithdrawn = parseFloat(p.totalWithdrawn || 0) + amount;
+          const newStartingCapital = Math.max(0, parseFloat(p.startingCapital) - amount);
+          await prisma.portfolio.update({
+            where: { id: p.id },
+            data: { totalWithdrawn: newTotalWithdrawn, startingCapital: newStartingCapital, availableCash: { decrement: amount } }
+          });
+          await prisma.capitalHistory.create({
+            data: {
+              portfolioId: p.id,
+              oldCapital: parseFloat(p.startingCapital),
+              newCapital: newStartingCapital,
+              reason: `Bank withdrawal: ₹${amount.toLocaleString('en-IN')}`,
+              changedBy: 'telegram'
+            }
+          });
+          await botInstance.sendMessage(chatId,
+            `✅ *Withdrawal recorded*\n\n💸 Withdrawn now: ₹${amount.toLocaleString('en-IN')}\n🏦 Total to bank: ₹${newTotalWithdrawn.toLocaleString('en-IN')}\n📉 New capital baseline: ₹${newStartingCapital.toLocaleString('en-IN')}\n\n_P&L now tracks from ₹${newStartingCapital.toLocaleString('en-IN')}_`,
+            { parse_mode: 'Markdown' }
+          );
+          return;
+        }
+
         // Check Upstox connected + token valid
         const integration = await prisma.upstoxIntegration.findUnique({ where: { userId } });
         if (!integration?.isConnected || !integration?.accessToken) {
@@ -1469,8 +1520,34 @@ Use /mute to disable all alerts`;
           }
         }
 
+        // ── Profit-taking alert ──
+        const profitTargetPct  = parseFloat(portfolio?.profitTargetPct || 10);
+        const totalWithdrawn   = parseFloat(portfolio?.totalWithdrawn  || 0);
+        const profitRupees     = overallPnL || 0;
+        const profitPct        = overallPnLPct || 0;
+        const targetRupees     = startingCapital * (profitTargetPct / 100);
+        const targetReached    = startingCapital > 0 && profitRupees >= targetRupees;
+        // Suggested withdrawal: 50% of profits (keep 50% compounding)
+        const suggestedWithdraw = targetReached ? Math.floor(profitRupees * 0.5 / 100) * 100 : 0;
+
         out += `━━━━━━━━━━━━━━━━━━━\n`;
-        out += `_/upstox sync — reset capital to current total_`;
+
+        if (targetReached) {
+          out += `🎯 *PROFIT TARGET HIT!* (${profitPct.toFixed(1)}% ≥ ${profitTargetPct}%)\n`;
+          out += `💸 *Suggest withdrawing ₹${suggestedWithdraw.toLocaleString('en-IN')} to bank*\n`;
+          out += `   _Keep the rest compounding. Use /upstox withdraw ${suggestedWithdraw}_\n`;
+        } else if (startingCapital > 0 && profitRupees > 0) {
+          const needed = targetRupees - profitRupees;
+          out += `🎯 Target: ${profitTargetPct}% (₹${targetRupees.toLocaleString('en-IN')}) — ₹${needed.toFixed(0)} away\n`;
+        } else {
+          out += `🎯 Profit target: ${profitTargetPct}%  _(/upstox target N to change)_\n`;
+        }
+        if (totalWithdrawn > 0) {
+          out += `🏦 *Total sent to bank: ₹${totalWithdrawn.toLocaleString('en-IN')}*\n`;
+        }
+
+        out += `━━━━━━━━━━━━━━━━━━━\n`;
+        out += `_/upstox sync · /upstox withdraw N · /upstox target N_`;
 
         await botInstance.sendMessage(chatId, out, { parse_mode: 'Markdown' });
       } catch (err) {

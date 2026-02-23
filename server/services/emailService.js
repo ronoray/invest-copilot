@@ -249,11 +249,84 @@ export async function sendDailyDigest(email, data) {
   return await sendEmail({ to: email, subject, html });
 }
 
+// ============================================
+// DEPLOY NOTIFICATION EMAIL
+// ============================================
+
+export async function sendDeployNotification(email, { commit, branch, time, commitMessage = '' }) {
+  const shortSha = (commit || 'unknown').slice(0, 7);
+  const subject = `🚀 Deployed ${shortSha} — invest.hungrytimes.in`;
+
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #1a1a1a; background: #f5f5f5; margin: 0; padding: 20px; }
+        .container { max-width: 560px; margin: 0 auto; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+        .header { background: #111827; padding: 24px 28px; }
+        .header h1 { margin: 0; color: #fff; font-size: 18px; font-weight: 600; letter-spacing: -0.3px; }
+        .header p { margin: 4px 0 0; color: #9ca3af; font-size: 13px; }
+        .body { padding: 24px 28px; }
+        .pill { display: inline-block; padding: 3px 10px; border-radius: 99px; font-size: 12px; font-weight: 600; font-family: monospace; }
+        .pill-green { background: #dcfce7; color: #15803d; }
+        .pill-gray  { background: #f3f4f6; color: #374151; }
+        .row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #f3f4f6; font-size: 14px; }
+        .row:last-child { border-bottom: none; }
+        .label { color: #6b7280; }
+        .value { font-weight: 500; color: #111827; font-family: monospace; }
+        .value.normal { font-family: Arial, sans-serif; }
+        .footer { background: #f9fafb; padding: 14px 28px; font-size: 12px; color: #9ca3af; text-align: center; border-top: 1px solid #e5e7eb; }
+        a { color: #4f46e5; text-decoration: none; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="header">
+          <h1>🚀 Deployment Successful</h1>
+          <p>invest.hungrytimes.in &nbsp;·&nbsp; ${time}</p>
+        </div>
+        <div class="body">
+          <div class="row">
+            <span class="label">Status</span>
+            <span class="pill pill-green">✓ LIVE</span>
+          </div>
+          <div class="row">
+            <span class="label">Commit</span>
+            <span class="value">${shortSha}</span>
+          </div>
+          <div class="row">
+            <span class="label">Branch</span>
+            <span class="pill pill-gray">${branch}</span>
+          </div>
+          ${commitMessage ? `<div class="row">
+            <span class="label">Message</span>
+            <span class="value normal" style="max-width:320px;text-align:right;">${commitMessage.replace(/</g,'&lt;').replace(/>/g,'&gt;').slice(0,120)}</span>
+          </div>` : ''}
+          <div class="row">
+            <span class="label">Full SHA</span>
+            <span class="value" style="font-size:11px;">${commit}</span>
+          </div>
+        </div>
+        <div class="footer">
+          <a href="https://invest.hungrytimes.in">Open Dashboard</a>
+          &nbsp;·&nbsp;
+          <a href="https://invest.hungrytimes.in/api/health">Health Check</a>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+
+  return await sendEmail({ to: email, subject, html });
+}
+
 export default {
   sendEmail,
   sendWelcomeEmail,
   sendOTP,
   sendPasswordResetEmail,
   sendBuyAlert,
-  sendDailyDigest
+  sendDailyDigest,
+  sendDeployNotification
 };

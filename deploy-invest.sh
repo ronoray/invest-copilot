@@ -127,6 +127,16 @@ echo "$TARGET_SHA" > "$APP_DIR/DEPLOYED_SHA"
 log "✅ Wrote DEPLOYED_SHA: $TARGET_SHA"
 
 # ============================================================================
+# Deploy notification email
+# ============================================================================
+DEPLOY_TIME="$(date '+%Y-%m-%d %H:%M:%S IST')"
+COMMIT_MSG="$(git log -1 --pretty=format:'%s' 2>/dev/null || echo '')"
+log "Sending deploy notification email..."
+docker exec invest-api node /app/scripts/sendDeployEmail.mjs \
+  "$TARGET_SHA" "$BRANCH" "$DEPLOY_TIME" "$COMMIT_MSG" \
+  2>&1 || log "⚠️ Deploy email failed (non-fatal)"
+
+# ============================================================================
 # Success
 # ============================================================================
 log "========================================="

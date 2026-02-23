@@ -661,22 +661,33 @@ export function initTelegramBot() {
 
         await getOrCreateUser(msg.from.id, msg.from.username, msg.from.first_name);
 
-        const welcomeMsg = `👋 *Welcome to Investment Co-Pilot!*
+        const welcomeMsg = `👋 *Investment Co-Pilot*
+━━━━━━━━━━━━━━━━━━━
 
-I'm your AI investment assistant.
+*Portfolio:*
+/portfolios — List all portfolios
+/portfolio N — View portfolio #N details
 
-*Features:*
-✅ Per-portfolio AI recommendations
-✅ Real-time buy/sell alerts
-✅ Multi-asset allocation advice
-✅ Market analysis
+*Market & AI:*
+/scan N — Market scan for portfolio #N
+/recommend N — AI stock picks for portfolio #N
+/multi N — Multi-asset allocation for portfolio #N
+/price SYMBOL — Live stock price
 
-*Quick Start:*
-/portfolios - View all portfolios
-/scan - Find opportunities
-/help - All commands
+*Upstox Trading:*
+/upstox — Live snapshot (cash, holdings, P&L)
+/upstox sync — Reset P&L baseline to current value
+/upstox capital N — Set starting capital to ₹N
+/upstox withdraw N — Record ₹N sent to bank
+/upstox target N — Set profit-taking threshold to N%
+/auth — Login to Upstox (refresh daily)
 
-Let's build wealth! 💰`;
+*System:*
+/pause reason — Pause signal generation
+/resume — Resume + AI briefing of missed signals
+/mute — Disable all alerts
+/unmute — Enable alerts
+/settings — Alert preferences`;
 
         await botInstance.sendMessage(msg.chat.id, welcomeMsg, { parse_mode: 'Markdown' });
         logger.info(`Welcome message sent to ${msg.from.id}`);

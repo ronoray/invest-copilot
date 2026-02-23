@@ -5,7 +5,7 @@ import logger from './logger.js';
 import { getCurrentPrice } from './marketData.js';
 import { scanMarketForOpportunities, buildProfileBrief } from './advancedScreener.js';
 import { generateMultiAssetRecommendations } from './multiAssetRecommendations.js';
-import { placeOrder, getAuthorizationUrl, isTokenValid, getFunds, getHoldings, getPositions } from './upstoxService.js';
+import { placeOrder, getAuthorizationUrl, isTokenValid, getFunds, getHoldings, getPositions, getOrderBook } from './upstoxService.js';
 import { preOrderCapitalCheck, syncUpstoxFunds, syncUpstoxHoldings, pollOrderUntilSettled } from './capitalGuard.js';
 import { getSystemPauseState, setPauseState, clearPauseState } from './pauseState.js';
 
@@ -710,7 +710,9 @@ Let's build wealth! 💰`;
 /multi [N] - Multi-asset allocation for portfolio #N
 
 *Trading:*
-/upstox - Live account snapshot (cash, holdings, P&L)
+/upstox - Live snapshot (cash, holdings, P&L, pending orders)
+/upstox sync - Reset P&L baseline to current portfolio value
+/upstox capital N - Manually set starting capital to ₹N
 /auth - Login to Upstox (daily refresh)
 
 *System:*
@@ -1169,8 +1171,7 @@ Use /mute to disable all alerts`;
       }
     });
 
-    // /upstox [capital AMOUNT] — Complete live Upstox account snapshot
-    // /upstox capital 8000 — update starting capital then show snapshot
+    // /upstox — live snapshot | /upstox sync — auto-set capital | /upstox capital 8000 — manual set
     botInstance.onText(/^\/upstox(?:\s+(.+))?$/, async (msg) => {
       const chatId = msg.chat.id;
       const args = msg.text.trim().split(/\s+/);
@@ -1209,23 +1210,32 @@ Use /mute to disable all alerts`;
           return;
         }
 
-        if (args.length === 1) {
+        // Sub-command: /upstox sync — auto-set startingCapital from current total portfolio value
+        const isSyncCmd = args[1] === 'sync';
+
+        if (args.length === 1 || isSyncCmd) {
           await botInstance.sendMessage(chatId, '📡 Fetching live Upstox data...');
         }
 
-        // Fetch all three Upstox APIs + portfolio in parallel
-        const [fundsResult, holdingsResult, positionsResult, portfolio] = await Promise.all([
+        // Fetch all Upstox APIs + portfolio in parallel (order book for open orders)
+        const [fundsResult, holdingsResult, positionsResult, orderBookResult, portfolio] = await Promise.all([
           getFunds(userId),
           getHoldings(userId),
           getPositions(userId),
+          getOrderBook(userId).catch(() => ({ orders: [] })), // non-blocking
           prisma.portfolio.findFirst({ where: { userId, broker: 'UPSTOX', isActive: true } })
         ]);
 
-        const startingCapital = parseFloat(portfolio?.startingCapital || 0);
+        let startingCapital = parseFloat(portfolio?.startingCapital || 0);
         // availableMargin = cash you can place a new order with RIGHT NOW
         // usedMargin      = cash locked in open positions (delivery buys held today)
-        const availableCash = fundsResult.availableMargin;
-        const usedMargin    = fundsResult.usedMargin;
+        // payinAmount     = deposits credited today (already inside availableMargin)
+        // notionalCash    = funds earmarked for withdrawal (NOT tradeable — explains "missing" cash)
+        const availableCash  = fundsResult.availableMargin;
+        const usedMargin     = fundsResult.usedMargin;
+        const payinAmount    = fundsResult.payinAmount || 0;
+        const notionalCash   = fundsResult.notionalCash || 0;
+        const adhocMargin    = fundsResult.adhocMargin || 0;
 
         // ── Step 1: Map demat (long-term) holdings ──
         // These are positions you were holding BEFORE today (overnight).
@@ -1353,20 +1363,41 @@ Use /mute to disable all alerts`;
 
         // ── Step 4: Overall P&L ──
         const totalPortfolioValue = availableCash + totalHoldingValue;
+
+        // /upstox sync: set startingCapital = current total portfolio value (baseline reset)
+        let capitalSynced = false;
+        if (isSyncCmd) {
+          const syncedAmount = Math.round(totalPortfolioValue);
+          await prisma.portfolio.updateMany({
+            where: { userId, broker: 'UPSTOX', isActive: true },
+            data: { startingCapital: syncedAmount }
+          });
+          startingCapital = syncedAmount;
+          capitalSynced = true;
+        }
+
         const overallPnL    = startingCapital > 0 ? totalPortfolioValue - startingCapital : null;
         const overallPnLPct = startingCapital > 0 ? (overallPnL / startingCapital) * 100 : null;
         const oEmoji        = overallPnL === null ? '❓' : overallPnL >= 0 ? '📈' : '📉';
         const oSign         = overallPnL !== null && overallPnL >= 0 ? '+' : '';
+
+        // ── Step 4b: Filter open/pending orders from order book ──
+        const openOrders = (orderBookResult.orders || []).filter(o => {
+          const s = (o.status || '').toLowerCase();
+          return s === 'open' || s === 'trigger pending' || s === 'put order req received' || s === 'modify pending';
+        });
 
         // ── Step 5: Build message ──
         const ts = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
         let out = `💼 *UPSTOX — Live Snapshot*  _${ts} IST_\n`;
         out += `━━━━━━━━━━━━━━━━━━━\n`;
 
-        if (startingCapital > 0) {
+        if (capitalSynced) {
+          out += `✅ *Capital synced → ₹${startingCapital.toLocaleString('en-IN')}*\n`;
+        } else if (startingCapital > 0) {
           out += `🏦 *Your Capital:* ₹${startingCapital.toLocaleString('en-IN')}\n`;
         } else {
-          out += `🏦 *Capital:* _not set — use /upstox capital 7000_\n`;
+          out += `🏦 *Capital:* _not set — use /upstox sync or /upstox capital 7000_\n`;
         }
         out += `📊 *Portfolio Value:* ₹${totalPortfolioValue.toFixed(0)}\n`;
         if (overallPnL !== null) {
@@ -1378,9 +1409,20 @@ Use /mute to disable all alerts`;
         }
 
         out += `━━━━━━━━━━━━━━━━━━━\n`;
-        out += `💵 *Free Cash:* ₹${availableCash.toFixed(2)}  _← can place orders now_\n`;
+        out += `💵 *Free Cash:* ₹${availableCash.toFixed(2)}  _← tradeable now_\n`;
         if (usedMargin > 0) {
           out += `🔐 *Locked in positions:* ₹${usedMargin.toFixed(0)}\n`;
+        }
+        // payinAmount: today's deposits (already inside availableCash — shown for info)
+        if (payinAmount > 0) {
+          out += `📥 *Payin (today's deposit):* ₹${payinAmount.toFixed(0)}  _← inside free cash_\n`;
+        }
+        // notionalCash: earmarked for withdrawal — explains why cash looks less than expected
+        if (notionalCash > 0) {
+          out += `🏧 *Withdrawal hold:* ₹${notionalCash.toFixed(0)}  _← not tradeable_\n`;
+        }
+        if (adhocMargin > 0) {
+          out += `🎯 *Adhoc margin:* ₹${adhocMargin.toFixed(0)}\n`;
         }
 
         out += `━━━━━━━━━━━━━━━━━━━\n`;
@@ -1400,8 +1442,22 @@ Use /mute to disable all alerts`;
           out += '\n';
         }
 
+        // Open/pending orders from order book (not yet filled)
+        if (openOrders.length > 0) {
+          out += `━━━━━━━━━━━━━━━━━━━\n`;
+          out += `*📋 Pending Orders (${openOrders.length}):*\n`;
+          for (const o of openOrders) {
+            const side = (o.transaction_type || '').toUpperCase();
+            const sideEmoji = side === 'BUY' ? '🟢' : '🔴';
+            const price = o.price > 0 ? `@ ₹${o.price}` : 'MKT';
+            const pending = o.pending_quantity || o.quantity || 0;
+            const sym = (o.trading_symbol || o.tradingsymbol || '').replace(/-EQ$/, '');
+            out += `${sideEmoji} ${side} ${pending}x *${sym}* ${price} _(${o.order_type})_\n`;
+          }
+        }
+
         out += `━━━━━━━━━━━━━━━━━━━\n`;
-        out += `_Update capital: /upstox capital 8000_`;
+        out += `_/upstox sync — reset capital to current total_`;
 
         await botInstance.sendMessage(chatId, out, { parse_mode: 'Markdown' });
       } catch (err) {

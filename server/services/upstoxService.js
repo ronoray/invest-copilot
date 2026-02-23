@@ -358,15 +358,53 @@ export async function isTokenValid(userId) {
 }
 
 /**
- * Get funds and margin from Upstox
+ * Get funds and margin from Upstox (full breakdown).
+ * Note: available_margin is the key tradeable balance.
+ * payin_amount: real-time deposits (already included in available_margin).
+ * notional_cash: funds earmarked for withdrawal (NOT tradeable — may explain
+ *   why available cash looks less than your bank transfer).
+ * adhoc_margin: manually credited amounts.
  */
 export async function getFunds(userId) {
   const integration = await getIntegration(userId);
   const result = await upstoxRequest(integration.accessToken, 'GET', '/user/get-funds-and-margin');
+  const eq = result.data?.equity || {};
   return {
-    availableMargin: result.data?.equity?.available_margin || 0,
-    usedMargin: result.data?.equity?.used_margin || 0,
+    availableMargin: eq.available_margin || 0,
+    usedMargin: eq.used_margin || 0,
+    payinAmount: eq.payin_amount || 0,
+    notionalCash: eq.notional_cash || 0,
+    adhocMargin: eq.adhoc_margin || 0,
+    spanMargin: eq.span_margin || 0,
+    exposureMargin: eq.exposure_margin || 0,
   };
+}
+
+/**
+ * Get today's order book — all orders placed today (any status).
+ */
+export async function getOrderBook(userId) {
+  const integration = await getIntegration(userId);
+  const result = await upstoxRequest(integration.accessToken, 'GET', '/order/retrieve-all');
+  return { orders: result.data || [] };
+}
+
+/**
+ * Get today's trade book — all executed fills today.
+ */
+export async function getTradeBook(userId) {
+  const integration = await getIntegration(userId);
+  const result = await upstoxRequest(integration.accessToken, 'GET', '/order/trades/get-trades-for-day');
+  return { trades: result.data || [] };
+}
+
+/**
+ * Get Upstox user profile — DDPI status, activated segments, enabled order types.
+ */
+export async function getUserProfile(userId) {
+  const integration = await getIntegration(userId);
+  const result = await upstoxRequest(integration.accessToken, 'GET', '/user/profile');
+  return result.data || {};
 }
 
 /**

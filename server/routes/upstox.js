@@ -1,5 +1,5 @@
 import express from 'express';
-import { placeOrder, getOrderStatus, cancelOrder, getHoldings, getAuthorizationUrl, exchangeCodeForToken } from '../services/upstoxService.js';
+import { placeOrder, getOrderStatus, cancelOrder, getHoldings, getAuthorizationUrl, exchangeCodeForToken, getFunds, getOrderBook, getTradeBook, getUserProfile } from '../services/upstoxService.js';
 import logger from '../services/logger.js';
 
 const router = express.Router();
@@ -111,6 +111,62 @@ router.get('/holdings', async (req, res) => {
   } catch (error) {
     logger.error('Upstox holdings error:', error.message);
     res.status(500).json({ error: error.message || 'Failed to fetch holdings' });
+  }
+});
+
+/**
+ * GET /api/upstox/funds
+ * Full funds and margin breakdown — available, payin, notional, used, etc.
+ */
+router.get('/funds', async (req, res) => {
+  try {
+    const result = await getFunds(req.userId);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    logger.error('Upstox funds error:', error.message);
+    res.status(500).json({ error: error.message || 'Failed to fetch funds' });
+  }
+});
+
+/**
+ * GET /api/upstox/orders
+ * Today's order book — all orders placed today with current status.
+ */
+router.get('/orders', async (req, res) => {
+  try {
+    const result = await getOrderBook(req.userId);
+    res.json({ success: true, ...result });
+  } catch (error) {
+    logger.error('Upstox order book error:', error.message);
+    res.status(500).json({ error: error.message || 'Failed to fetch order book' });
+  }
+});
+
+/**
+ * GET /api/upstox/trades
+ * Today's trade book — all executed fills today.
+ */
+router.get('/trades', async (req, res) => {
+  try {
+    const result = await getTradeBook(req.userId);
+    res.json({ success: true, ...result });
+  } catch (error) {
+    logger.error('Upstox trade book error:', error.message);
+    res.status(500).json({ error: error.message || 'Failed to fetch trade book' });
+  }
+});
+
+/**
+ * GET /api/upstox/profile
+ * User profile — DDPI status, activated segments, enabled order types.
+ */
+router.get('/profile', async (req, res) => {
+  try {
+    const data = await getUserProfile(req.userId);
+    res.json({ success: true, data });
+  } catch (error) {
+    logger.error('Upstox profile error:', error.message);
+    res.status(500).json({ error: error.message || 'Failed to fetch profile' });
   }
 });
 

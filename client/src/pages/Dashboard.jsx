@@ -269,8 +269,18 @@ export default function Dashboard() {
               </span>
             </div>
             <PortfolioCompletenessAlert portfolio={sp} linkToPortfolio={true} />
+            {/* On Hold banner for paused portfolios */}
+            {sp.isPaused && (
+              <div className="bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-xl px-4 py-3 flex items-center gap-3 text-sm">
+                <span className="text-xl">⏸</span>
+                <div className="flex-1">
+                  <span className="font-medium text-gray-700 dark:text-gray-300">Portfolio On Hold</span>
+                  <span className="text-gray-500 dark:text-gray-400 ml-2">Signals, alerts, and AI analysis are paused. Focusing on Upstox only.</span>
+                </div>
+              </div>
+            )}
             {/* Capital staleness warning for non-Upstox portfolios */}
-            {sp.broker !== 'UPSTOX' && (() => {
+            {!sp.isPaused && sp.broker !== 'UPSTOX' && (() => {
               const twoDaysMs = 2 * 24 * 60 * 60 * 1000;
               const isStale = !sp.lastVerifiedAt || (Date.now() - new Date(sp.lastVerifiedAt).getTime() > twoDaysMs);
               if (!isStale) return null;

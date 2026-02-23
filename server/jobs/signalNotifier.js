@@ -153,9 +153,9 @@ async function generateSignalsForAllPortfolios() {
     await syncAllUpstoxFunds();
     await syncAllUpstoxHoldingsAndExpireStaleSignals();
 
-    // Get all active portfolios that have holdings
+    // Get all active, non-paused portfolios that have holdings
     const portfolios = await prisma.portfolio.findMany({
-      where: { isActive: true },
+      where: { isActive: true, isPaused: false },
       include: {
         holdings: true,
         user: { include: { telegramUser: true } }
@@ -402,6 +402,9 @@ async function notifyPendingSignals() {
     let sentCount = 0;
     let expiredCount = 0;
     for (const signal of signals) {
+      // Skip signals for paused portfolios
+      if (signal.portfolio?.isPaused) continue;
+
       const telegramUser = signal.portfolio?.user?.telegramUser;
       if (!telegramUser || !telegramUser.isActive || telegramUser.isMuted) continue;
 
@@ -629,7 +632,7 @@ async function generateSignalsConditional() {
 
   try {
     const portfolios = await prisma.portfolio.findMany({
-      where: { isActive: true },
+      where: { isActive: true, isPaused: false },
       include: {
         holdings: true,
         user: { include: { telegramUser: true } }

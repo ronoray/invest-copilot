@@ -131,7 +131,10 @@ model Portfolio {
   // Integration Status
   apiEnabled      Boolean  @default(false) // true for Upstox, false for SBI/HDFC
   syncEnabled     Boolean  @default(true)  // Enable auto-sync via API or screenshots
-  
+
+  // Pause Control
+  isPaused        Boolean  @default(false) // When true: no signals, alerts, or AI analysis
+
   // Metadata
   isActive        Boolean  @default(true)
   notes           String?

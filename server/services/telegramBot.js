@@ -752,7 +752,8 @@ Let's build wealth! 💰`;
           const capital = formatINR(parseFloat(p.startingCapital || 0));
           const cash = formatINR(parseFloat(p.availableCash || 0));
           const holdingCount = (p.holdings || []).length;
-          return `${emoji} *${p.ownerName || p.name}* - ${(p.broker || 'Unknown').replace(/_/g, ' ')}
+          const pausedLabel = p.isPaused ? ' ⏸ *ON HOLD*' : '';
+          return `${emoji} *${p.ownerName || p.name}* - ${(p.broker || 'Unknown').replace(/_/g, ' ')}${pausedLabel}
    ${risk} | Capital: ${capital} | Cash: ${cash}
    ${holdingCount} holding${holdingCount !== 1 ? 's' : ''}`;
         }).join('\n\n');
@@ -820,13 +821,14 @@ P&L: ${formatPrice(pl)} (${formatPercent(plPercent)})`;
           ? `\n⚠️ _Missing: ${missingFields.join(', ')}. Update on web for better AI picks._`
           : '';
 
+        const pausedNote = portfolio.isPaused ? '\n\n⏸ *ON HOLD* — Signals and alerts disabled for this portfolio.' : '';
         const detailMsg = `💼 *${portfolio.ownerName || portfolio.name}* - ${(portfolio.broker || 'Unknown').replace(/_/g, ' ')}
 ━━━━━━━━━━━━━━━━━━━
 Risk: ${risk} | Goal: ${goal}
 Experience: ${experience}
 Capital: ${capital} | Cash: ${cash}
 Value: ${formatPrice(totalValue)}
-P&L: ${formatPrice(totalPL)} (${formatPercent(totalPLPercent)})${completenessNote}
+P&L: ${formatPrice(totalPL)} (${formatPercent(totalPLPercent)})${completenessNote}${pausedNote}
 
 ━━━━━━━━━━━━━━━━━━━
 *Holdings (${(portfolio.holdings || []).length}):*
@@ -906,6 +908,11 @@ Use /portfolios for per-portfolio view`;
           }
         }
 
+        if (portfolio?.isPaused) {
+          await botInstance.sendMessage(msg.chat.id, `⏸ Portfolio #${index} (${portfolio.ownerName || portfolio.name}) is on hold.\n\nAll signals and AI analysis are paused for this portfolio. Currently focusing on Upstox only.`);
+          return;
+        }
+
         const label = portfolio ? portfolioLabel(portfolio) : 'generic';
         await botInstance.sendMessage(msg.chat.id, `🔍 Getting AI recommendations${portfolio ? ' for ' + (portfolio.ownerName || portfolio.name) : ''}...`);
 
@@ -948,6 +955,11 @@ Use /price [SYMBOL] for details!`;
             await botInstance.sendMessage(msg.chat.id, `❌ Portfolio #${index} not found. Use /portfolios to see your list.`);
             return;
           }
+        }
+
+        if (portfolio?.isPaused) {
+          await botInstance.sendMessage(msg.chat.id, `⏸ Portfolio #${index} (${portfolio.ownerName || portfolio.name}) is on hold.\n\nAll signals and AI analysis are paused for this portfolio. Currently focusing on Upstox only.`);
+          return;
         }
 
         await botInstance.sendMessage(msg.chat.id, `📊 Generating multi-asset allocation${portfolio ? ' for ' + (portfolio.ownerName || portfolio.name) : ''}...`);
@@ -996,6 +1008,11 @@ Use /price [SYMBOL] for details!`;
             await botInstance.sendMessage(msg.chat.id, `❌ Portfolio #${index} not found. Use /portfolios to see your list.`);
             return;
           }
+        }
+
+        if (portfolio?.isPaused) {
+          await botInstance.sendMessage(msg.chat.id, `⏸ Portfolio #${index} (${portfolio.ownerName || portfolio.name}) is on hold.\n\nAll signals and AI analysis are paused for this portfolio. Currently focusing on Upstox only.`);
+          return;
         }
 
         await botInstance.sendMessage(msg.chat.id, `🔍 Scanning market${portfolio ? ' for ' + (portfolio.ownerName || portfolio.name) : ''}...`);

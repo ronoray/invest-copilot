@@ -12,7 +12,7 @@ import { isTradingDay, isMarketHoliday } from '../utils/marketHolidays.js';
 
 async function getUserPortfolios(userId) {
   return prisma.portfolio.findMany({
-    where: { userId, isActive: true },
+    where: { userId, isActive: true, isPaused: false },
     include: { holdings: true }
   });
 }
@@ -329,6 +329,7 @@ async function runEndOfDaySnapshot() {
     for (const target of targets) {
       const portfolio = target.portfolio;
       if (!portfolio?.user?.telegramUser?.isActive || portfolio.user.telegramUser.isMuted) continue;
+      if (portfolio.isPaused) continue; // Skip paused portfolios
 
       try {
         // Final price fetch

@@ -81,8 +81,9 @@ router.get('/', async (req, res) => {
           age: p.age,
           notes: p.notes,
           syncEnabled: p.syncEnabled,
+          isPaused: p.isPaused,
           lastVerifiedAt: p.lastVerifiedAt,
-          displayName: `${p.name} (${p.ownerName})`,
+          displayName: `${p.name} (${p.ownerName})${p.isPaused ? ' — On Hold' : ''}`,
           // Computed fields
           totalInvested,
           totalCurrentValue,

@@ -1253,81 +1253,94 @@ Use /mute to disable all alerts`;
           });
         }
 
-        // ── Step 2: Process today's positions ──
-        // positions show all intraday activity:
-        //   day_buy_quantity  / day_buy_price  = what you bought today
-        //   day_sell_quantity / day_sell_price = what you sold today
-        //   quantity = net (positive = still holding, negative = sold from demat)
-        //   realised  = locked-in P&L from closed intraday portion
-        //   unrealised = open P&L on net remaining quantity
-        const effectiveHoldings = new Map(); // what you actually hold right now
-        const activityLines = [];            // for "Today's Activity" section
+        // ── Step 2: Process today's positions for activity lines and sell/buy data ──
+        // IMPORTANT: For delivery (CNC) sells, positions.quantity goes NEGATIVE
+        // (e.g. sold 2 from demat → quantity = -2). Do NOT use positions.quantity
+        // directly to determine effective holdings — use demat-first logic below.
+        const activityLines = [];
         let totalRealisedToday = 0;
+        const positionData = new Map(); // sym → position object
 
         for (const pos of (positionsResult.positions || [])) {
-          const sym         = (pos.tradingsymbol || pos.trading_symbol || '').replace(/-EQ$/, '');
+          const sym = (pos.tradingsymbol || pos.trading_symbol || '').replace(/-EQ$/, '');
           if (!sym) continue;
+          positionData.set(sym, pos);
 
-          const netQty      = pos.quantity || 0;
           const dayBuyQty   = pos.day_buy_quantity || 0;
           const daySellQty  = pos.day_sell_quantity || 0;
           const dayBuyPrice = parseFloat(pos.day_buy_price || 0);
           const daySellPrice= parseFloat(pos.day_sell_price || 0);
-          const lastPrice   = parseFloat(pos.last_price || 0);
           const realised    = parseFloat(pos.realised || 0);
-          const unrealised  = parseFloat(pos.unrealised || 0);
           const demat       = dematMap.get(sym);
 
           totalRealisedToday += realised;
 
-          // Build human-readable activity line for this symbol
+          // Build human-readable activity line
           let actLine = `*${sym}*: `;
           if (dayBuyQty > 0)  actLine += `Bought ${dayBuyQty} @ ₹${dayBuyPrice.toFixed(2)}`;
           if (dayBuyQty > 0 && daySellQty > 0) actLine += `  ·  `;
           if (daySellQty > 0) {
-            const source = demat ? 'from demat' : 'intraday';
-            actLine += `Sold ${daySellQty} @ ₹${daySellPrice.toFixed(2)} _(${source})_`;
+            const src = demat ? 'from demat' : 'intraday';
+            actLine += `Sold ${daySellQty} @ ₹${daySellPrice.toFixed(2)} _(${src})_`;
           }
           if (realised !== 0) {
             const rSign = realised >= 0 ? '+' : '';
             actLine += `\n   Realised P&L: ${rSign}₹${realised.toFixed(2)}`;
           }
           activityLines.push(actLine);
-
-          // Determine effective holding
-          if (netQty > 0) {
-            // Still holding something after today's trades
-            let avgCost = dayBuyPrice; // default: today's buy price
-            if (demat && dayBuyQty === 0) {
-              // Holding entirely from demat (no buy today, partial sell from demat)
-              avgCost = demat.avgPrice;
-            } else if (demat && dayBuyQty > 0) {
-              // Mixed: some demat + some bought today
-              const dematHeld = netQty - dayBuyQty + daySellQty;
-              const dematCost = Math.max(0, dematHeld) * demat.avgPrice;
-              const todayCost = dayBuyQty * dayBuyPrice;
-              avgCost = (dematCost + todayCost) / netQty;
-            }
-            effectiveHoldings.set(sym, {
-              symbol: sym, qty: netQty, avgPrice: avgCost,
-              lastPrice, unrealised,
-              source: demat ? (dayBuyQty > 0 ? 'mixed' : 'demat-partial') : 'today'
-            });
-          }
-          // If netQty <= 0 — position fully closed today, nothing to hold
         }
 
-        // Also include overnight demat holdings that had NO activity today
+        // ── Build effective holdings: DEMAT-FIRST ──
+        // Same logic as syncUpstoxHoldings: start from overnight demat,
+        // subtract today's sells, add today's buys. This is correct even when
+        // positions.quantity is negative (CNC sell from demat).
+        const effectiveHoldings = new Map();
+
+        // 1. Demat holdings adjusted for today's sells/buys
         for (const [sym, h] of dematMap) {
-          if (!effectiveHoldings.has(sym) && !positionsResult.positions.some(
-            p => (p.tradingsymbol || p.trading_symbol || '').replace(/-EQ$/, '') === sym
-          )) {
-            effectiveHoldings.set(sym, {
-              symbol: sym, qty: h.qty, avgPrice: h.avgPrice,
-              lastPrice: h.lastPrice, unrealised: h.dematPnl,
-              source: 'demat'
-            });
+          const pos         = positionData.get(sym);
+          const daySellQty  = pos?.day_sell_quantity || 0;
+          const dayBuyQty   = pos?.day_buy_quantity  || 0;
+          const dayBuyPrice = parseFloat(pos?.day_buy_price || 0);
+          const lastPrice   = parseFloat(pos?.last_price || 0) || h.lastPrice;
+
+          const dematRemaining = Math.max(0, h.qty - daySellQty);
+          const totalQty       = dematRemaining + dayBuyQty;
+          if (totalQty <= 0) continue; // fully sold, nothing to show
+
+          let avgCost = h.avgPrice;
+          if (dematRemaining > 0 && dayBuyQty > 0) {
+            // Weighted average: demat cost + today's buy cost
+            avgCost = (dematRemaining * h.avgPrice + dayBuyQty * dayBuyPrice) / totalQty;
+          } else if (dematRemaining === 0 && dayBuyQty > 0) {
+            // Sold all demat today, only holding today's new buy
+            avgCost = dayBuyPrice;
           }
+
+          let source = 'demat';
+          if (dematRemaining === 0)    source = 'today';         // sold all demat, only new buy
+          else if (dayBuyQty > 0)      source = 'mixed';         // demat + new buy
+          else if (daySellQty > 0)     source = 'demat-partial'; // partially sold from demat
+
+          effectiveHoldings.set(sym, {
+            symbol: sym, qty: totalQty, avgPrice: avgCost, lastPrice,
+            unrealised: totalQty * (lastPrice - avgCost),
+            source
+          });
+        }
+
+        // 2. Same-day buys on stocks NOT in demat (brand new position, settles tomorrow)
+        for (const [sym, pos] of positionData) {
+          if (dematMap.has(sym)) continue; // already handled above
+          const netQty   = pos.quantity || 0;
+          if (netQty <= 0) continue;
+          const lastPrice = parseFloat(pos.last_price || 0);
+          const avgCost   = parseFloat(pos.day_buy_price || pos.average_price || 0);
+          effectiveHoldings.set(sym, {
+            symbol: sym, qty: netQty, avgPrice: avgCost, lastPrice,
+            unrealised: parseFloat(pos.unrealised || 0),
+            source: 'today'
+          });
         }
 
         // ── Step 3: Calculate totals ──

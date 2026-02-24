@@ -6,7 +6,8 @@ import { getCurrentPrice } from './marketData.js';
 import { scanMarketForOpportunities, buildProfileBrief } from './advancedScreener.js';
 import { generateMultiAssetRecommendations } from './multiAssetRecommendations.js';
 import { placeOrder, getAuthorizationUrl, isTokenValid, getFunds, getHoldings, getPositions, getOrderBook } from './upstoxService.js';
-import { preOrderCapitalCheck, syncUpstoxFunds, syncUpstoxHoldings, pollOrderUntilSettled } from './capitalGuard.js';
+import { preOrderCapitalCheck, syncUpstoxFunds, syncUpstoxHoldings, getEffectiveCash, pollOrderUntilSettled } from './capitalGuard.js';
+import { generateTradeSignals } from './signalGenerator.js';
 import { getSystemPauseState, setPauseState, clearPauseState } from './pauseState.js';
 
 const prisma = new PrismaClient();
@@ -681,6 +682,10 @@ export function initTelegramBot() {
 /upstox withdraw N — Record ₹N sent to bank
 /upstox target N — Set profit-taking threshold to N%
 /auth — Login to Upstox (refresh daily)
+
+*Signals:*
+/signals — Re-send pending signals (viability check)
+/regen — Expire stale signals + generate fresh now
 
 *System:*
 /pause reason — Pause signal generation
@@ -1618,6 +1623,245 @@ Use /mute to disable all alerts`;
       } catch (error) {
         logger.error('Auth command error:', error);
         await botInstance.sendMessage(msg.chat.id, '❌ Failed to generate auth link').catch(() => {});
+      }
+    });
+
+    // /signals — re-send pending signals after viability check
+    botInstance.onText(/^\/signals$/, async (msg) => {
+      const chatId = msg.chat.id;
+      try {
+        const telegramUser = await getOrCreateUser(msg.from.id, msg.from.username, msg.from.first_name);
+        const userId = telegramUser.user.id;
+
+        // Sync funds first so capital check is current
+        try { await syncUpstoxFunds(userId); } catch (e) { /* non-blocking */ }
+
+        const signals = await prisma.tradeSignal.findMany({
+          where: {
+            portfolio: { userId, isActive: true, isPaused: false },
+            status: { in: ['PENDING', 'SNOOZED'] }
+          },
+          include: { portfolio: { include: { user: { include: { upstoxIntegration: true } } } } },
+          orderBy: { createdAt: 'asc' }
+        });
+
+        if (signals.length === 0) {
+          await botInstance.sendMessage(chatId,
+            `📭 *No pending signals*\n\nNo active trade signals found. Use /regen to generate fresh signals.`,
+            { parse_mode: 'Markdown' });
+          return;
+        }
+
+        await botInstance.sendMessage(chatId,
+          `🔎 *Checking ${signals.length} signal(s) for viability...*`,
+          { parse_mode: 'Markdown' });
+
+        // Cache DB holdings per portfolio for SELL validation
+        const holdingsCache = new Map();
+        async function getDbHoldings(portfolioId) {
+          if (!holdingsCache.has(portfolioId)) {
+            const rows = await prisma.holding.findMany({
+              where: { portfolioId }, select: { symbol: true, quantity: true }
+            });
+            const m = new Map();
+            for (const h of rows) m.set(h.symbol, h.quantity);
+            holdingsCache.set(portfolioId, m);
+          }
+          return holdingsCache.get(portfolioId);
+        }
+
+        let sent = 0, expiredCount = 0;
+
+        for (const signal of signals) {
+          const upstoxIntegration = signal.portfolio?.user?.upstoxIntegration;
+          const hasUpstox = signal.portfolio?.broker === 'UPSTOX' &&
+            upstoxIntegration?.isConnected && upstoxIntegration?.accessToken;
+
+          // ── Viability check ──
+          let viable = true;
+          let viabilityNote = '';
+
+          if (signal.side === 'SELL') {
+            const holdingsMap = await getDbHoldings(signal.portfolioId);
+            if ((holdingsMap.get(signal.symbol) || 0) <= 0) {
+              viable = false;
+              viabilityNote = 'Stock no longer held';
+            }
+          } else {
+            // BUY: check price range + capital
+            let estimatedPrice = parseFloat(signal.triggerPrice || signal.triggerLow || 0);
+            let livePrice = 0;
+            try {
+              const pd = await getCurrentPrice(signal.symbol, signal.exchange);
+              livePrice = pd?.price || pd?.lastPrice || 0;
+            } catch (e) { /* non-blocking */ }
+
+            if (estimatedPrice <= 0 || signal.triggerType === 'MARKET') {
+              estimatedPrice = livePrice || estimatedPrice;
+            }
+
+            // LIMIT: if live price already >8% above limit, entry window has passed
+            if (viable && signal.triggerType === 'LIMIT' && livePrice > 0) {
+              if (livePrice > parseFloat(signal.triggerPrice) * 1.08) {
+                viable = false;
+                viabilityNote = `Live ₹${livePrice.toFixed(0)} > limit ₹${parseFloat(signal.triggerPrice).toFixed(0)} by >8% — entry window passed`;
+              }
+            }
+
+            // Capital check (excluding this signal's own reservation)
+            if (viable && estimatedPrice > 0) {
+              const { effectiveCash } = await getEffectiveCash(signal.portfolioId, signal.id);
+              const orderCost = signal.quantity * estimatedPrice;
+              if (orderCost > effectiveCash) {
+                viable = false;
+                viabilityNote = `Insufficient cash: need ₹${orderCost.toFixed(0)}, have ₹${effectiveCash.toFixed(0)}`;
+              }
+            }
+          }
+
+          if (!viable) {
+            await prisma.tradeSignal.update({ where: { id: signal.id }, data: { status: 'EXPIRED' } });
+            expiredCount++;
+            await botInstance.sendMessage(chatId,
+              `🗑 *Signal #${signal.id} expired* — ${signal.side} ${signal.quantity}x *${signal.symbol}*\n_${viabilityNote}_`,
+              { parse_mode: 'Markdown' });
+            continue;
+          }
+
+          // ── Re-send signal with buttons ──
+          const sideEmoji = signal.side === 'BUY' ? '🟢' : '🔴';
+          const bar = '█'.repeat(Math.floor(signal.confidence / 10)) + '░'.repeat(10 - Math.floor(signal.confidence / 10));
+          let priceInfo = signal.triggerType === 'MARKET' ? 'At Market Price'
+            : signal.triggerType === 'LIMIT' ? `Limit: ₹${signal.triggerPrice}`
+            : `Zone: ₹${signal.triggerLow}–₹${signal.triggerHigh}`;
+          const portfolioName = signal.portfolio.ownerName || signal.portfolio.name;
+          const msgText = `${sideEmoji} *${signal.side} SIGNAL*\n━━━━━━━━━━━━━━━━━━━\n*${signal.symbol}* (${signal.exchange})\nQty: ${signal.quantity} | ${priceInfo}\n\n📁 *${portfolioName}*\n\nConfidence: ${bar} ${signal.confidence}%\n${signal.rationale || ''}`;
+
+          const buttons = hasUpstox
+            ? [{ text: '🚀 Execute', callback_data: `sig_exec_${signal.id}` },
+               { text: '⏰ Snooze 30m', callback_data: `sig_snooze_${signal.id}` },
+               { text: '❌ Dismiss', callback_data: `sig_dismiss_${signal.id}` }]
+            : [{ text: '✅ ACK', callback_data: `sig_ack_${signal.id}` },
+               { text: '⏰ Snooze 30m', callback_data: `sig_snooze_${signal.id}` },
+               { text: '❌ Dismiss', callback_data: `sig_dismiss_${signal.id}` }];
+
+          await botInstance.sendMessage(chatId, msgText, {
+            parse_mode: 'Markdown',
+            reply_markup: { inline_keyboard: [buttons] }
+          });
+          await prisma.tradeSignal.update({
+            where: { id: signal.id },
+            data: { lastNotifiedAt: new Date(), status: 'PENDING' }
+          });
+          sent++;
+          await new Promise(r => setTimeout(r, 300));
+        }
+
+        if (sent === 0 && expiredCount > 0) {
+          await botInstance.sendMessage(chatId,
+            `♻️ All ${expiredCount} signal(s) were stale and expired. Use /regen to generate fresh ones.`,
+            { parse_mode: 'Markdown' });
+        }
+      } catch (error) {
+        logger.error('/signals command error:', error);
+        await botInstance.sendMessage(chatId, '❌ Failed to fetch signals').catch(() => {});
+      }
+    });
+
+    // /regen — expire current pending signals and generate fresh ones now
+    botInstance.onText(/^\/regen$/, async (msg) => {
+      const chatId = msg.chat.id;
+      try {
+        const telegramUser = await getOrCreateUser(msg.from.id, msg.from.username, msg.from.first_name);
+        const userId = telegramUser.user.id;
+
+        const statusMsg = await botInstance.sendMessage(chatId,
+          '🔄 *Regenerating signals...*\n_Expiring old, syncing data, running AI analysis..._',
+          { parse_mode: 'Markdown' });
+
+        // Expire all current PENDING/SNOOZED signals for this user
+        const expiredResult = await prisma.tradeSignal.updateMany({
+          where: {
+            portfolio: { userId, isActive: true },
+            status: { in: ['PENDING', 'SNOOZED'] }
+          },
+          data: { status: 'EXPIRED' }
+        });
+        logger.info(`/regen: expired ${expiredResult.count} signals for user ${userId}`);
+
+        // Sync Upstox funds + holdings for freshest data
+        try { await syncUpstoxFunds(userId); } catch (e) { logger.warn('Fund sync failed during /regen:', e.message); }
+        try { await syncUpstoxHoldings(userId); } catch (e) { logger.warn('Holdings sync failed during /regen:', e.message); }
+
+        // Find eligible portfolios
+        const portfolios = await prisma.portfolio.findMany({
+          where: { userId, isActive: true, isPaused: false },
+          include: {
+            holdings: true,
+            user: { include: { upstoxIntegration: true } }
+          }
+        });
+
+        if (portfolios.length === 0) {
+          await botInstance.editMessageText('❌ No active portfolios found.',
+            { chat_id: chatId, message_id: statusMsg.message_id }).catch(() => {});
+          return;
+        }
+
+        let totalGenerated = 0;
+
+        for (const portfolio of portfolios) {
+          try {
+            const signals = await generateTradeSignals(portfolio.id);
+            if (signals.length === 0) continue;
+            totalGenerated += signals.length;
+
+            const upstoxIntegration = portfolio.user?.upstoxIntegration;
+            const hasUpstox = portfolio.broker === 'UPSTOX' &&
+              upstoxIntegration?.isConnected && upstoxIntegration?.accessToken;
+
+            for (const signal of signals) {
+              const sideEmoji = signal.side === 'BUY' ? '🟢' : '🔴';
+              const bar = '█'.repeat(Math.floor(signal.confidence / 10)) + '░'.repeat(10 - Math.floor(signal.confidence / 10));
+              let priceInfo = signal.triggerType === 'MARKET' ? 'At Market Price'
+                : signal.triggerType === 'LIMIT' ? `Limit: ₹${signal.triggerPrice}`
+                : `Zone: ₹${signal.triggerLow}–₹${signal.triggerHigh}`;
+              const portfolioName = portfolio.ownerName || portfolio.name;
+              const msgText = `${sideEmoji} *${signal.side} SIGNAL* _(fresh)_\n━━━━━━━━━━━━━━━━━━━\n*${signal.symbol}* (${signal.exchange})\nQty: ${signal.quantity} | ${priceInfo}\n\n📁 *${portfolioName}*\n\nConfidence: ${bar} ${signal.confidence}%\n${signal.rationale || ''}`;
+
+              const buttons = hasUpstox
+                ? [{ text: '🚀 Execute', callback_data: `sig_exec_${signal.id}` },
+                   { text: '⏰ Snooze 30m', callback_data: `sig_snooze_${signal.id}` },
+                   { text: '❌ Dismiss', callback_data: `sig_dismiss_${signal.id}` }]
+                : [{ text: '✅ ACK', callback_data: `sig_ack_${signal.id}` },
+                   { text: '⏰ Snooze 30m', callback_data: `sig_snooze_${signal.id}` },
+                   { text: '❌ Dismiss', callback_data: `sig_dismiss_${signal.id}` }];
+
+              await botInstance.sendMessage(chatId, msgText, {
+                parse_mode: 'Markdown',
+                reply_markup: { inline_keyboard: [buttons] }
+              });
+              await prisma.tradeSignal.update({
+                where: { id: signal.id },
+                data: { lastNotifiedAt: new Date() }
+              });
+              await new Promise(r => setTimeout(r, 300));
+            }
+          } catch (err) {
+            logger.error(`/regen: signal generation failed for portfolio ${portfolio.id}:`, err.message);
+          }
+        }
+
+        const summary = totalGenerated > 0
+          ? `✅ *${totalGenerated} fresh signal(s) sent above* (${expiredResult.count} old expired)`
+          : `♻️ Expired ${expiredResult.count} old signal(s).\n\n🤷 *No new signals generated*\n_Market conditions may not favour trades right now. Try again later._`;
+
+        await botInstance.editMessageText(summary,
+          { chat_id: chatId, message_id: statusMsg.message_id, parse_mode: 'Markdown' }).catch(() => {});
+
+      } catch (error) {
+        logger.error('/regen command error:', error);
+        await botInstance.sendMessage(chatId, '❌ Signal regeneration failed').catch(() => {});
       }
     });
 

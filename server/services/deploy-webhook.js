@@ -2,19 +2,21 @@ import crypto from 'crypto';
 import { writeFileSync } from 'fs';
 import logger from './logger.js';
 
-const WEBHOOK_SECRET = process.env.GITHUB_WEBHOOK_SECRET;
+// Support both GITHUB_WEBHOOK_SECRET (preferred) and WEBHOOK_SECRET (legacy)
+const WEBHOOK_SECRET = process.env.GITHUB_WEBHOOK_SECRET || process.env.WEBHOOK_SECRET;
 const TARGET_BRANCH = process.env.DEPLOY_BRANCH || 'main';
 const TRIGGER_FILE = '/host-tmp/invest-deploy-trigger.json';
 
-function verifySignature(payload, signature) {
+function verifySignature(rawBody, signature) {
   if (!WEBHOOK_SECRET) {
-    logger.warn('GITHUB_WEBHOOK_SECRET not set, skipping signature verification');
+    logger.warn('No webhook secret configured (GITHUB_WEBHOOK_SECRET), skipping signature verification');
     return true;
   }
 
+  // GitHub signs the raw request body bytes — not re-serialized JSON
   const hmac = crypto.createHmac('sha256', WEBHOOK_SECRET);
-  const digest = 'sha256=' + hmac.update(JSON.stringify(payload)).digest('hex');
-  
+  const digest = 'sha256=' + hmac.update(rawBody).digest('hex');
+
   try {
     return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(digest));
   } catch (error) {
@@ -62,7 +64,9 @@ export async function handleDeployWebhook(req, res) {
       return res.status(401).json({ error: 'No signature provided' });
     }
 
-    if (!verifySignature(req.body, signature)) {
+    // Use raw body for HMAC — req.rawBody is set by the express.json verify callback in index.js
+    const rawBody = req.rawBody || Buffer.from(JSON.stringify(req.body));
+    if (!verifySignature(rawBody, signature)) {
       logger.warn('Invalid webhook signature');
       return res.status(401).json({ error: 'Invalid signature' });
     }

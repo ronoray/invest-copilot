@@ -53,7 +53,10 @@ const corsOptions = {
 };
 app.use(cors(corsOptions));
 
-app.use(express.json());
+// Save raw body before JSON parsing — needed for webhook HMAC signature verification
+app.use(express.json({
+  verify: (req, _res, buf) => { req.rawBody = buf; }
+}));
 
 // Request logging
 app.use((req, res, next) => {

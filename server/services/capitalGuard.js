@@ -84,24 +84,44 @@ export async function validateSignals(signals, portfolioId) {
 
   // Validate BUY signals against remaining cash
   for (const sig of buySignals) {
-    let price = parseFloat(sig.triggerPrice || sig.triggerLow || sig.price || 0);
+    let aiPrice = parseFloat(sig.triggerPrice || sig.triggerLow || sig.price || 0);
     const quantity = Math.max(1, parseInt(sig.quantity) || 1);
 
-    // MARKET orders: fetch live price for capital validation
-    if (price <= 0) {
-      try {
-        const liveData = await getCurrentPrice(sig.symbol, sig.exchange || 'NSE');
-        price = liveData?.price || liveData?.lastPrice || 0;
-        if (price > 0) {
-          logger.info(`[Capital Guard] MARKET order ${sig.symbol}: fetched live price ₹${price.toFixed(2)} for validation`);
-        }
-      } catch (e) {
-        logger.warn(`[Capital Guard] Could not fetch price for ${sig.symbol}: ${e.message}`);
-      }
+    // Always fetch live price — catches AI hallucinations and stale estimates
+    let livePrice = 0;
+    try {
+      const liveData = await getCurrentPrice(sig.symbol, sig.exchange || 'NSE');
+      livePrice = parseFloat(liveData?.price || liveData?.lastPrice || 0);
+    } catch (e) {
+      logger.warn(`[Capital Guard] Live price fetch failed for ${sig.symbol}: ${e.message}`);
     }
 
-    if (price <= 0) {
-      // Still no price — drop signal rather than pass unchecked
+    // Determine price to use for capital check
+    let price = 0;
+
+    if (livePrice > 0 && aiPrice > 0) {
+      // Cross-check AI's price estimate against live market price
+      const deviation = Math.abs(aiPrice - livePrice) / livePrice * 100;
+      if (deviation > 40) {
+        // AI's price is wildly wrong (>40% off from live) — signal is based on bad data, drop it
+        logger.warn(`[Capital Guard] BUY ${sig.symbol}: DROPPED — AI price ₹${aiPrice.toFixed(0)} vs live ₹${livePrice.toFixed(0)} (${deviation.toFixed(0)}% deviation — stale/hallucinated price)`);
+        continue;
+      }
+      // Use live price for capital check (more accurate than AI estimate)
+      price = livePrice;
+      if (Math.abs(aiPrice - livePrice) / livePrice > 0.05) {
+        logger.info(`[Capital Guard] ${sig.symbol}: using live ₹${livePrice.toFixed(0)} for capital check (AI estimated ₹${aiPrice.toFixed(0)})`);
+      }
+    } else if (livePrice > 0) {
+      // MARKET order or no AI price — use live price
+      price = livePrice;
+      logger.info(`[Capital Guard] MARKET order ${sig.symbol}: using live ₹${price.toFixed(2)} for validation`);
+    } else if (aiPrice > 0) {
+      // Live fetch failed — fall back to AI price but log a warning
+      price = aiPrice;
+      logger.warn(`[Capital Guard] ${sig.symbol}: live price unavailable, using AI estimate ₹${price.toFixed(0)} (unverified)`);
+    } else {
+      // No price at all — drop signal
       logger.warn(`[Capital Guard] BUY ${sig.symbol}: DROPPED — no price available for capital check`);
       continue;
     }

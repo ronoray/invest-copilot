@@ -235,61 +235,78 @@ export async function searchSymbols(query) {
 // Market Context for AI Prompts
 // ============================================
 
-const marketContextCache = new Map();
-const CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
+// Sector ETFs — give Claude real directional data across the market
+// Fetched via API and cached; portfolio holding prices come from DB (no extra API calls)
+const SECTOR_ETFS = [
+  { symbol: 'NIFTYBEES',  label: 'Nifty 50' },
+  { symbol: 'BANKBEES',   label: 'Nifty Bank' },
+  { symbol: 'ITBEES',     label: 'Nifty IT' },
+  { symbol: 'JUNIORBEES', label: 'Nifty Next 50' },
+  { symbol: 'MIDCAPBEES', label: 'Nifty Midcap' },
+];
+
+const sectorEtfCache = { lines: null, timestamp: 0 };
+const SECTOR_CACHE_TTL_MS = 25 * 60 * 1000; // 25 min — covers 9:30 AM + 1 PM generation
 
 /**
  * Fetch real market data to inject into AI prompts.
- * Uses NIFTYBEES as Nifty 50 proxy + top holdings by invested value.
- * Results are cached for 15 minutes to avoid Alpha Vantage rate limits.
  *
- * @param {Array} holdings - Portfolio holdings array
+ * Sector ETFs are fetched via Alpha Vantage and cached for 25 min — they only
+ * need refreshing twice a day (morning + midday signal generation). Portfolio
+ * holdings use currentPrice already written to DB by the 5-min market scanner,
+ * so zero extra API calls are needed for holdings.
+ *
+ * @param {Array} holdings - Portfolio holdings array (with currentPrice from DB)
  * @returns {Promise<string>} Formatted market context text
  */
 export async function fetchMarketContext(holdings = []) {
-  // Build cache key from sorted symbols
-  const topHoldings = [...holdings]
-    .sort((a, b) => (b.quantity * parseFloat(b.avgPrice)) - (a.quantity * parseFloat(a.avgPrice)))
-    .slice(0, 3);
-  const symbols = ['NIFTYBEES', ...topHoldings.map(h => h.symbol)];
-  const cacheKey = symbols.sort().join(',');
-
-  // Check cache
-  const cached = marketContextCache.get(cacheKey);
-  if (cached && (Date.now() - cached.timestamp) < CACHE_TTL_MS) {
-    return cached.text;
-  }
-
   const now = new Date();
   const timeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' });
-  const lines = [`=== REAL-TIME MARKET DATA (fetched at ${timeStr} IST) ===`];
 
-  // Fetch NIFTYBEES as Nifty proxy
-  try {
-    const nifty = await getCurrentPrice('NIFTYBEES', 'NSE');
-    lines.push(`NIFTYBEES (Nifty 50 ETF proxy): Rs ${nifty.price.toFixed(2)} (${nifty.changePercent >= 0 ? '+' : ''}${nifty.changePercent.toFixed(2)}%)`);
-  } catch (e) {
-    lines.push('NIFTYBEES: Data unavailable');
-  }
-
-  // Fetch top holdings prices
-  for (const h of topHoldings) {
-    try {
-      await sleep(12000); // Alpha Vantage rate limit
-      const data = await getCurrentPrice(h.symbol, h.exchange || 'NSE');
-      lines.push(`${h.symbol}: Rs ${data.price.toFixed(2)} (${data.changePercent >= 0 ? '+' : ''}${data.changePercent.toFixed(2)}%)`);
-    } catch (e) {
-      lines.push(`${h.symbol}: Data unavailable`);
+  // ── Sector ETFs (API, cached 25 min) ──────────────────────────────────────
+  let sectorLines;
+  if (sectorEtfCache.lines && (Date.now() - sectorEtfCache.timestamp) < SECTOR_CACHE_TTL_MS) {
+    sectorLines = sectorEtfCache.lines;
+  } else {
+    sectorLines = [];
+    for (const etf of SECTOR_ETFS) {
+      try {
+        const data = await getCurrentPrice(etf.symbol, 'NSE');
+        const sign = data.changePercent >= 0 ? '+' : '';
+        sectorLines.push(`${etf.label} (${etf.symbol}): ₹${data.price.toFixed(2)} (${sign}${data.changePercent.toFixed(2)}%)`);
+      } catch (e) {
+        sectorLines.push(`${etf.label} (${etf.symbol}): unavailable`);
+      }
+      await sleep(12000); // Alpha Vantage free-tier rate limit
     }
+    sectorEtfCache.lines = sectorLines;
+    sectorEtfCache.timestamp = Date.now();
   }
 
-  lines.push('=== END MARKET DATA ===');
-  const text = lines.join('\n');
+  // ── Portfolio holdings (DB prices — zero extra API calls) ─────────────────
+  const topHoldings = [...holdings]
+    .sort((a, b) => (b.quantity * parseFloat(b.avgPrice)) - (a.quantity * parseFloat(a.avgPrice)))
+    .slice(0, 5);
 
-  // Cache result
-  marketContextCache.set(cacheKey, { text, timestamp: Date.now() });
+  const holdingLines = topHoldings.map(h => {
+    const current = parseFloat(h.currentPrice || 0);
+    const avg = parseFloat(h.avgPrice || 0);
+    if (!current) return `${h.symbol}: price not in DB yet`;
+    const pnlPct = avg > 0 ? ((current - avg) / avg * 100).toFixed(1) : '0.0';
+    const pnlSign = parseFloat(pnlPct) >= 0 ? '+' : '';
+    return `${h.symbol}: ₹${current.toFixed(2)} (avg ₹${avg.toFixed(2)}, P&L ${pnlSign}${pnlPct}%)`;
+  });
 
-  return text;
+  return [
+    `=== REAL-TIME MARKET DATA (as of ${timeStr} IST) ===`,
+    '',
+    '--- Broad Market & Sectors ---',
+    ...sectorLines,
+    '',
+    '--- Portfolio Holdings (live prices) ---',
+    ...(holdingLines.length ? holdingLines : ['No holdings']),
+    '=== END MARKET DATA ===',
+  ].join('\n');
 }
 
 /**

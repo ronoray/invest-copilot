@@ -172,6 +172,105 @@ Last Verified: ${lastVerified}
 }
 
 /**
+ * Build a portfolio wealth trajectory block — the strategic compass for every signal.
+ *
+ * Tells Claude: where did we start, where are we now, are we winning or losing the
+ * compounding battle, and what posture does that demand right now.
+ *
+ * This is the difference between transactional signals ("good trade today") and
+ * strategic wealth generation ("we're 4% behind the monthly target — we need
+ * controlled aggression on the next 2 setups to close the gap").
+ *
+ * @param {object} portfolio - Portfolio with holdings included
+ * @returns {string} Formatted trajectory block for prompt injection
+ */
+export function buildPortfolioTrajectory(portfolio) {
+  if (!portfolio) return '';
+
+  const startingCapital = parseFloat(portfolio.startingCapital || 0);
+  if (startingCapital <= 0) return '';
+
+  const holdings        = portfolio.holdings || [];
+  const availableCash   = parseFloat(portfolio.availableCash || 0);
+  const totalWithdrawn  = parseFloat(portfolio.totalWithdrawn || 0);
+
+  // Mark-to-market portfolio value
+  const totalCurrent    = holdings.reduce((s, h) => s + h.quantity * parseFloat(h.currentPrice || h.avgPrice), 0);
+  const totalValue      = totalCurrent + availableCash;
+
+  // Total wealth = current value + profits already banked
+  const totalWealth     = totalValue + totalWithdrawn;
+  const totalPnL        = totalWealth - startingCapital;
+  const totalPnLPct     = (totalPnL / startingCapital) * 100;
+
+  // Days the portfolio has been active
+  const startDate   = portfolio.createdAt ? new Date(portfolio.createdAt) : null;
+  const daysActive  = startDate
+    ? Math.max(1, Math.floor((Date.now() - startDate.getTime()) / (1000 * 60 * 60 * 24)))
+    : null;
+
+  // Implied compounding rates
+  const impliedMonthlyRate  = daysActive ? (totalPnLPct / daysActive) * 30 : null;
+  const annualizedRate      = impliedMonthlyRate !== null ? impliedMonthlyRate * 12 : null;
+
+  // Monthly target comparison
+  const monthlyTargetPct  = parseFloat(portfolio.profitTargetPct || 5);
+  const targetByNow       = daysActive ? monthlyTargetPct * (daysActive / 30) : null;
+  const gapPct            = targetByNow !== null ? totalPnLPct - targetByNow : null;
+  const gapAmount         = targetByNow !== null
+    ? ((targetByNow / 100) * startingCapital) - totalPnL
+    : null; // positive = need to earn this to catch up
+
+  // Drawdown from starting capital
+  const isDrawdown     = totalPnLPct < -2;
+  const recoveryNeeded = isDrawdown ? Math.abs(totalPnL) : null;
+
+  // Trajectory verdict and action mandate
+  let trajectoryStatus, trajectoryMandate;
+
+  if (isDrawdown && totalPnLPct < -5) {
+    trajectoryStatus  = '🔴 DRAWDOWN — RECOVERY MODE ACTIVE';
+    trajectoryMandate = `Portfolio is ${Math.abs(totalPnLPct).toFixed(1)}% below starting capital. I owe this portfolio ₹${recoveryNeeded.toFixed(0)} to break even. MANDATE: Every signal must have an absolute stop. No speculative plays until we're back above starting capital. High-conviction setups only. R:R minimum 3:1.`;
+  } else if (isDrawdown) {
+    trajectoryStatus  = '🟡 SLIGHT DRAWDOWN — CAUTIOUS RECOVERY';
+    trajectoryMandate = `Portfolio is ${Math.abs(totalPnLPct).toFixed(1)}% below starting capital. Recovery target: ₹${recoveryNeeded.toFixed(0)}. MANDATE: Moderate aggression. Only Grade A setups. Stops are non-negotiable.`;
+  } else if (gapPct !== null && gapPct < -4) {
+    trajectoryStatus  = '🟡 BEHIND MONTHLY TARGET — ACCELERATE';
+    trajectoryMandate = `${Math.abs(gapPct).toFixed(1)}% behind the ${monthlyTargetPct}%/month compounding target. Need to earn ₹${Math.abs(gapAmount || 0).toFixed(0)} more to hit the target for these ${daysActive} days. MANDATE: Take full-sized positions on high-conviction setups. This is controlled aggression — full size on 80%+ confidence trades, not gambling on weak setups.`;
+  } else if (gapPct !== null && gapPct > 5) {
+    trajectoryStatus  = '🟢 AHEAD OF TARGET — LOCK IN GAINS';
+    trajectoryMandate = `${gapPct.toFixed(1)}% ahead of the monthly trajectory. We've already built a buffer. MANDATE: Tighten stops on existing positions. Don't give back gains chasing marginal setups. Only enter new positions if conviction is 80%+.`;
+  } else {
+    trajectoryStatus  = '🟢 ON TRACK — MAINTAIN COMPOUNDING DISCIPLINE';
+    trajectoryMandate = `Portfolio is compounding on schedule at ${impliedMonthlyRate !== null ? impliedMonthlyRate.toFixed(2) + '%/month' : 'target rate'}. MANDATE: Maintain discipline. Full-sized positions on good setups, reduced size on borderline calls.`;
+  }
+
+  const lines = [
+    '=== WEALTH TRAJECTORY — MY PERFORMANCE MANDATE ===',
+    `Capital Deployed: ₹${startingCapital.toLocaleString('en-IN')}`,
+    `Current Portfolio Value: ₹${totalValue.toLocaleString('en-IN')}` +
+      ` (₹${availableCash.toLocaleString('en-IN')} cash + ₹${totalCurrent.toLocaleString('en-IN')} invested)`,
+    totalWithdrawn > 0
+      ? `Profits Withdrawn: ₹${totalWithdrawn.toLocaleString('en-IN')} (total wealth ₹${totalWealth.toLocaleString('en-IN')})`
+      : '',
+    `Total P&L: ${totalPnL >= 0 ? '+' : ''}₹${totalPnL.toLocaleString('en-IN')}` +
+      ` (${totalPnL >= 0 ? '+' : ''}${totalPnLPct.toFixed(2)}% on capital)`,
+    daysActive
+      ? `Days Active: ${daysActive} | Implied: ${impliedMonthlyRate !== null ? (impliedMonthlyRate >= 0 ? '+' : '') + impliedMonthlyRate.toFixed(2) + '%/month' : 'N/A'}` +
+        ` (${annualizedRate !== null ? (annualizedRate >= 0 ? '+' : '') + annualizedRate.toFixed(1) + '% annualized' : ''})`
+      : '',
+    targetByNow !== null
+      ? `Monthly Target: ${monthlyTargetPct}%/month | Target by day ${daysActive}: ${targetByNow.toFixed(1)}% | Actual: ${totalPnLPct.toFixed(1)}% | Gap: ${gapPct >= 0 ? '+' : ''}${gapPct.toFixed(1)}%`
+      : '',
+    `Trajectory: ${trajectoryStatus}`,
+    trajectoryMandate,
+    '=== END TRAJECTORY ===',
+  ].filter(Boolean);
+
+  return lines.join('\n');
+}
+
+/**
  * Build growth directive text based on portfolio risk profile.
  * This frames the AI's approach to signal generation.
  *
@@ -489,4 +588,4 @@ export function getAllNSESymbols() {
   ];
 }
 
-export default { scanMarketForOpportunities, calculateTechnicals, getAllNSESymbols, buildProfileBrief, buildAllPortfoliosBrief, buildPortfolioAudit, buildGrowthDirective };
+export default { scanMarketForOpportunities, calculateTechnicals, getAllNSESymbols, buildProfileBrief, buildAllPortfoliosBrief, buildPortfolioAudit, buildGrowthDirective, buildPortfolioTrajectory };

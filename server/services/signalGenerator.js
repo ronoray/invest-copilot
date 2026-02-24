@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import prisma from './prisma.js';
-import { buildProfileBrief, buildPortfolioAudit, buildGrowthDirective } from './advancedScreener.js';
+import { buildProfileBrief, buildPortfolioAudit, buildGrowthDirective, buildPortfolioTrajectory } from './advancedScreener.js';
 import { fetchMarketContext } from './marketData.js';
 import { ANALYST_IDENTITY, ELITE_TRADER_EDGE, MARKET_DATA_INSTRUCTION, TECHNICAL_FRAMEWORK, buildAccountabilityScorecard } from './analystPrompts.js';
 import { getEffectiveCash, validateSignals } from './capitalGuard.js';
@@ -32,8 +32,9 @@ export async function generateTradeSignals(portfolioId, extraContext = '') {
   const profileBrief = buildProfileBrief(portfolio);
   const { effectiveCash, reservedCash, rawCash } = await getEffectiveCash(portfolioId);
 
-  // Build portfolio audit and growth directive
-  const portfolioAudit = buildPortfolioAudit(portfolio, effectiveCash, reservedCash);
+  // Build portfolio audit, trajectory, and growth directive
+  const portfolioAudit  = buildPortfolioAudit(portfolio, effectiveCash, reservedCash);
+  const trajectory      = buildPortfolioTrajectory(portfolio);
   const growthDirective = buildGrowthDirective(portfolio);
 
   // Get today's target for context
@@ -143,6 +144,8 @@ ${ELITE_TRADER_EDGE}
 ${TECHNICAL_FRAMEWORK}
 
 ${growthDirective}
+
+${trajectory}
 
 === MARKET REGIME — READ THIS FIRST ===
 ${marketRegime.details}

@@ -7,6 +7,7 @@ import { isTokenValid, getAuthorizationUrl, getHoldings, getOrderStatus } from '
 import { syncUpstoxFunds, syncUpstoxHoldings, getEffectiveCash } from '../services/capitalGuard.js';
 import { buildPreMarketContext } from '../services/marketIntelligence.js';
 import { ANALYST_IDENTITY } from '../services/analystPrompts.js';
+import { buildPortfolioTrajectory } from '../services/advancedScreener.js';
 import { getMarketRegime, buildHoldingsTechnicals } from '../services/technicalAnalysis.js';
 import { isTradingDay } from '../utils/marketHolidays.js';
 import { getSystemPauseState } from '../services/pauseState.js';
@@ -298,16 +299,20 @@ async function eodReview() {
 
       const availableCash = parseFloat(portfolio.availableCash || portfolio.startingCapital || 0);
 
+      const trajectoryEOD = buildPortfolioTrajectory(portfolio);
+
       const prompt = `${ANALYST_IDENTITY}
 
 ${sectorContext}
+
+${trajectoryEOD}
 
 === TODAY'S SIGNALS & OUTCOMES ===
 ${signalLines}
 
 === PORTFOLIO STATE (CLOSE OF DAY) ===
 ${holdingsSummary}
-Total portfolio P&L: ${parseFloat(totalPnlPct) >= 0 ? '+' : ''}${totalPnlPct}% (${totalPnl >= 0 ? '+' : ''}₹${totalPnl.toFixed(0)})
+Today's P&L on holdings: ${parseFloat(totalPnlPct) >= 0 ? '+' : ''}${totalPnlPct}% (${totalPnl >= 0 ? '+' : ''}₹${totalPnl.toFixed(0)})
 ${holdingsTechEOD ? '\n' + holdingsTechEOD : ''}
 
 Available capital for tomorrow: ₹${availableCash.toLocaleString('en-IN')}

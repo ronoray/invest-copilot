@@ -109,7 +109,8 @@ app.use('/api/tax', authenticate, taxRoutes);
 app.use('/api/upstox', authenticate, upstoxRoutes);
 app.use('/api/daily-target', authenticate, dailyTargetRoutes);
 app.use('/api/signals', authenticate, signalRoutes);
-app.post('/api/deploy/webhook', handleDeployWebhook);
+app.post('/api/deploy/webhook', handleDeployWebhook);   // legacy path (under /api)
+app.post('/webhook/github', handleDeployWebhook);       // CF-bypass path (same router as /webhook/upstox)
 app.post('/api/deploy/trigger', authenticate, triggerManualDeploy);
 
 // ============================================

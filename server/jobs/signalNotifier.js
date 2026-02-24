@@ -63,13 +63,15 @@ async function alertEligibleUsers(msg, opts = {}) {
 // Checked by the watchdog cron every 15 minutes during market hours.
 const scanHeartbeat = new Map(); // name → { at: Date, signals: number }
 
-// Canonical scan schedule — single source of truth for heartbeat + recovery
+// Canonical scan schedule — single source of truth for heartbeat + recovery.
+// Covers market hours AND the evening playbook (7:30 PM).
 const SCAN_SCHEDULE_DEF = [
-  { name: 'pre-market',    hour: 8,  minute: 30 },
-  { name: '9:30-signals',  hour: 9,  minute: 30 },
-  { name: '11:00-pivot',   hour: 11, minute: 0  },
-  { name: '13:00-signals', hour: 13, minute: 0  },
-  { name: '14:30-pivot',   hour: 14, minute: 30 },
+  { name: 'pre-market',      hour: 8,  minute: 30 },
+  { name: '9:30-signals',    hour: 9,  minute: 30 },
+  { name: '11:00-pivot',     hour: 11, minute: 0  },
+  { name: '13:00-signals',   hour: 13, minute: 0  },
+  { name: '14:30-pivot',     hour: 14, minute: 30 },
+  { name: 'evening-playbook',hour: 19, minute: 30 },
 ];
 
 function recordScanRun(name, signals = 0) {
@@ -102,11 +104,29 @@ async function runStartupRecovery() {
   if (!isTradingDay(new Date())) return;
 
   const { totalMin } = nowIST();
-  const MARKET_OPEN  = 9  * 60 + 30;
-  const MARKET_CLOSE = 15 * 60 + 30;
+  const MARKET_OPEN    = 9  * 60 + 30;
+  const MARKET_CLOSE   = 15 * 60 + 30;
+  const EVENING_START  = 19 * 60 + 30; // 7:30 PM
+  const EVENING_END    = 20 * 60 + 30; // 8:30 PM grace window
 
-  if (totalMin < MARKET_OPEN || totalMin > MARKET_CLOSE) {
-    logger.info('[Startup Recovery] Outside market hours — no recovery needed');
+  const inMarketHours  = totalMin >= MARKET_OPEN  && totalMin <= MARKET_CLOSE;
+  const inEveningHours = totalMin >= EVENING_START && totalMin <= EVENING_END;
+
+  // Handle evening playbook recovery (deploy happened around 7:30 PM)
+  if (inEveningHours && !scanHeartbeat.get('evening-playbook')) {
+    logger.warn('[Startup Recovery] Evening Playbook not sent yet — running now');
+    try {
+      const { runEveningPlaybook } = await import('./telegramAlerts.js');
+      await runEveningPlaybook();
+      recordScanRun('evening-playbook');
+    } catch (err) {
+      logger.error('[Startup Recovery] Evening Playbook failed:', err.message);
+    }
+    return;
+  }
+
+  if (!inMarketHours) {
+    logger.info('[Startup Recovery] Outside market/evening hours — no recovery needed');
     return;
   }
 
@@ -154,7 +174,8 @@ async function checkScanHealthAndRecover() {
   if (!isTradingDay(new Date())) return;
 
   const { totalMin } = nowIST();
-  if (totalMin < 9 * 60 + 30 || totalMin > 15 * 60 + 30) return;
+  // Cover 8 AM pre-market through 8:30 PM (catches evening playbook at 7:30 PM)
+  if (totalMin < 8 * 60 || totalMin > 20 * 60 + 30) return;
 
   const pauseState = await getSystemPauseState();
   if (pauseState) return;
@@ -190,7 +211,11 @@ async function checkScanHealthAndRecover() {
     );
 
     try {
-      if (scan.name.includes('pivot')) {
+      if (scan.name === 'evening-playbook') {
+        const { runEveningPlaybook } = await import('./telegramAlerts.js');
+        await runEveningPlaybook();
+        recordScanRun(scan.name);
+      } else if (scan.name.includes('pivot')) {
         const label = scan.name === '11:00-pivot' ? '11:00 AM' : '2:30 PM';
         await generateSignalsAtPivot(label);
         recordScanRun(scan.name);
@@ -1587,9 +1612,9 @@ export function initSignalNotifier() {
 
   // ─── Reliability: Watchdog + Startup Recovery ──────────────────────────────
 
-  // Watchdog: every 15 min during market+pre-market hours — detects missed scans
-  // and checks Alpha Vantage budget. Recovers missed scans automatically.
-  cron.schedule('*/15 8-16 * * 1-5', async () => {
+  // Watchdog: every 15 min from pre-market through evening — detects missed scans.
+  // Covers 8 AM (pre-market) through 8:30 PM (evening playbook grace window).
+  cron.schedule('*/15 8-20 * * 1-5', async () => {
     await checkScanHealthAndRecover();
   }, {
     timezone: 'Asia/Kolkata'
@@ -1614,7 +1639,7 @@ export function initSignalNotifier() {
   logger.info('  Order status polling: every 5 min, 9 AM-4 PM IST');
   logger.info('  Mid-day holdings sync (DDPI): every 30 min, 9-3:30 PM IST');
   logger.info('  EOD review: 3:45 PM IST');
-  logger.info('  Watchdog (missed scan recovery): every 15 min, 8-4 PM IST');
+  logger.info('  Watchdog (missed scan recovery): every 15 min, 8 AM–8:30 PM IST');
   logger.info('  Startup recovery: fires 12s after init');
 }
 

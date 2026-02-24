@@ -18,24 +18,34 @@ let bot = null;
 function getBot() {
   if (!bot && process.env.TELEGRAM_BOT_TOKEN) {
     try {
-      bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, {
-        polling: {
-          interval: 1000,
-          autoStart: true,
-          params: {
-            timeout: 10
-          }
-        }
-      });
+      // Init without polling first so we can send messages immediately
+      bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: false });
 
-      // Handle polling errors
+      // Handle errors before polling starts
       bot.on('polling_error', (error) => {
-        logger.error('Telegram polling error:', error.message);
+        // 409 = previous instance still polling; resolves automatically after timeout
+        if (!error.message?.includes('409')) {
+          logger.error('Telegram polling error:', error.message);
+        }
       });
 
       bot.on('error', (error) => {
         logger.error('Telegram error:', error.message);
       });
+
+      // Delay polling start by 15s — gives previous container's 10s long-poll time to expire
+      // This eliminates the 409 Conflict on every restart/deploy
+      setTimeout(() => {
+        bot.deleteWebhook({ drop_pending_updates: true })
+          .catch(() => {}) // webhook may not be set, ignore
+          .finally(() => {
+            bot.startPolling({
+              interval: 1000,
+              params: { timeout: 10, allowed_updates: ['message', 'callback_query'] }
+            });
+            logger.info('Telegram bot polling started');
+          });
+      }, 15000);
     } catch (error) {
       logger.error('Failed to initialize Telegram bot:', error.message);
     }
@@ -686,6 +696,7 @@ export function initTelegramBot() {
 *Signals:*
 /signals — Re-send pending signals (viability check)
 /regen — Expire stale signals + generate fresh now
+/report — Full daily report: P&L, signals, next scans
 
 *System:*
 /pause reason — Pause signal generation
@@ -732,6 +743,11 @@ export function initTelegramBot() {
 /upstox withdraw N - Record ₹N sent to bank (adjusts baseline)
 /upstox target N - Set profit-taking threshold to N%
 /auth - Login to Upstox (daily refresh)
+
+*Signals:*
+/signals - Re-send pending signals
+/regen - Generate fresh signals now
+/report - Full daily report: P&L, trades, next scans
 
 *System:*
 /pause [reason] - Pause signal generation
@@ -1974,6 +1990,147 @@ Use /mute to disable all alerts`;
         } catch (e) {
           // ignore
         }
+      }
+    });
+
+    // /report — Daily intelligence report: positions, signals, P&L, next scans
+    botInstance.onText(/^\/report$/, async (msg) => {
+      try {
+        const telegramUser = await getOrCreateUser(msg.from.id, msg.from.username, msg.from.first_name);
+        const portfolios = await getUserPortfolios(telegramUser.user.id);
+        const activePortfolios = portfolios.filter(p => !p.isPaused);
+        const targets = activePortfolios.length > 0 ? activePortfolios : portfolios.slice(0, 1);
+
+        if (targets.length === 0) {
+          await botInstance.sendMessage(msg.chat.id, '📭 No portfolios found.');
+          return;
+        }
+
+        for (const portfolio of targets) {
+          const todayIST = new Date();
+          todayIST.setHours(0, 0, 0, 0);
+
+          // Today's signals
+          const todaySignals = await prisma.tradeSignal.findMany({
+            where: { portfolioId: portfolio.id, createdAt: { gte: todayIST } },
+            orderBy: { createdAt: 'asc' }
+          });
+
+          const pendingSignals = todaySignals.filter(s => s.status === 'PENDING');
+
+          // Holdings P&L
+          const holdings = portfolio.holdings || [];
+          const totalInvested = holdings.reduce((sum, h) =>
+            sum + (parseFloat(h.avgPrice || 0) * parseInt(h.quantity || 0)), 0);
+          const totalCurrentVal = holdings.reduce((sum, h) => {
+            const curr = parseFloat(h.currentPrice || h.avgPrice || 0);
+            return sum + curr * parseInt(h.quantity || 0);
+          }, 0);
+          const openPnL = totalCurrentVal - totalInvested;
+
+          const cash = parseFloat(portfolio.availableCash || 0);
+          const totalVal = totalCurrentVal + cash;
+          const startCap = parseFloat(portfolio.startingCapital || totalVal);
+          const overallPnL = totalVal - startCap;
+          const overallPnLPct = startCap > 0 ? ((overallPnL / startCap) * 100) : 0;
+
+          // Monthly target progress
+          const targetPct = parseFloat(portfolio.profitTargetPct || 5);
+          const targetAmount = startCap * targetPct / 100;
+          const targetProgress = targetAmount > 0 ? Math.round(overallPnL / targetAmount * 100) : 0;
+          const targetBar = overallPnL >= targetAmount
+            ? '🟢 MONTHLY TARGET HIT'
+            : overallPnLPct > 0
+              ? `🟡 ${targetProgress}% to ${targetPct}% monthly target`
+              : `🔴 DRAWDOWN — ${overallPnLPct.toFixed(1)}%`;
+
+          // Today's signal activity
+          const signalLines = todaySignals.length > 0
+            ? todaySignals.map(s => {
+                const st = s.status === 'EXECUTED' ? '✅' : s.status === 'EXPIRED' ? '⏰' : s.status === 'DISMISSED' ? '❌' : '🔔';
+                const side = s.side === 'BUY' ? '🟢' : '🔴';
+                const price = s.triggerPrice ? `₹${parseFloat(s.triggerPrice).toFixed(0)}` : 'MKT';
+                return `${st}${side} ${s.symbol} ×${s.quantity} @ ${price} (${s.confidence}%)`;
+              }).join('\n')
+            : 'No signals today yet';
+
+          // Live positions detail
+          const holdingLines = holdings.length > 0
+            ? holdings.map(h => {
+                const avg = parseFloat(h.avgPrice || 0);
+                const curr = parseFloat(h.currentPrice || avg);
+                const qty = parseInt(h.quantity || 0);
+                const pnl = (curr - avg) * qty;
+                const pnlPct = avg > 0 ? ((curr - avg) / avg * 100).toFixed(1) : 0;
+                const arrow = pnl >= 0 ? '▲' : '▼';
+                const pnlStr = pnl >= 0
+                  ? `+₹${pnl.toFixed(0)} (+${pnlPct}%)`
+                  : `-₹${Math.abs(pnl).toFixed(0)} (${pnlPct}%)`;
+                return `• *${h.symbol}* ${qty}sh | Avg ₹${avg.toFixed(0)} → ₹${curr.toFixed(0)} | ${arrow}${pnlStr}`;
+              }).join('\n')
+            : 'No open positions';
+
+          // Pending signals
+          const pendingLines = pendingSignals.length > 0
+            ? pendingSignals.map(s => {
+                const side = s.side === 'BUY' ? '🟢 BUY' : '🔴 SELL';
+                const price = s.triggerPrice ? `₹${parseFloat(s.triggerPrice).toFixed(0)}` : 'MARKET';
+                return `• ${side} ${s.symbol} ×${s.quantity} @ ${price} — ${s.confidence}% conf`;
+              }).join('\n')
+            : 'None awaiting action';
+
+          // Upcoming scans (based on IST clock)
+          const nowTotalMin = new Date().getHours() * 60 + new Date().getMinutes();
+          const scanSchedule = [
+            { label: 'Pre-Market Brief', hm: '08:30', mins: 8 * 60 + 30 },
+            { label: 'Morning Full Scan', hm: '09:30', mins: 9 * 60 + 30 },
+            { label: 'Mid-Morning Pivot', hm: '11:00', mins: 11 * 60 },
+            { label: 'Afternoon Scan',   hm: '13:00', mins: 13 * 60 },
+            { label: 'Pre-Close Pivot',  hm: '14:30', mins: 14 * 60 + 30 },
+            { label: 'EOD Review',       hm: '15:45', mins: 15 * 60 + 45 },
+          ];
+          const nextScans = scanSchedule
+            .filter(s => s.mins > nowTotalMin)
+            .slice(0, 3)
+            .map(s => `  📍 ${s.hm} — ${s.label}`)
+            .join('\n') || '  Market closed for today';
+
+          const pnlSign  = overallPnL >= 0 ? '+' : '';
+          const openSign = openPnL >= 0 ? '+' : '';
+
+          const report = `📊 *${portfolio.ownerName || portfolio.name} — Daily Report*
+━━━━━━━━━━━━━━━━━━━
+💰 *Capital Standing*
+Starting:  ₹${startCap.toLocaleString('en-IN')}
+Current:   ₹${totalVal.toLocaleString('en-IN')}
+P&L:       ${pnlSign}₹${Math.abs(overallPnL).toFixed(0)} (${pnlSign}${overallPnLPct.toFixed(1)}%)
+Cash:      ₹${cash.toLocaleString('en-IN')} available
+${targetBar}
+
+📈 *Live Positions (${holdings.length})*
+${holdingLines}${holdings.length > 0 ? `\nOpen P&L: ${openSign}₹${Math.abs(openPnL).toFixed(0)}` : ''}
+
+🎯 *Today's Signals (${todaySignals.length})*
+${signalLines}
+
+⏳ *Pending — Awaiting Action*
+${pendingLines}
+
+🔄 *Next AI Scans*
+${nextScans}`;
+
+          if (report.length <= 4000) {
+            await botInstance.sendMessage(msg.chat.id, report, { parse_mode: 'Markdown' });
+          } else {
+            // Split at a natural line break near the midpoint
+            const splitAt = report.lastIndexOf('\n', Math.floor(report.length / 2));
+            await botInstance.sendMessage(msg.chat.id, report.substring(0, splitAt), { parse_mode: 'Markdown' });
+            await botInstance.sendMessage(msg.chat.id, report.substring(splitAt + 1), { parse_mode: 'Markdown' });
+          }
+        }
+      } catch (error) {
+        logger.error('Report command error:', error);
+        await botInstance.sendMessage(msg.chat.id, '❌ Error generating report. Please try again.').catch(() => {});
       }
     });
 

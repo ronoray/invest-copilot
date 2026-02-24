@@ -324,7 +324,7 @@ async function handleExecuteSignal(botInstance, query, signalId) {
       }
 
       if (estimatedPrice > 0) {
-        const capitalCheck = await preOrderCapitalCheck(signal.portfolioId, 'BUY', signal.quantity, estimatedPrice);
+        const capitalCheck = await preOrderCapitalCheck(signal.portfolioId, 'BUY', signal.quantity, estimatedPrice, signalId);
         if (!capitalCheck.allowed) {
           logger.warn(`Signal #${signalId} capital check failed: ${capitalCheck.reason}`);
           await botInstance.editMessageReplyMarkup(
@@ -473,7 +473,7 @@ async function handleExecuteMarketFallback(botInstance, query, signalId) {
       }
 
       if (estimatedPrice > 0) {
-        const capitalCheck = await preOrderCapitalCheck(signal.portfolioId, 'BUY', signal.quantity, estimatedPrice);
+        const capitalCheck = await preOrderCapitalCheck(signal.portfolioId, 'BUY', signal.quantity, estimatedPrice, signalId);
         if (!capitalCheck.allowed) {
           logger.warn(`Signal #${signalId} MARKET fallback capital check failed: ${capitalCheck.reason}`);
           await botInstance.editMessageReplyMarkup(

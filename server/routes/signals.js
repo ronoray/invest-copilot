@@ -284,7 +284,7 @@ router.post('/:id/execute', async (req, res) => {
       }
 
       if (estimatedPrice > 0) {
-        const capitalCheck = await preOrderCapitalCheck(signal.portfolioId, 'BUY', signal.quantity, estimatedPrice);
+        const capitalCheck = await preOrderCapitalCheck(signal.portfolioId, 'BUY', signal.quantity, estimatedPrice, signalId);
         if (!capitalCheck.allowed) {
           return res.status(400).json({ error: capitalCheck.reason });
         }

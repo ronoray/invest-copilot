@@ -12,9 +12,10 @@ import { getCurrentPrice } from './marketData.js';
  * Pending/Acked/Snoozed BUY signals reserve cash even before execution.
  *
  * @param {number} portfolioId
+ * @param {number|null} excludeSignalId - Optional signal ID to exclude from reserved sum (use when executing that signal)
  * @returns {{ rawCash: number, reservedCash: number, effectiveCash: number }}
  */
-export async function getEffectiveCash(portfolioId) {
+export async function getEffectiveCash(portfolioId, excludeSignalId = null) {
   const portfolio = await prisma.portfolio.findUnique({
     where: { id: portfolioId },
     select: { availableCash: true }
@@ -23,11 +24,13 @@ export async function getEffectiveCash(portfolioId) {
   const rawCash = parseFloat(portfolio?.availableCash || 0);
 
   // Sum cost of all active BUY signals (PENDING, ACKED, SNOOZED, PLACING)
+  // Exclude the signal being executed so it doesn't block itself
   const activeSignals = await prisma.tradeSignal.findMany({
     where: {
       portfolioId,
       side: 'BUY',
-      status: { in: ['PENDING', 'ACKED', 'SNOOZED', 'PLACING'] }
+      status: { in: ['PENDING', 'ACKED', 'SNOOZED', 'PLACING'] },
+      ...(excludeSignalId ? { id: { not: excludeSignalId } } : {})
     },
     select: { quantity: true, triggerPrice: true, triggerLow: true }
   });
@@ -180,14 +183,15 @@ export function validateAllocations(items, budget, field = 'suggestedAmount') {
  * @param {string} side - 'BUY' or 'SELL'
  * @param {number} quantity
  * @param {number} price - Estimated price (live price for MARKET, limit price for LIMIT)
+ * @param {number|null} signalId - Signal being executed; excluded from reserved sum to avoid self-blocking
  * @returns {{ allowed: boolean, reason: string, effectiveCash: number, orderCost: number }}
  */
-export async function preOrderCapitalCheck(portfolioId, side, quantity, price) {
+export async function preOrderCapitalCheck(portfolioId, side, quantity, price, signalId = null) {
   if (side === 'SELL') {
     return { allowed: true, reason: 'SELL orders do not consume cash', effectiveCash: 0, orderCost: 0 };
   }
 
-  const { effectiveCash } = await getEffectiveCash(portfolioId);
+  const { effectiveCash } = await getEffectiveCash(portfolioId, signalId);
   const orderCost = quantity * price;
 
   if (orderCost <= effectiveCash) {

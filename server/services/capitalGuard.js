@@ -404,6 +404,38 @@ export async function syncUpstoxFunds(userId) {
         });
         logger.info(`[Capital Guard] Upstox funds synced: portfolio ${portfolio.id} cash ₹${oldCash.toFixed(0)} → ₹${availableMargin.toFixed(0)}`);
         synced++;
+
+        // Capital increase detection: if cash rose by > ₹3,000 this likely means
+        // a fresh deposit (not just a sell — sells also update holdings).
+        // Alert the user so they know their capital has been recognised.
+        const cashDelta = availableMargin - oldCash;
+        if (cashDelta > 3000) {
+          logger.info(`[Capital Guard] Capital increase detected: +₹${cashDelta.toFixed(0)} for portfolio ${portfolio.id}`);
+          try {
+            const portfolioFull = await prisma.portfolio.findUnique({
+              where: { id: portfolio.id },
+              include: { user: { include: { telegramUser: true } } }
+            });
+            const tg = portfolioFull?.user?.telegramUser;
+            if (tg?.isActive && !tg?.isMuted) {
+              const { getBot } = await import('./telegramBot.js');
+              const bot = getBot();
+              if (bot) {
+                const startCap = parseFloat(portfolio.startingCapital || 0);
+                const baselineNote = cashDelta > 5000 && availableMargin > startCap * 1.15
+                  ? `\n\n_If this is a fresh deposit, run /upstox sync to update your P&L baseline._`
+                  : '';
+                await bot.sendMessage(
+                  parseInt(tg.telegramId),
+                  `💰 *Capital Increase Detected*\n\nUpstox cash: ₹${oldCash.toLocaleString('en-IN')} → ₹${availableMargin.toLocaleString('en-IN')} (+₹${cashDelta.toFixed(0)})\n\nAll new capital is immediately available for signal generation. Next scan will size positions to the full updated amount.${baselineNote}`,
+                  { parse_mode: 'Markdown' }
+                ).catch(() => {});
+              }
+            }
+          } catch (alertErr) {
+            logger.warn('[Capital Guard] Capital increase alert failed:', alertErr.message);
+          }
+        }
       } else {
         // Cash unchanged but still mark as verified
         await prisma.portfolio.update({

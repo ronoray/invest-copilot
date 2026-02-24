@@ -34,17 +34,27 @@ function getBot() {
       });
 
       // Delay polling start by 15s — gives previous container's 10s long-poll time to expire
-      // This eliminates the 409 Conflict on every restart/deploy
-      setTimeout(() => {
-        bot.deleteWebhook({ drop_pending_updates: true })
-          .catch(() => {}) // webhook may not be set, ignore
-          .finally(() => {
-            bot.startPolling({
-              interval: 1000,
-              params: { timeout: 10, allowed_updates: ['message', 'callback_query'] }
-            });
-            logger.info('Telegram bot polling started');
+      // This eliminates the 409 Conflict on every restart/deploy.
+      // IMPORTANT: node-telegram-bot-api uses deleteWebHook (capital H) not deleteWebhook
+      setTimeout(async () => {
+        try {
+          // Clear any existing webhook before starting polling
+          // Use correct casing: deleteWebHook (capital H in this library version)
+          if (typeof bot.deleteWebHook === 'function') {
+            await bot.deleteWebHook().catch(() => {});
+          }
+        } catch (e) {
+          // ignore — webhook may not be set
+        }
+        try {
+          bot.startPolling({
+            interval: 1000,
+            params: { timeout: 10, allowed_updates: ['message', 'callback_query'] }
           });
+          logger.info('Telegram bot polling started');
+        } catch (e) {
+          logger.error('Failed to start Telegram polling:', e.message);
+        }
       }, 15000);
     } catch (error) {
       logger.error('Failed to initialize Telegram bot:', error.message);

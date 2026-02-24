@@ -92,6 +92,29 @@ export function computeVolumeRatio(volumes) {
   return avg > 0 ? parseFloat((recent / avg).toFixed(2)) : null;
 }
 
+/**
+ * Classic floor trader's pivot points — computed from previous day's OHLC.
+ * PP = central pivot, R1/R2 = resistance levels, S1/S2 = support levels.
+ * These are the price levels institutional desks and market makers reference most.
+ *
+ * @param {{ high: number, low: number, close: number }} prevDay
+ * @returns {{ pp, r1, r2, s1, s2 }}
+ */
+export function computePivotPoints({ high, low, close }) {
+  const pp = (high + low + close) / 3;
+  const r1 = (2 * pp) - low;
+  const s1 = (2 * pp) - high;
+  const r2 = pp + (high - low);
+  const s2 = pp - (high - low);
+  return {
+    pp: parseFloat(pp.toFixed(2)),
+    r1: parseFloat(r1.toFixed(2)),
+    r2: parseFloat(r2.toFixed(2)),
+    s1: parseFloat(s1.toFixed(2)),
+    s2: parseFloat(s2.toFixed(2)),
+  };
+}
+
 // ── Symbol technical profile ──────────────────────────────────────────────────
 
 /**
@@ -156,6 +179,24 @@ export async function getSymbolTechnicals(symbol, exchange = 'NSE') {
       setup = 'DEAD CAT BOUNCE — sell into strength, do not buy.';
     }
 
+    // Pivot points from previous trading day's OHLC (zero extra API calls — uses cached series)
+    const prevBar = s.length > 1 ? s[s.length - 2] : null;
+    const pivots  = prevBar ? computePivotPoints(prevBar) : null;
+
+    // Flag if current price is within 0.8% of a key pivot level — inflection point alert
+    let nearPivotNote = '';
+    if (pivots) {
+      const price = latest.close;
+      const tol   = 0.008;
+      const near  = [];
+      if (Math.abs(price - pivots.pp) / pivots.pp <= tol) near.push(`PP ₹${pivots.pp.toFixed(0)}`);
+      if (Math.abs(price - pivots.r1) / pivots.r1 <= tol) near.push(`R1 ₹${pivots.r1.toFixed(0)}`);
+      if (Math.abs(price - pivots.r2) / pivots.r2 <= tol) near.push(`R2 ₹${pivots.r2.toFixed(0)}`);
+      if (Math.abs(price - pivots.s1) / pivots.s1 <= tol) near.push(`S1 ₹${pivots.s1.toFixed(0)}`);
+      if (Math.abs(price - pivots.s2) / pivots.s2 <= tol) near.push(`S2 ₹${pivots.s2.toFixed(0)}`);
+      if (near.length > 0) nearPivotNote = `AT PIVOT: ${near.join(' + ')} — key inflection zone`;
+    }
+
     // Prompt-ready summary
     const parts = [
       `${symbol}: ₹${latest.close.toFixed(0)}`,
@@ -166,13 +207,16 @@ export async function getSymbolTechnicals(symbol, exchange = 'NSE') {
       volRat != null ? `| Vol ${volRat}x`                                                        : '',
       atr    != null ? `| ATR ₹${atr.toFixed(0)}`                                                : '',
       pctFromHigh    ? `| ${pctFromHigh}% from 52W high`                                         : '',
+      pivots         ? `| Pivots PP ₹${pivots.pp.toFixed(0)} R1 ₹${pivots.r1.toFixed(0)} S1 ₹${pivots.s1.toFixed(0)}` : '',
       setup          ? `\n     ⚡ ${setup}`                                                       : '',
+      nearPivotNote  ? `\n     🎯 ${nearPivotNote}`                                               : '',
     ];
 
     return {
       symbol, trend, rsi, ema20, ema50, atr, volRatio: volRat,
       pctFrom52wHigh: pctFromHigh, setup, rsiLabel,
       latestClose: latest.close, aboveEMA20, aboveEMA50,
+      pivots,
       summary: parts.filter(Boolean).join(' '),
     };
   } catch (err) {
@@ -302,7 +346,7 @@ function sleep(ms) {
 }
 
 export default {
-  computeRSI, computeEMA, computeATR, computeVolumeRatio,
+  computeRSI, computeEMA, computeATR, computeVolumeRatio, computePivotPoints,
   getSymbolTechnicals, getMarketRegime, buildHoldingsTechnicals,
   // legacy
   calculateRSI, calculateEMA, calculateSMA, analyzeVolume,

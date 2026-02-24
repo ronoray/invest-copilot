@@ -28,10 +28,10 @@ let marketRegenDate = null;      // 'YYYY-MM-DD' IST for the counter above
 
 const MOVE_THRESHOLD_PCT    = 3;                  // % from open to flag a move
 const BREAKOUT_BUFFER_PCT   = 0.3;                // % above prev high to confirm breakout
-const TRIAGE_COOLDOWN_MS    = 90 * 60 * 1000;     // 90 min between Haiku calls
-const MAX_MARKET_REGENS     = 2;                   // Sonnet regens/day via this path
+const TRIAGE_COOLDOWN_MS    = 60 * 60 * 1000;     // 60 min between Haiku calls (was 90)
+const MAX_MARKET_REGENS     = 3;                   // Sonnet regens/day via this path (was 2)
 const TRIAGE_WINDOW_START   = 10;                  // Don't triage before 10 AM IST
-const TRIAGE_WINDOW_END     = 14;                  // Don't triage after 2 PM IST
+const TRIAGE_WINDOW_END     = 15;                  // Don't triage after 3 PM IST (was 2 PM)
 const FRESH_SIGNAL_HOURS    = 1.5;                 // Signals younger than this are safe
 const MAJOR_MOVE_PCT        = 6;                   // Skip freshness gate if move ≥ this
 

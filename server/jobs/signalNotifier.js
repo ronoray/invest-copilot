@@ -1129,6 +1129,119 @@ async function generateSignalsForAllPortfoliosForOne(portfolio) {
   logger.info(`[Midday Signals] Portfolio ${portfolio.id}: ${signals.length} signals generated`);
 }
 
+// ─── Intraday pivot context ────────────────────────────────────────────────────
+// Time-specific market intelligence injected into pivot-window signal generation.
+const PIVOT_TIME_CONTEXTS = {
+  '11:00 AM': `
+⏰ MID-MORNING PIVOT SCAN (11:00 AM):
+The first 90 minutes have played out. The opening setup is now confirmed or invalidated. Scan for:
+- Stocks that HELD breakouts from the open and are consolidating near the breakout level — these are continuation entries
+- Opening gaps that have FILLED completely — the filling = exhaustion, potential reversal with defined risk
+- Any sector ETF that changed direction vs the pre-market thesis — rotate into the NEW leader, exit the laggard
+- Stocks sitting at today's Pivot Point (PP): above PP = bullish bias for rest of day, below PP = bearish
+- R1 resistance breaks with volume confirmation = strong momentum entry for the day's move
+- S1 support holds with volume dry-up = high R:R bounce entry
+
+Focus ONLY on NEW setups that weren't visible at 9:30 AM. If morning signals are still pending and technically valid, acknowledge them but don't duplicate. The market has given you more information — use it.`,
+
+  '2:30 PM': `
+⏰ PRE-CLOSE PIVOT SCAN (2:30 PM):
+Final 60 minutes before NSE close — institutional positioning window. This is when smart money takes its stance:
+- Stocks holding NEAR-HIGH for the day = institutions accumulated = strong overnight longs (delivery)
+- Stocks with late-day volume surges at R1 or R2 = institutional accumulation = buy before close
+- Stocks at day's LOW with declining sell volume = exhaustion = reversal setup for tomorrow's open
+- Holdings that CLOSED below EMA20 today and are now drifting lower = exit before tomorrow gap-down
+- Any stock showing price fade + rising volume = distribution = SELL signal NOW before 3:15 PM cutoff
+
+For BUY signals: these are overnight/delivery trades. Only recommend if the stock is strong enough to gap UP (not down) at tomorrow's open. CNC delivery — execution must happen before 3:15 PM.
+For SELL signals: deteriorating momentum + closing weak = act now. Every minute past 2:30 PM costs slippage.`,
+};
+
+/**
+ * Generate signals at intraday pivot times — 11:00 AM and 2:30 PM.
+ * Fires only if signals are stale (>60 min old) or no active signals remain.
+ * Injects time-specific market context so Claude reasons about intraday structure.
+ *
+ * @param {string} timeLabel - '11:00 AM' or '2:30 PM'
+ */
+async function generateSignalsAtPivot(timeLabel) {
+  if (!isTradingDay(new Date())) return;
+
+  const pauseState = await getSystemPauseState();
+  if (pauseState) {
+    logger.info(`[${timeLabel}] System paused — skipping pivot scan`);
+    return;
+  }
+
+  const portfolios = await prisma.portfolio.findMany({
+    where: { isActive: true, isPaused: false },
+    include: { holdings: true, user: { include: { telegramUser: true } } }
+  });
+
+  const eligible = portfolios.filter(p =>
+    p.user?.telegramUser?.isActive && !p.user?.telegramUser?.isMuted
+  );
+  if (eligible.length === 0) return;
+
+  // Sync Upstox funds and expire stale SELL signals before generating
+  await syncAllUpstoxFunds();
+  await syncAllUpstoxHoldingsAndExpireStaleSignals();
+
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const nowMs = Date.now();
+  const timeContext   = PIVOT_TIME_CONTEXTS[timeLabel] || '';
+  const preMarketCtx  = getTodayPreMarketThesis();
+
+  let generated = 0;
+  for (const portfolio of eligible) {
+    try {
+      // Capital staleness gate for non-Upstox portfolios
+      if (portfolio.broker !== 'UPSTOX') {
+        const lastVerified = portfolio.lastVerifiedAt;
+        const twoDaysMs    = 2 * 24 * 60 * 60 * 1000;
+        const isStale      = !lastVerified || (nowMs - new Date(lastVerified).getTime() > twoDaysMs);
+        if (isStale) {
+          logger.info(`[${timeLabel}] Portfolio ${portfolio.id}: capital stale — skipping`);
+          continue;
+        }
+      }
+
+      // Fire only if signals are older than 60 min OR fewer than 2 active signals remain
+      const lastSignal = await prisma.tradeSignal.findFirst({
+        where: { portfolioId: portfolio.id },
+        orderBy: { createdAt: 'desc' },
+        select: { createdAt: true }
+      });
+      const minsSinceLast = lastSignal
+        ? (nowMs - new Date(lastSignal.createdAt).getTime()) / 60000
+        : 9999;
+
+      const activeCount = await prisma.tradeSignal.count({
+        where: {
+          portfolioId: portfolio.id,
+          status: { in: ['PENDING', 'SNOOZED', 'ACKED'] },
+          createdAt: { gte: today }
+        }
+      });
+
+      if (activeCount >= 2 && minsSinceLast < 60) {
+        logger.info(`[${timeLabel}] Portfolio ${portfolio.id}: ${activeCount} active signals (${Math.round(minsSinceLast)}min old) — skipping pivot scan`);
+        continue;
+      }
+
+      const fullContext = [timeContext, preMarketCtx].filter(Boolean).join('\n\n');
+      const signals = await generateTradeSignals(portfolio.id, fullContext);
+      generated++;
+      logger.info(`[${timeLabel}] Portfolio ${portfolio.id}: ${signals.length} signals from pivot scan`);
+      await new Promise(r => setTimeout(r, 2000));
+    } catch (err) {
+      logger.error(`[${timeLabel}] Portfolio ${portfolio.id}:`, err.message);
+    }
+  }
+
+  logger.info(`[${timeLabel}] Pivot scan complete: ${generated}/${eligible.length} portfolios generated`);
+}
+
 /**
  * Initialize the signal notifier cron jobs.
  */
@@ -1170,10 +1283,26 @@ export function initSignalNotifier() {
     timezone: 'Asia/Kolkata'
   });
 
-  // Conditional midday signals at 1:00 PM — only fires if needed
+  // Mid-morning pivot scan at 11:00 AM — direction confirmed, new setups emerging
+  cron.schedule('0 11 * * 1-5', async () => {
+    logger.info('[11:00 AM] Running mid-morning pivot signal scan...');
+    await generateSignalsAtPivot('11:00 AM');
+  }, {
+    timezone: 'Asia/Kolkata'
+  });
+
+  // Midday full scan at 1:00 PM — unconditional, complete market sweep
   cron.schedule('0 13 * * 1-5', async () => {
-    logger.info('Running conditional midday signal generation...');
-    await generateSignalsConditional();
+    logger.info('[1:00 PM] Running midday signal generation...');
+    await generateSignalsForAllPortfolios();
+  }, {
+    timezone: 'Asia/Kolkata'
+  });
+
+  // Pre-close pivot scan at 2:30 PM — institutional positioning window
+  cron.schedule('30 14 * * 1-5', async () => {
+    logger.info('[2:30 PM] Running pre-close pivot signal scan...');
+    await generateSignalsAtPivot('2:30 PM');
   }, {
     timezone: 'Asia/Kolkata'
   });
@@ -1214,11 +1343,11 @@ export function initSignalNotifier() {
   logger.info('Signal notifier initialized:');
   logger.info('  Pre-market intelligence: 8:30 AM IST');
   logger.info('  Upstox fund sync: 9:17 AM IST');
-  logger.info('  Signal generation: 9:30 AM + 1:00 PM (conditional) IST');
+  logger.info('  Signal generation: 9:30 AM (full) | 11:00 AM (pivot) | 1:00 PM (full) | 2:30 PM (pivot) IST');
   logger.info('  Signal notifications: every 5 min, 9-3:30 PM IST');
   logger.info('  Order status polling: every 5 min, 9 AM-4 PM IST');
   logger.info('  Mid-day holdings sync (DDPI): every 30 min, 9-3:30 PM IST');
   logger.info('  EOD review: 3:45 PM IST');
 }
 
-export default { initSignalNotifier, notifyPendingSignals, generateSignalsForAllPortfolios, pollPendingOrders, generateSignalsConditional, syncAllUpstoxFunds };
+export default { initSignalNotifier, notifyPendingSignals, generateSignalsForAllPortfolios, pollPendingOrders, generateSignalsConditional, syncAllUpstoxFunds, generateSignalsAtPivot };

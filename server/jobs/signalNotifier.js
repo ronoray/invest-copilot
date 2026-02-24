@@ -54,6 +54,9 @@ async function generatePreMarketIntelligence() {
     logger.info('[Pre-Market] Fetching sector context...');
     const { contextText, sectorRanking } = await buildPreMarketContext();
 
+    // Pull in last night's watchlist if it was generated today
+    const overnightWatchlist = getTomorrowWatchlist();
+
     const anthropic = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
 
     const dateStr = new Date().toLocaleDateString('en-IN', {
@@ -64,7 +67,7 @@ async function generatePreMarketIntelligence() {
     const prompt = `${ANALYST_IDENTITY}
 
 ${contextText}
-
+${overnightWatchlist ? `\n${overnightWatchlist}\n` : ''}
 Today is ${dateStr}. Market opens in ~45 minutes.
 
 Based on yesterday's sector performance, set the trading thesis for today. Where is the money flowing? What do you want to own when the bell rings?
@@ -99,6 +102,7 @@ Respond in JSON only:
       `Watchlist: ${json.watchlist?.join(', ') || ''}`,
       `Playbook: ${json.playbook}`,
       `Aggression level: ${json.aggression.toUpperCase()}`,
+      overnightWatchlist || '',
       '=== END PRE-MARKET INTELLIGENCE ===',
     ].filter(Boolean).join('\n');
 
@@ -135,14 +139,26 @@ Respond in JSON only:
 }
 
 /**
- * End-of-day review at 3:45 PM using Claude Haiku.
+ * End-of-day intelligence scan at 3:45 PM using Claude Sonnet.
  *
- * Reviews today's signals and their outcomes (executed, expired, missed).
- * Sends a brief Telegram message with:
- *   - What worked / what didn't
- *   - One specific lesson for tomorrow
- *   - One stock to watch at open tomorrow
+ * This is a full market scan — not a recap. The job is to:
+ *   1. Review today's signal outcomes (accountability)
+ *   2. Read today's sector performance to understand what moved and why
+ *   3. Scan the entire NSE market for tomorrow's setups
+ *   4. Produce a structured overnight watchlist with entry/target/stop
+ *
+ * Output is sent to Telegram and stored to seed tomorrow's 8:30 AM brief.
  */
+
+// Stored overnight watchlist — injected into next morning's pre-market brief
+let tomorrowWatchlist = '';
+let tomorrowWatchlistDate = null;
+
+export function getTomorrowWatchlist() {
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  return tomorrowWatchlistDate === today ? tomorrowWatchlist : '';
+}
+
 async function eodReview() {
   if (!isTradingDay(new Date())) return;
 
@@ -160,6 +176,17 @@ async function eodReview() {
   const anthropic = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
   const bot = getBot();
 
+  // Fetch today's sector performance once (from live ETF cache — scanner
+  // ran at 3:35 PM so prices are fresh, no extra API calls needed)
+  let sectorContext = '';
+  try {
+    const { fetchMarketContext } = await import('../services/marketData.js');
+    // Pass empty holdings so we only get sector ETF section
+    sectorContext = await fetchMarketContext([]);
+  } catch (e) {
+    logger.warn('[EOD Review] Could not fetch sector context:', e.message);
+  }
+
   for (const portfolio of portfolios) {
     const telegramUser = portfolio.user?.telegramUser;
     if (!telegramUser?.isActive || telegramUser?.isMuted) continue;
@@ -173,61 +200,144 @@ async function eodReview() {
         orderBy: { createdAt: 'asc' }
       });
 
-      if (signals.length === 0) {
-        logger.info(`[EOD Review] Portfolio ${portfolio.id}: no signals today, skipping`);
-        continue;
-      }
-
-      // Build signal outcomes with current holding prices for P&L context
+      // Build today's signal outcomes with P&L
       const holdingPrices = {};
       for (const h of portfolio.holdings) {
         holdingPrices[h.symbol] = parseFloat(h.currentPrice || h.avgPrice || 0);
       }
 
-      const signalLines = signals.map(s => {
-        const entryPrice = s.triggerPrice || s.triggerLow || 0;
-        const currentPrice = holdingPrices[s.symbol] || 0;
+      const signalLines = signals.length > 0 ? signals.map(s => {
+        const entry = s.triggerPrice || s.triggerLow || 0;
+        const current = holdingPrices[s.symbol] || 0;
         let outcome = '';
-        if (currentPrice && entryPrice > 0) {
+        if (current && entry > 0) {
           const pct = s.side === 'BUY'
-            ? ((currentPrice - entryPrice) / entryPrice * 100).toFixed(1)
-            : ((entryPrice - currentPrice) / entryPrice * 100).toFixed(1);
-          outcome = ` → now ₹${currentPrice.toFixed(0)} (${parseFloat(pct) >= 0 ? '+' : ''}${pct}%)`;
+            ? ((current - entry) / entry * 100).toFixed(1)
+            : ((entry - current) / entry * 100).toFixed(1);
+          const pl = s.side === 'BUY'
+            ? ((current - entry) * s.quantity).toFixed(0)
+            : ((entry - current) * s.quantity).toFixed(0);
+          outcome = ` → ₹${current.toFixed(0)} (${parseFloat(pct) >= 0 ? '+' : ''}${pct}%, P&L ${parseFloat(pl) >= 0 ? '+' : ''}₹${pl})`;
         }
-        return `${s.side} ${s.symbol} @ ₹${entryPrice.toFixed(0)} [${s.status}]${outcome} conf:${s.confidence}%`;
-      }).join('\n');
+        return `${s.side} ${s.symbol} @ ₹${entry.toFixed(0)} [${s.status}]${outcome} | conf:${s.confidence}%`;
+      }).join('\n') : 'No signals generated today.';
 
-      const prompt = `You are reviewing today's trade signals for a small portfolio.
+      // Portfolio holdings summary
+      const holdingsSummary = portfolio.holdings.map(h => {
+        const curr = parseFloat(h.currentPrice || 0);
+        const avg  = parseFloat(h.avgPrice || 0);
+        const pnl  = avg > 0 ? ((curr - avg) / avg * 100).toFixed(1) : '0.0';
+        return `${h.symbol}: ₹${curr.toFixed(0)} (avg ₹${avg.toFixed(0)}, ${parseFloat(pnl) >= 0 ? '+' : ''}${pnl}%)`;
+      }).join('\n') || 'No holdings.';
 
-Signals today:
+      const availableCash = parseFloat(portfolio.availableCash || portfolio.startingCapital || 0);
+
+      const prompt = `${ANALYST_IDENTITY}
+
+${sectorContext}
+
+=== TODAY'S SIGNALS & OUTCOMES ===
 ${signalLines}
 
-In 2–3 sharp sentences: what worked, what didn't, and one specific lesson for tomorrow's session.
-Also name one stock setup to watch at tomorrow's open (can be from today's list or a new idea).
+=== CURRENT HOLDINGS ===
+${holdingsSummary}
 
-JSON only: {"summary": "...", "lesson": "...", "watchTomorrow": "SYMBOL — reason in one line"}`;
+Available capital for tomorrow: ₹${availableCash.toLocaleString('en-IN')}
+
+Market closed. Your job now is two things:
+
+1. ACCOUNTABILITY: What happened today? Were the signals right? Where did you leave money on the table? Be specific — name the stocks, the moves, the missed entries.
+
+2. TOMORROW'S SETUP: Scan the ENTIRE NSE market — Nifty 50, Next 50, Midcap 150, Smallcap 250, all sectors. Based on today's sector performance above, identify the best setups for tomorrow's open. Look for:
+   - Stocks setting up for breakouts (consolidating near highs, building volume)
+   - Sector rotation plays (money rotating into or out of sectors)
+   - Momentum continuations (stocks that led today and will gap-run tomorrow)
+   - Reversal setups in beaten-down quality names
+   - Event catalysts (results, board meetings, order wins, policy announcements)
+
+For each setup give: entry level, target, stop, and WHY this is a tomorrow trade specifically.
+
+Respond in JSON:
+{
+  "todayAssessment": "2 sentences on today — what worked, what you'd do differently",
+  "sectorRead": "which sectors showed strength/weakness today and what that means for tomorrow",
+  "tomorrowSetups": [
+    {
+      "symbol": "SYMBOL",
+      "action": "BUY|SELL|WATCH",
+      "entry": 0.00,
+      "target": 0.00,
+      "stop": 0.00,
+      "thesis": "why tomorrow specifically — catalyst, setup, sector tailwind"
+    }
+  ],
+  "tomorrowFocus": "which 2 sectors to concentrate on tomorrow and why",
+  "riskWarning": "anything to be cautious about — global cues, events, sector risks"
+}
+
+Minimum 5 setups in tomorrowSetups. Maximum 10. Cast the net wide — this is the full market scan.`;
 
       const response = await anthropic.messages.create({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 200,
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1500,
         messages: [{ role: 'user', content: prompt }],
       });
 
       const text = response.content[0].text.trim();
       const json = JSON.parse(text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim());
 
-      const executed = signals.filter(s => s.status === 'EXECUTED').length;
-      const missed   = signals.filter(s => ['EXPIRED', 'DISMISSED'].includes(s.status)).length;
+      // Store overnight watchlist for injection into 8:30 AM pre-market brief
+      const watchlistLines = (json.tomorrowSetups || []).map(s =>
+        `${s.action} ${s.symbol}: entry ₹${s.entry}, target ₹${s.target}, stop ₹${s.stop} — ${s.thesis}`
+      ).join('\n');
 
+      tomorrowWatchlist = [
+        '=== OVERNIGHT WATCHLIST (from EOD scan) ===',
+        `Sector focus: ${json.tomorrowFocus}`,
+        watchlistLines,
+        json.riskWarning ? `Risk: ${json.riskWarning}` : '',
+        '=== END OVERNIGHT WATCHLIST ===',
+      ].filter(Boolean).join('\n');
+
+      tomorrowWatchlistDate = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+
+      // Send to Telegram — split into two messages to stay under 4096 char limit
       if (bot) {
-        await bot.sendMessage(
-          parseInt(telegramUser.telegramId),
-          `📊 *EOD Review — ${signals.length} signals (${executed} executed, ${missed} missed)*\n\n${json.summary}\n\n💡 *Lesson:* ${json.lesson}\n\n👀 *Tomorrow:* ${json.watchTomorrow}`,
-          { parse_mode: 'Markdown' }
-        ).catch(() => {});
+        const chatId = parseInt(telegramUser.telegramId);
+        const executed = signals.filter(s => s.status === 'EXECUTED').length;
+        const missed   = signals.filter(s => ['EXPIRED', 'DISMISSED'].includes(s.status)).length;
+
+        // Message 1: today's assessment
+        const msg1 = [
+          `📊 *EOD — ${signals.length} signals today (${executed} executed, ${missed} missed)*`,
+          '',
+          json.todayAssessment,
+          '',
+          `*Sector read:* ${json.sectorRead}`,
+          json.riskWarning ? `\n⚠️ *Tomorrow risk:* ${json.riskWarning}` : '',
+        ].filter(Boolean).join('\n');
+
+        await bot.sendMessage(chatId, msg1, { parse_mode: 'Markdown' }).catch(() => {});
+        await new Promise(r => setTimeout(r, 500));
+
+        // Message 2: tomorrow's setups
+        const setupLines = (json.tomorrowSetups || []).map((s, i) => {
+          const rr = s.stop && s.entry && s.target
+            ? ((s.target - s.entry) / (s.entry - s.stop)).toFixed(1)
+            : '?';
+          return `${i + 1}. *${s.action} ${s.symbol}* — ₹${s.entry} → ₹${s.target} (stop ₹${s.stop}, R:R ${rr}:1)\n   _${s.thesis}_`;
+        }).join('\n\n');
+
+        const msg2 = [
+          `🎯 *Tomorrow's Watchlist — ${json.tomorrowFocus}*`,
+          '',
+          setupLines,
+        ].join('\n');
+
+        await bot.sendMessage(chatId, msg2, { parse_mode: 'Markdown' }).catch(() => {});
       }
 
-      logger.info(`[EOD Review] Portfolio ${portfolio.id}: sent`);
+      logger.info(`[EOD Review] Portfolio ${portfolio.id}: ${json.tomorrowSetups?.length || 0} setups identified for tomorrow`);
     } catch (err) {
       logger.error(`[EOD Review] Portfolio ${portfolio.id}:`, err.message);
     }

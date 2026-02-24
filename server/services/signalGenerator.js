@@ -2,7 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import prisma from './prisma.js';
 import { buildProfileBrief, buildPortfolioAudit, buildGrowthDirective } from './advancedScreener.js';
 import { fetchMarketContext } from './marketData.js';
-import { ANALYST_IDENTITY, MARKET_DATA_INSTRUCTION, buildAccountabilityScorecard } from './analystPrompts.js';
+import { ANALYST_IDENTITY, ELITE_TRADER_EDGE, MARKET_DATA_INSTRUCTION, buildAccountabilityScorecard } from './analystPrompts.js';
 import { getEffectiveCash, validateSignals } from './capitalGuard.js';
 import logger from './logger.js';
 
@@ -64,6 +64,8 @@ export async function generateTradeSignals(portfolioId, extraContext = '') {
 
   const prompt = `${ANALYST_IDENTITY}
 
+${ELITE_TRADER_EDGE}
+
 ${growthDirective}
 
 ${marketContext}
@@ -75,43 +77,43 @@ ${portfolioAudit}
 
 ${profileBrief}
 
-HARD CAPITAL LIMIT: ₹${effectiveCash.toLocaleString('en-IN')} available cash (₹${reservedCash.toFixed(0)} reserved by pending signals). Total cost of ALL BUY signals MUST NOT exceed ₹${effectiveCash.toLocaleString('en-IN')}. This is a hard constraint — violating it means orders will be rejected.
+AVAILABLE CAPITAL: ₹${effectiveCash.toLocaleString('en-IN')} deployable cash (₹${reservedCash.toFixed(0)} reserved by pending signals).
 ${targetContext}
 ${extraContext}
 
-${portfolio.broker === 'UPSTOX' && portfolio.apiEnabled ? `UPSTOX LIVE TRADING — SIGNALS ARE DIRECTLY EXECUTABLE:
-The investor will receive these signals in Telegram with a single Execute button. Pressing it places the order via Upstox API immediately. This means:
-1. ONLY CNC delivery equity (NSE_EQ). No intraday, no F&O, no futures, no options.
-2. LIMIT orders strongly preferred — gives the investor a better entry and a moment to review before execution.
-3. Signals must be actionable TODAY: clear entry level, realistic for current market price.
-4. Small capital — size each position to 10–20% of available cash max. Better to have 2–3 focused trades than 5 stretched ones.
-5. Since orders execute immediately on tap, stop-loss and target MUST be clearly communicated in the rationale.
+${portfolio.broker === 'UPSTOX' && portfolio.apiEnabled ? `UPSTOX LIVE TRADING — ONE TAP EXECUTION:
+Signals hit the investor's Telegram with an Execute button that fires the Upstox API immediately.
+- ONLY NSE_EQ CNC delivery. No intraday, no F&O.
+- LIMIT orders strongly preferred — locks in entry and gives one last look before the order flies.
+- Entry levels must be REALISTIC for today's price action. Don't price entries so tight they never fill.
+- Since capital is ₹${effectiveCash.toLocaleString('en-IN')}, 2–3 focused bets > 5 spread bets. Concentrate on your highest conviction setups.
 ` : ''}
-PORTFOLIO AUDIT DIRECTIVE: Before generating signals, analyze the audit above. Identify:
-1. UNDERPERFORMERS to SELL — holdings with broken thesis, P&L below threshold per growth directive, no catalyst
-2. OVERWEIGHT positions to TRIM — any single stock >15% of portfolio
-3. IDLE CASH to DEPLOY — generate BUY signals that move toward the growth target
-Your signals must collectively improve portfolio health and growth trajectory.
+PORTFOLIO AUDIT DIRECTIVE:
+1. BROKEN THESIS → SELL: Any holding where the original reason to buy no longer holds. Sentiment, momentum, or fundamentals have turned. Cut it and redeploy.
+2. OVERWEIGHT → TRIM: Any single position >20% of portfolio. Lock profits, rebalance.
+3. IDLE CASH → DEPLOY: Find the highest momentum setups available right now and put capital to work.
 
-GENERATE TRADE SIGNALS NOW.
+WEALTH MULTIPLICATION MANDATE — GENERATE SIGNALS NOW:
 
-Scan the ENTIRE Indian market — Nifty 50, Nifty Next 50, Nifty Midcap 150, Nifty Smallcap 250, and sectoral indices. Don't limit yourself to a handful of popular names. Find the best risk-reward setups across ALL sectors and market caps.
+This is not about preserving capital. It is about MULTIPLYING it. Think like a prop desk:
+- Follow the sector ETF data above. Money rotates — align every BUY with the sector wind at your back.
+- MOMENTUM is the edge: stocks breaking out of ranges, leading their sector, showing delivery volume spikes. These are the trades that make 8–15% in days, not weeks.
+- Scan Nifty 50, Nifty Next 50, Nifty Midcap 150, sectoral leaders. Use your knowledge of valuations, PE ranges, and institutional positioning to find asymmetric setups.
 
-For each signal, provide:
-1. THE THESIS: Why this stock, why now? What's the catalyst? (earnings beat, sector rotation, technical breakout, policy tailwind, valuation gap)
-2. THE TRADE: Exact entry, target, stop-loss. Risk-reward ratio must be at least 2:1
-3. THE INVALIDATION: What kills this trade? At what price/event do you admit you're wrong?
-4. POSITION SIZING: Quantity based on available cash and risk profile — don't over-concentrate
+For every signal:
+1. THE SETUP: Sector momentum + stock-level catalyst (breakout, earnings, policy, institutional accumulation). Why NOW, not tomorrow?
+2. THE TRADE: Entry, target, stop. Minimum R:R 2.5:1 — target 3:1. Be specific — "entry ₹342, target ₹378, stop ₹326".
+3. THE EDGE: What does the market not yet see? Delivery volume, option OI buildup, bulk deal, sector rotation — what is the INSTITUTIONAL signal here?
+4. THE SIZE: ₹${effectiveCash.toLocaleString('en-IN')} available. Conviction ≥85% → size 25–30%. Conviction 70–84% → 15–20%. Below 70% → skip it.
 
-${scorecard ? 'IMPORTANT: Review your previous calls above. If any call went wrong, factor that into your new recommendations. If a stock you previously recommended is still a good setup, you can re-recommend with updated levels. Own your track record.' : ''}
+${scorecard ? 'ACCOUNTABILITY: Your previous calls are above. Own the wins and own the losses. Adjust your conviction levels based on what has worked. If a setup is still valid, re-enter with updated levels. Never abandon a working thesis just because the first attempt was wrong.' : ''}
 
-Rules:
-- Mix of BUY and SELL signals as the market dictates
-- SELL signals: ONLY for stocks already in holdings. If a holding has a broken thesis, say EXIT
-- BUY signals: HARD LIMIT — total cost (quantity × price) across ALL BUY signals MUST NOT exceed ₹${effectiveCash.toLocaleString('en-IN')}. Before responding, sum your quantities × prices and verify the total fits. If it doesn't, reduce quantities or drop lower-conviction signals
-- Be BOLD but DISCIPLINED: high conviction calls with defined risk
-- Confidence 80+ = "I'm putting my reputation on this", 60-79 = "Good setup, worth the risk", below 60 = don't bother including it
-- If the market setup is genuinely bad today (gap down, global crisis), it's OK to return fewer signals or mostly SELL/EXIT signals. Don't force trades
+RULES (non-negotiable):
+- BUY capital constraint: sum of (quantity × price) for ALL BUY signals ≤ ₹${effectiveCash.toLocaleString('en-IN')}. Verify your math before responding — show it in capitalCheck.
+- SELL signals ONLY for stocks you currently hold. If the thesis is broken, EXIT decisively.
+- Confidence minimum 70 to include a signal. Below that, the R:R doesn't justify the capital at risk.
+- In a risk-off market (Gold up, broad indices weak): prioritise SELL/TRIM signals and only add high-conviction BUYs with tight stops.
+- Return fewer signals rather than forcing marginal trades. 2 great signals beat 5 mediocre ones every time.
 
 Respond in this EXACT JSON format (no markdown, no extra text):
 {

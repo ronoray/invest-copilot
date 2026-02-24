@@ -1,12 +1,238 @@
 import cron from 'node-cron';
+import Anthropic from '@anthropic-ai/sdk';
 import prisma from '../services/prisma.js';
 import { getBot } from '../services/telegramBot.js';
 import { generateTradeSignals, expireOldSignals } from '../services/signalGenerator.js';
 import { isTokenValid, getAuthorizationUrl, getHoldings, getOrderStatus } from '../services/upstoxService.js';
 import { syncUpstoxFunds, syncUpstoxHoldings, getEffectiveCash } from '../services/capitalGuard.js';
+import { buildPreMarketContext } from '../services/marketIntelligence.js';
+import { ANALYST_IDENTITY } from '../services/analystPrompts.js';
 import { isTradingDay } from '../utils/marketHolidays.js';
 import { getSystemPauseState } from '../services/pauseState.js';
 import logger from '../services/logger.js';
+
+// ─── Pre-market thesis ─────────────────────────────────────────────────────
+// Generated at 8:30 AM, consumed at 9:30 AM signal generation.
+// Module-level so it survives between cron ticks.
+let todayPreMarketThesis = '';
+let preMarketThesisDate  = null;
+
+export function getTodayPreMarketThesis() {
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  return preMarketThesisDate === today ? todayPreMarketThesis : '';
+}
+
+/**
+ * Generate a pre-market trading thesis at 8:30 AM using Claude Sonnet.
+ *
+ * Fetches previous session's sector ETF data (OHLCV) and asks Claude to:
+ *   - Read the sector rotation
+ *   - Identify today's themes and focus sectors
+ *   - Name 3–5 stocks to watch
+ *   - Set the day's aggression level
+ *
+ * The output is:
+ *   1. Stored in `todayPreMarketThesis` for inclusion in 9:30 AM signal gen
+ *   2. Sent to Telegram as the morning brief
+ */
+async function generatePreMarketIntelligence() {
+  if (!isTradingDay(new Date())) return;
+
+  const pauseState = await getSystemPauseState();
+  if (pauseState) return;
+
+  const portfolios = await prisma.portfolio.findMany({
+    where: { isActive: true, isPaused: false },
+    include: { user: { include: { telegramUser: true } } }
+  });
+  const eligible = portfolios.filter(p =>
+    p.user?.telegramUser?.isActive && !p.user?.telegramUser?.isMuted
+  );
+  if (eligible.length === 0) return;
+
+  try {
+    logger.info('[Pre-Market] Fetching sector context...');
+    const { contextText, sectorRanking } = await buildPreMarketContext();
+
+    const anthropic = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
+
+    const dateStr = new Date().toLocaleDateString('en-IN', {
+      weekday: 'long', day: 'numeric', month: 'long',
+      timeZone: 'Asia/Kolkata'
+    });
+
+    const prompt = `${ANALYST_IDENTITY}
+
+${contextText}
+
+Today is ${dateStr}. Market opens in ~45 minutes.
+
+Based on yesterday's sector performance, set the trading thesis for today. Where is the money flowing? What do you want to own when the bell rings?
+
+Respond in JSON only:
+{
+  "marketMood": "bullish|bearish|mixed|rangebound",
+  "keyTheme": "one sentence — the dominant narrative today",
+  "focusSectors": ["BANKING", "IT"],
+  "avoidSectors": ["PHARMA"],
+  "watchlist": ["STOCK1", "STOCK2", "STOCK3"],
+  "playbook": "2 sentences — how to play today. Specific, actionable.",
+  "aggression": "high|medium|low"
+}`;
+
+    const response = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 400,
+      messages: [{ role: 'user', content: prompt }],
+    });
+
+    const text = response.content[0].text.trim();
+    const json = JSON.parse(text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim());
+
+    // Build thesis string for injection into 9:30 AM signal generation
+    todayPreMarketThesis = [
+      '=== PRE-MARKET INTELLIGENCE (8:30 AM) ===',
+      `Market mood: ${json.marketMood.toUpperCase()}`,
+      `Today's theme: ${json.keyTheme}`,
+      `Focus sectors: ${json.focusSectors?.join(', ') || 'broad'}`,
+      json.avoidSectors?.length ? `Avoid: ${json.avoidSectors.join(', ')}` : '',
+      `Watchlist: ${json.watchlist?.join(', ') || ''}`,
+      `Playbook: ${json.playbook}`,
+      `Aggression level: ${json.aggression.toUpperCase()}`,
+      '=== END PRE-MARKET INTELLIGENCE ===',
+    ].filter(Boolean).join('\n');
+
+    preMarketThesisDate = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    logger.info(`[Pre-Market] Thesis: ${json.marketMood} | ${json.keyTheme}`);
+
+    // Send morning brief to Telegram
+    const bot = getBot();
+    if (bot) {
+      const moodEmoji = { bullish: '🟢', bearish: '🔴', mixed: '🟡', rangebound: '⚪' }[json.marketMood] || '🟡';
+      const aggrEmoji = { high: '⚡', medium: '📊', low: '🛡️' }[json.aggression] || '📊';
+      const msg = [
+        `${moodEmoji} *Pre-Market Brief — ${dateStr}*`,
+        '',
+        `*Theme:* ${json.keyTheme}`,
+        `*Watch:* ${json.watchlist?.join(', ')}`,
+        `*Focus:* ${json.focusSectors?.join(', ')}`,
+        json.avoidSectors?.length ? `*Avoid:* ${json.avoidSectors.join(', ')}` : null,
+        '',
+        `${aggrEmoji} _${json.playbook}_`,
+        '',
+        `_Signals at 9:30 AM →_`,
+      ].filter(l => l !== null).join('\n');
+
+      for (const p of eligible) {
+        const tg = p.user?.telegramUser;
+        if (tg) await bot.sendMessage(parseInt(tg.telegramId), msg, { parse_mode: 'Markdown' }).catch(() => {});
+      }
+    }
+  } catch (err) {
+    logger.error('[Pre-Market] Failed:', err.message);
+    todayPreMarketThesis = '';
+  }
+}
+
+/**
+ * End-of-day review at 3:45 PM using Claude Haiku.
+ *
+ * Reviews today's signals and their outcomes (executed, expired, missed).
+ * Sends a brief Telegram message with:
+ *   - What worked / what didn't
+ *   - One specific lesson for tomorrow
+ *   - One stock to watch at open tomorrow
+ */
+async function eodReview() {
+  if (!isTradingDay(new Date())) return;
+
+  const pauseState = await getSystemPauseState();
+  if (pauseState) return;
+
+  const portfolios = await prisma.portfolio.findMany({
+    where: { isActive: true, isPaused: false },
+    include: {
+      holdings: true,
+      user: { include: { telegramUser: true } }
+    }
+  });
+
+  const anthropic = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
+  const bot = getBot();
+
+  for (const portfolio of portfolios) {
+    const telegramUser = portfolio.user?.telegramUser;
+    if (!telegramUser?.isActive || telegramUser?.isMuted) continue;
+
+    try {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      const signals = await prisma.tradeSignal.findMany({
+        where: { portfolioId: portfolio.id, createdAt: { gte: today } },
+        orderBy: { createdAt: 'asc' }
+      });
+
+      if (signals.length === 0) {
+        logger.info(`[EOD Review] Portfolio ${portfolio.id}: no signals today, skipping`);
+        continue;
+      }
+
+      // Build signal outcomes with current holding prices for P&L context
+      const holdingPrices = {};
+      for (const h of portfolio.holdings) {
+        holdingPrices[h.symbol] = parseFloat(h.currentPrice || h.avgPrice || 0);
+      }
+
+      const signalLines = signals.map(s => {
+        const entryPrice = s.triggerPrice || s.triggerLow || 0;
+        const currentPrice = holdingPrices[s.symbol] || 0;
+        let outcome = '';
+        if (currentPrice && entryPrice > 0) {
+          const pct = s.side === 'BUY'
+            ? ((currentPrice - entryPrice) / entryPrice * 100).toFixed(1)
+            : ((entryPrice - currentPrice) / entryPrice * 100).toFixed(1);
+          outcome = ` → now ₹${currentPrice.toFixed(0)} (${parseFloat(pct) >= 0 ? '+' : ''}${pct}%)`;
+        }
+        return `${s.side} ${s.symbol} @ ₹${entryPrice.toFixed(0)} [${s.status}]${outcome} conf:${s.confidence}%`;
+      }).join('\n');
+
+      const prompt = `You are reviewing today's trade signals for a small portfolio.
+
+Signals today:
+${signalLines}
+
+In 2–3 sharp sentences: what worked, what didn't, and one specific lesson for tomorrow's session.
+Also name one stock setup to watch at tomorrow's open (can be from today's list or a new idea).
+
+JSON only: {"summary": "...", "lesson": "...", "watchTomorrow": "SYMBOL — reason in one line"}`;
+
+      const response = await anthropic.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 200,
+        messages: [{ role: 'user', content: prompt }],
+      });
+
+      const text = response.content[0].text.trim();
+      const json = JSON.parse(text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim());
+
+      const executed = signals.filter(s => s.status === 'EXECUTED').length;
+      const missed   = signals.filter(s => ['EXPIRED', 'DISMISSED'].includes(s.status)).length;
+
+      if (bot) {
+        await bot.sendMessage(
+          parseInt(telegramUser.telegramId),
+          `📊 *EOD Review — ${signals.length} signals (${executed} executed, ${missed} missed)*\n\n${json.summary}\n\n💡 *Lesson:* ${json.lesson}\n\n👀 *Tomorrow:* ${json.watchTomorrow}`,
+          { parse_mode: 'Markdown' }
+        ).catch(() => {});
+      }
+
+      logger.info(`[EOD Review] Portfolio ${portfolio.id}: sent`);
+    } catch (err) {
+      logger.error(`[EOD Review] Portfolio ${portfolio.id}:`, err.message);
+    }
+  }
+}
 
 /**
  * Check if Upstox token is expired and send a reminder to re-authenticate.
@@ -313,7 +539,10 @@ async function generateSignalsForAllPortfolios() {
           logger.warn(`Pre-audit logging failed for portfolio ${portfolio.id}:`, logErr.message);
         }
 
-        const signals = await generateTradeSignals(portfolio.id, extraContext);
+        // Include pre-market thesis if generated today
+        const preMarketCtx = getTodayPreMarketThesis();
+        const fullContext = [extraContext, preMarketCtx].filter(Boolean).join('\n\n');
+        const signals = await generateTradeSignals(portfolio.id, fullContext);
         totalSignals += signals.length;
 
         // Post-signal logging
@@ -728,6 +957,14 @@ async function generateSignalsForAllPortfoliosForOne(portfolio) {
 export function initSignalNotifier() {
   logger.info('Initializing signal notifier...');
 
+  // Pre-market intelligence at 8:30 AM — sector analysis + today's thesis
+  cron.schedule('30 8 * * 1-5', async () => {
+    logger.info('[Pre-Market] Generating morning intelligence brief...');
+    await generatePreMarketIntelligence();
+  }, {
+    timezone: 'Asia/Kolkata'
+  });
+
   // Remind to re-auth Upstox at 9:15 AM if token expired
   cron.schedule('15 9 * * 1-5', async () => {
     if (!isTradingDay(new Date())) return;
@@ -787,13 +1024,23 @@ export function initSignalNotifier() {
     timezone: 'Asia/Kolkata'
   });
 
+  // EOD review at 3:45 PM — Haiku reviews today's signals + sends lesson
+  cron.schedule('45 15 * * 1-5', async () => {
+    if (!isTradingDay(new Date())) return;
+    logger.info('[EOD Review] Running end-of-day signal review...');
+    await eodReview();
+  }, {
+    timezone: 'Asia/Kolkata'
+  });
+
   logger.info('Signal notifier initialized:');
+  logger.info('  Pre-market intelligence: 8:30 AM IST');
   logger.info('  Upstox fund sync: 9:17 AM IST');
-  logger.info('  Morning targets: handled by War Room (9:00 AM)');
   logger.info('  Signal generation: 9:30 AM + 1:00 PM (conditional) IST');
   logger.info('  Signal notifications: every 5 min, 9-3:30 PM IST');
   logger.info('  Order status polling: every 5 min, 9 AM-4 PM IST');
   logger.info('  Mid-day holdings sync (DDPI): every 30 min, 9-3:30 PM IST');
+  logger.info('  EOD review: 3:45 PM IST');
 }
 
 export default { initSignalNotifier, notifyPendingSignals, generateSignalsForAllPortfolios, pollPendingOrders, generateSignalsConditional, syncAllUpstoxFunds };

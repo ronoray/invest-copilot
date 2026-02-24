@@ -2,6 +2,7 @@ import prisma from '../services/prisma.js';
 import { getCurrentPrice, getWatchlistSignals } from '../services/marketData.js';
 import { triageSignalRegen } from '../services/signalTriage.js';
 import { generateTradeSignals, expireOldSignals } from '../services/signalGenerator.js';
+import { getPrevDayHighLow } from '../services/marketIntelligence.js';
 import { getBot } from '../services/telegramBot.js';
 import { isTradingDay } from '../utils/marketHolidays.js';
 import logger from '../services/logger.js';
@@ -9,8 +10,14 @@ import logger from '../services/logger.js';
 // ─── Daily price snapshot ─────────────────────────────────────────────────────
 // Prices captured on the first market scan of each day (after 9:15 AM).
 // Used as baseline to detect intraday moves that may invalidate signals.
-const dailyOpenPrices = new Map(); // symbol → price at first scan today
-let dailyOpenDate = null;          // 'YYYY-MM-DD' IST — prevents re-init on same day
+const dailyOpenPrices  = new Map(); // symbol → price at first scan today
+let dailyOpenDate      = null;      // 'YYYY-MM-DD' IST — prevents re-init on same day
+
+// ─── Previous day high/low (for breakout detection) ──────────────────────────
+// Fetched once per day from TIME_SERIES_DAILY.
+// A close above prev day high is the #1 momentum confirmation signal.
+const prevDayHighLow = new Map(); // symbol → {high, low, close}
+let prevDayHLDate    = null;
 
 // ─── Triage rate limits ───────────────────────────────────────────────────────
 // Keep Claude API costs minimal: Haiku is cheap but still gated by cooldowns.
@@ -20,6 +27,7 @@ let marketRegenCountToday = 0;   // Sonnet regens triggered by price moves today
 let marketRegenDate = null;      // 'YYYY-MM-DD' IST for the counter above
 
 const MOVE_THRESHOLD_PCT    = 3;                  // % from open to flag a move
+const BREAKOUT_BUFFER_PCT   = 0.3;                // % above prev high to confirm breakout
 const TRIAGE_COOLDOWN_MS    = 90 * 60 * 1000;     // 90 min between Haiku calls
 const MAX_MARKET_REGENS     = 2;                   // Sonnet regens/day via this path
 const TRIAGE_WINDOW_START   = 10;                  // Don't triage before 10 AM IST
@@ -38,6 +46,9 @@ export async function scanMarket() {
   logger.info('=== Market Scanner Started ===');
 
   try {
+    // Fetch previous day H/L once per day (used for breakout detection)
+    await ensurePrevDayHighLow();
+
     const updatedPrices = await updatePortfolioTask();
     await checkWatchlistTask();
 
@@ -49,6 +60,38 @@ export async function scanMarket() {
   } catch (error) {
     logger.error('Market scanner error:', error);
   }
+}
+
+/**
+ * Fetch previous day high/low for all portfolio holdings (once per trading day).
+ * Used to detect breakouts above the previous session's high — the primary
+ * momentum confirmation signal used by institutional traders.
+ */
+async function ensurePrevDayHighLow() {
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  if (prevDayHLDate === today) return;
+
+  const holdings = await prisma.holding.findMany({
+    select: { symbol: true, exchange: true }
+  });
+
+  prevDayHighLow.clear();
+
+  for (const h of holdings) {
+    try {
+      const hl = await getPrevDayHighLow(h.symbol, h.exchange || 'NSE');
+      if (hl) {
+        prevDayHighLow.set(h.symbol, hl);
+        logger.info(`[Market Scanner] ${h.symbol} prev day H/L: ₹${hl.high.toFixed(2)} / ₹${hl.low.toFixed(2)}`);
+      }
+      await sleep(12000);
+    } catch (e) {
+      logger.warn(`[Market Scanner] Could not fetch prev day H/L for ${h.symbol}: ${e.message}`);
+    }
+  }
+
+  prevDayHLDate = today;
+  logger.info(`[Market Scanner] Prev day H/L initialised for ${prevDayHighLow.size} holdings`);
 }
 
 /**
@@ -115,6 +158,88 @@ async function checkWatchlistTask() {
 }
 
 /**
+ * Handle breakouts above previous day's high.
+ * These are higher-conviction signals that bypass the standard time-window
+ * gate. A 0.75h freshness threshold is used (vs 1.5h for regular moves).
+ */
+async function handleBreakouts(breakouts) {
+  const nowMs = Date.now();
+
+  // Still respect the Haiku cooldown to cap costs
+  if (nowMs - lastTriageTime < TRIAGE_COOLDOWN_MS) return;
+
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  if (marketRegenDate !== today) { marketRegenCountToday = 0; marketRegenDate = today; }
+  if (marketRegenCountToday >= MAX_MARKET_REGENS) return;
+
+  const portfolios = await prisma.portfolio.findMany({
+    where: { isActive: true, isPaused: false },
+    include: { holdings: true, user: { include: { telegramUser: true } } }
+  });
+
+  for (const portfolio of portfolios) {
+    const telegramUser = portfolio.user?.telegramUser;
+    if (!telegramUser?.isActive || telegramUser?.isMuted) continue;
+
+    // Only regen if one of the breakout stocks is in this portfolio or a pending signal
+    const portfolioSymbols = new Set(portfolio.holdings.map(h => h.symbol));
+    const pendingSymbols = await prisma.tradeSignal.findMany({
+      where: { portfolioId: portfolio.id, status: { in: ['PENDING', 'SNOOZED'] } },
+      select: { symbol: true }
+    }).then(sigs => new Set(sigs.map(s => s.symbol)));
+
+    const relevantBreakouts = breakouts.filter(b =>
+      portfolioSymbols.has(b.symbol) || pendingSymbols.has(b.symbol)
+    );
+    if (relevantBreakouts.length === 0) continue;
+
+    // Skip if signals are very fresh (< 45 min)
+    const lastSignal = await prisma.tradeSignal.findFirst({
+      where: { portfolioId: portfolio.id },
+      orderBy: { createdAt: 'desc' },
+      select: { createdAt: true }
+    });
+    const minsSinceLast = lastSignal
+      ? (nowMs - new Date(lastSignal.createdAt).getTime()) / 60000
+      : 9999;
+    if (minsSinceLast < 45) continue;
+
+    const pendingCount = await prisma.tradeSignal.count({
+      where: { portfolioId: portfolio.id, status: { in: ['PENDING', 'SNOOZED'] } }
+    });
+
+    lastTriageTime = nowMs;
+    const { shouldRegen, reason } = await triageSignalRegen(portfolio, relevantBreakouts, pendingCount);
+
+    if (!shouldRegen) {
+      logger.info(`[Breakout] Portfolio ${portfolio.id}: Haiku says hold — ${reason}`);
+      continue;
+    }
+
+    const bot = getBot();
+    if (bot) {
+      const breakoutText = relevantBreakouts.map(b =>
+        `*${b.symbol}* ₹${b.currentPrice.toFixed(2)} 📈 (prev high ₹${b.prevHigh.toFixed(2)})`
+      ).join('\n');
+      await bot.sendMessage(
+        parseInt(telegramUser.telegramId),
+        `🚀 *Breakout Detected — Refreshing Signals*\n\n${breakoutText}\n\n_${reason}_`,
+        { parse_mode: 'Markdown' }
+      ).catch(() => {});
+    }
+
+    await expireOldSignals();
+    const newSignals = await generateTradeSignals(
+      portfolio.id,
+      `🚀 BREAKOUT SIGNAL: ${relevantBreakouts.map(b => `${b.symbol} broke prev-day high ₹${b.prevHigh.toFixed(0)}`).join(', ')}. ${reason}`
+    );
+
+    marketRegenCountToday++;
+    logger.info(`[Breakout] Portfolio ${portfolio.id}: ${newSignals.length} signals after breakout (regen ${marketRegenCountToday}/${MAX_MARKET_REGENS})`);
+  }
+}
+
+/**
  * Compare freshly updated prices to today's opening snapshot.
  * If any holding has moved ≥ MOVE_THRESHOLD_PCT from the daily open,
  * call Haiku to decide whether to regenerate signals via Sonnet.
@@ -153,7 +278,7 @@ async function checkPriceDeviationsAndTriage(updatedPrices) {
   const hour = parseInt(hourIST);
   if (hour < TRIAGE_WINDOW_START || hour >= TRIAGE_WINDOW_END) return;
 
-  // ── Detect significant moves ───────────────────────────────────────────────
+  // ── Detect significant intraday moves ────────────────────────────────────
   const significantMoves = [];
   for (const { symbol, price } of updatedPrices) {
     const openPrice = dailyOpenPrices.get(symbol);
@@ -164,12 +289,39 @@ async function checkPriceDeviationsAndTriage(updatedPrices) {
     }
   }
 
+  // ── Detect prev-day-high breakouts (primary momentum signal) ─────────────
+  // A stock closing above yesterday's high = institutional confirmation.
+  // This is a stronger signal than a simple % move — bypass the time window
+  // gate and use a shorter freshness threshold.
+  const breakouts = [];
+  for (const { symbol, price } of updatedPrices) {
+    const hl = prevDayHighLow.get(symbol);
+    if (!hl || !hl.high) continue;
+    const threshold = hl.high * (1 + BREAKOUT_BUFFER_PCT / 100);
+    if (price >= threshold) {
+      breakouts.push({
+        symbol,
+        prevHigh: hl.high,
+        currentPrice: price,
+        changePct: ((price - hl.high) / hl.high) * 100,
+        type: 'BREAKOUT_PREV_HIGH'
+      });
+      logger.info(`[Market Scanner] BREAKOUT: ${symbol} ₹${price.toFixed(2)} > prev high ₹${hl.high.toFixed(2)}`);
+    }
+  }
+
+  // Handle breakouts separately — these are high-conviction signals that
+  // don't wait for the 10 AM triage window and have a shorter freshness gate
+  if (breakouts.length > 0) {
+    await handleBreakouts(breakouts);
+  }
+
   if (significantMoves.length === 0) return;
 
   const moveLog = significantMoves.map(m =>
     `${m.symbol} ${m.changePct > 0 ? '+' : ''}${m.changePct.toFixed(1)}%`
   ).join(', ');
-  logger.info(`[Market Scanner] Significant moves detected: ${moveLog}`);
+  logger.info(`[Market Scanner] Significant moves: ${moveLog}`);
 
   // ── Haiku cooldown ─────────────────────────────────────────────────────────
   const nowMs = Date.now();

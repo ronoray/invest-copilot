@@ -65,13 +65,16 @@ const scanHeartbeat = new Map(); // name → { at: Date, signals: number }
 
 // Canonical scan schedule — single source of truth for heartbeat + recovery.
 // Covers market hours AND the evening playbook (7:30 PM).
+// recoveryDeadline (in total IST minutes) — after this time, the scan is too stale
+// to recover. The watchdog silently marks it as done instead of re-running it.
+// This prevents post-market deploys from blasting stale recovery messages.
 const SCAN_SCHEDULE_DEF = [
-  { name: 'pre-market',      hour: 8,  minute: 30 },
-  { name: '9:30-signals',    hour: 9,  minute: 30 },
-  { name: '11:00-pivot',     hour: 11, minute: 0  },
-  { name: '13:00-signals',   hour: 13, minute: 0  },
-  { name: '14:30-pivot',     hour: 14, minute: 30 },
-  { name: 'evening-playbook',hour: 19, minute: 30 },
+  { name: 'pre-market',      hour: 8,  minute: 30, recoveryDeadline: 9  * 60 + 30 }, // don't recover after market open
+  { name: '9:30-signals',    hour: 9,  minute: 30, recoveryDeadline: 13 * 60 +  0 }, // stale after midday scan fires
+  { name: '11:00-pivot',     hour: 11, minute: 0,  recoveryDeadline: 14 * 60 + 30 }, // stale after pre-close pivot
+  { name: '13:00-signals',   hour: 13, minute: 0,  recoveryDeadline: 15 * 60 + 30 }, // stale at market close
+  { name: '14:30-pivot',     hour: 14, minute: 30, recoveryDeadline: 15 * 60 + 45 }, // stale after EOD review
+  { name: 'evening-playbook',hour: 19, minute: 30, recoveryDeadline: 20 * 60 + 30 }, // still protected until 8:30 PM
 ];
 
 function recordScanRun(name, signals = 0) {
@@ -201,6 +204,14 @@ async function checkScanHealthAndRecover() {
 
     const beat = scanHeartbeat.get(scan.name);
     if (beat && beat.at >= today) continue; // Already ran today
+
+    // Past recovery deadline — scan is too stale to run (e.g. post-market deploy).
+    // Silently mark as done so we don't spam recovery messages for closed-market scans.
+    if (scan.recoveryDeadline !== undefined && totalMin > scan.recoveryDeadline) {
+      scanHeartbeat.set(scan.name, { at: new Date(), signals: 0 });
+      logger.info(`[Watchdog] ${scan.name} past recovery deadline — marking stale, skipping`);
+      continue;
+    }
 
     // Missed scan confirmed
     logger.warn(`[Watchdog] MISSED SCAN: ${scan.name} (due ${scan.hour}:${String(scan.minute).padStart(2,'0')} IST)`);

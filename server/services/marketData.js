@@ -6,6 +6,63 @@ const prisma = new PrismaClient();
 const ALPHA_VANTAGE_KEY = process.env.ALPHA_VANTAGE_KEY;
 const BASE_URL = 'https://www.alphavantage.co/query';
 
+// ─── Alpha Vantage daily call budget ──────────────────────────────────────────
+// Free tier: 500 calls/day (hard cap). Warn at 90%, block at 98%.
+// Counter resets at midnight IST. Blocked calls fall back to NSE scraping.
+const _avBudget = {
+  date:    null,   // 'YYYY-MM-DD' IST — resets on new day
+  count:   0,      // calls made today
+  warnSent: false, // warning already logged today (avoid log flood)
+};
+
+const AV_WARN_AT  = 450; // 90% — log warning
+const AV_BLOCK_AT = 490; // 98% — stop calling, use fallback
+
+function _getISTDate() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
+
+function _resetAvIfNewDay() {
+  const today = _getISTDate();
+  if (_avBudget.date !== today) {
+    if (_avBudget.date !== null) {
+      logger.info(`[AV Budget] New day — counter reset (yesterday: ${_avBudget.count}/500 calls)`);
+    }
+    _avBudget.date     = today;
+    _avBudget.count    = 0;
+    _avBudget.warnSent = false;
+  }
+}
+
+function _trackAVCall() {
+  _resetAvIfNewDay();
+  _avBudget.count++;
+  if (!_avBudget.warnSent && _avBudget.count >= AV_WARN_AT) {
+    _avBudget.warnSent = true;
+    logger.warn(`[AV Budget] ⚠️ ${_avBudget.count}/500 calls used — ${500 - _avBudget.count} remaining today`);
+  }
+}
+
+function _isAvBlocked() {
+  _resetAvIfNewDay();
+  return _avBudget.count >= AV_BLOCK_AT;
+}
+
+/**
+ * Returns today's Alpha Vantage call budget status.
+ * Used by signalNotifier to warn user before scans exhaust the budget.
+ */
+export function getAVBudget() {
+  _resetAvIfNewDay();
+  return {
+    count:     _avBudget.count,
+    remaining: 500 - _avBudget.count,
+    warnSent:  _avBudget.warnSent,
+    blocked:   _avBudget.count >= AV_BLOCK_AT,
+    pct:       Math.round(_avBudget.count / 5), // % used
+  };
+}
+
 // NSE symbols with .NS suffix for Alpha Vantage
 const NSE_SUFFIX = '.NS';
 const BSE_SUFFIX = '.BO';
@@ -14,10 +71,16 @@ const BSE_SUFFIX = '.BO';
  * Fetch current price for a symbol
  */
 export async function getCurrentPrice(symbol, exchange = 'NSE') {
+  // If budget is exhausted, skip Alpha Vantage entirely and use NSE fallback
+  if (_isAvBlocked()) {
+    logger.warn(`[AV Budget] Limit reached (${_avBudget.count}/500) — using NSE fallback for ${symbol}`);
+    return await scrapeNSEPrice(symbol);
+  }
+
   try {
     const suffix = exchange === 'NSE' ? NSE_SUFFIX : BSE_SUFFIX;
     const fullSymbol = `${symbol}${suffix}`;
-    
+
     const response = await axios.get(BASE_URL, {
       params: {
         function: 'GLOBAL_QUOTE',
@@ -27,10 +90,12 @@ export async function getCurrentPrice(symbol, exchange = 'NSE') {
     });
 
     const quote = response.data['Global Quote'];
-    
+
     if (!quote || !quote['05. price']) {
       throw new Error(`No data for ${symbol}`);
     }
+
+    _trackAVCall(); // Count successful API call
 
     return {
       symbol,
@@ -43,7 +108,7 @@ export async function getCurrentPrice(symbol, exchange = 'NSE') {
     };
   } catch (error) {
     logger.error(`Error fetching price for ${symbol}:`, error.message);
-    
+
     // Fallback to NSE direct scraping if Alpha Vantage fails
     return await scrapeNSEPrice(symbol);
   }

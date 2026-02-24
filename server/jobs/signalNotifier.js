@@ -11,7 +11,204 @@ import { buildPortfolioTrajectory } from '../services/advancedScreener.js';
 import { getMarketRegime, buildHoldingsTechnicals } from '../services/technicalAnalysis.js';
 import { isTradingDay } from '../utils/marketHolidays.js';
 import { getSystemPauseState } from '../services/pauseState.js';
+import { getAVBudget } from '../services/marketData.js';
 import logger from '../services/logger.js';
+
+// ─── Reliability infrastructure ───────────────────────────────────────────────
+
+/**
+ * Retry an async operation with exponential backoff.
+ * Used for Telegram sends and critical system calls.
+ */
+async function withRetry(fn, label = 'operation', maxAttempts = 3) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt === maxAttempts) throw err;
+      const delayMs = attempt * 2500; // 2.5s, 5s
+      logger.warn(`[Retry] ${label} failed (${attempt}/${maxAttempts}): ${err.message} — retry in ${delayMs}ms`);
+      await new Promise(r => setTimeout(r, delayMs));
+    }
+  }
+}
+
+/**
+ * Send a Telegram message to every eligible active Telegram user (non-muted).
+ * Used for system alerts, scan status, and recovery notices.
+ */
+async function alertEligibleUsers(msg, opts = {}) {
+  const bot = getBot();
+  if (!bot) return;
+  try {
+    const portfolios = await prisma.portfolio.findMany({
+      where: { isActive: true, isPaused: false },
+      include: { user: { include: { telegramUser: true } } }
+    });
+    const seen = new Set();
+    for (const p of portfolios) {
+      const tg = p.user?.telegramUser;
+      if (!tg?.isActive || tg?.isMuted) continue;
+      if (seen.has(tg.telegramId)) continue;
+      seen.add(tg.telegramId);
+      await bot.sendMessage(parseInt(tg.telegramId), msg, { parse_mode: 'Markdown', ...opts }).catch(() => {});
+    }
+  } catch (err) {
+    logger.error('[alertEligibleUsers] Failed:', err.message);
+  }
+}
+
+// ─── Scan heartbeat tracking ──────────────────────────────────────────────────
+// Records when each scheduled scan ran and how many signals it generated.
+// Checked by the watchdog cron every 15 minutes during market hours.
+const scanHeartbeat = new Map(); // name → { at: Date, signals: number }
+
+// Canonical scan schedule — single source of truth for heartbeat + recovery
+const SCAN_SCHEDULE_DEF = [
+  { name: 'pre-market',    hour: 8,  minute: 30 },
+  { name: '9:30-signals',  hour: 9,  minute: 30 },
+  { name: '11:00-pivot',   hour: 11, minute: 0  },
+  { name: '13:00-signals', hour: 13, minute: 0  },
+  { name: '14:30-pivot',   hour: 14, minute: 30 },
+];
+
+function recordScanRun(name, signals = 0) {
+  scanHeartbeat.set(name, { at: new Date(), signals });
+  logger.info(`[Heartbeat] ${name} completed — ${signals} signal(s)`);
+}
+
+/** IST current time as { h, m, totalMin } */
+function nowIST() {
+  const ts = new Date().toLocaleTimeString('en-IN', {
+    hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata'
+  });
+  const [h, m] = ts.split(':').map(Number);
+  return { h, m, totalMin: h * 60 + m };
+}
+
+/** Human-readable IST clock string */
+function nowISTStr() {
+  return new Date().toLocaleTimeString('en-IN', {
+    hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata'
+  });
+}
+
+/**
+ * Startup scan recovery.
+ * On every container start during market hours, check if any portfolio missed
+ * today's signals (e.g. deploy happened after 9:30 AM). If yes, run immediately.
+ */
+async function runStartupRecovery() {
+  if (!isTradingDay(new Date())) return;
+
+  const { totalMin } = nowIST();
+  const MARKET_OPEN  = 9  * 60 + 30;
+  const MARKET_CLOSE = 15 * 60 + 30;
+
+  if (totalMin < MARKET_OPEN || totalMin > MARKET_CLOSE) {
+    logger.info('[Startup Recovery] Outside market hours — no recovery needed');
+    return;
+  }
+
+  const pauseState = await getSystemPauseState();
+  if (pauseState) {
+    logger.info('[Startup Recovery] System paused — skipping');
+    return;
+  }
+
+  // Find active portfolios missing today's signals
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const portfolios = await prisma.portfolio.findMany({
+    where: { isActive: true, isPaused: false }
+  });
+
+  const missing = [];
+  for (const p of portfolios) {
+    const count = await prisma.tradeSignal.count({
+      where: { portfolioId: p.id, createdAt: { gte: today } }
+    });
+    if (count === 0) missing.push(p.id);
+  }
+
+  if (missing.length === 0) {
+    logger.info('[Startup Recovery] All portfolios have today\'s signals — no action needed');
+    return;
+  }
+
+  logger.warn(`[Startup Recovery] Portfolios ${missing.join(',')} missing signals — recovering at ${nowISTStr()}`);
+
+  await alertEligibleUsers(
+    `⚡ *Recovery Scan Running*\n\nServer restarted during market hours. Missed morning scan detected.\nRunning signal generation now at ${nowISTStr()} IST...\n\n_All intelligence layers active. Back to full operation._`
+  );
+
+  await generateSignalsForAllPortfolios();
+  recordScanRun('startup-recovery');
+}
+
+/**
+ * Watchdog: runs every 15 minutes during market hours.
+ * Detects scans that were due but missed (cron failure, crash, etc.) and recovers them.
+ * Also checks Alpha Vantage budget and warns before it's exhausted.
+ */
+async function checkScanHealthAndRecover() {
+  if (!isTradingDay(new Date())) return;
+
+  const { totalMin } = nowIST();
+  if (totalMin < 9 * 60 + 30 || totalMin > 15 * 60 + 30) return;
+
+  const pauseState = await getSystemPauseState();
+  if (pauseState) return;
+
+  // ── Alpha Vantage budget check ────────────────────────────────────────────
+  const avBudget = getAVBudget();
+  if (avBudget.remaining < 60 && !avBudget.warnSent) {
+    logger.warn(`[AV Budget] Low: ${avBudget.count}/500 used, ${avBudget.remaining} remaining`);
+    await alertEligibleUsers(
+      `⚠️ *Market Data Budget Low*\n\n${avBudget.count}/500 Alpha Vantage calls used today.\n` +
+      `${avBudget.remaining} remaining — later scans will use cached sector data.\n\n` +
+      `_Technical signals and holdings data unaffected. Only live ETF prices may be delayed._`
+    );
+  }
+
+  // ── Missed scan detection (25-min grace after each scheduled time) ────────
+  const GRACE_MIN = 25;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+
+  for (const scan of SCAN_SCHEDULE_DEF) {
+    const scanMin = scan.hour * 60 + scan.minute;
+    if (totalMin < scanMin + GRACE_MIN) continue; // Not overdue yet
+
+    const beat = scanHeartbeat.get(scan.name);
+    if (beat && beat.at >= today) continue; // Already ran today
+
+    // Missed scan confirmed
+    logger.warn(`[Watchdog] MISSED SCAN: ${scan.name} (due ${scan.hour}:${String(scan.minute).padStart(2,'0')} IST)`);
+
+    const dueStr = `${scan.hour}:${String(scan.minute).padStart(2, '0')}`;
+    await alertEligibleUsers(
+      `🔄 *Scan Recovery — ${dueStr} IST*\n\nThe ${scan.name} scan was overdue. Recovering now at ${nowISTStr()}...\n_This may happen after a system update or brief disruption._`
+    );
+
+    try {
+      if (scan.name.includes('pivot')) {
+        const label = scan.name === '11:00-pivot' ? '11:00 AM' : '2:30 PM';
+        await generateSignalsAtPivot(label);
+        recordScanRun(scan.name);
+      } else if (scan.name === 'pre-market') {
+        await generatePreMarketIntelligence();
+        recordScanRun(scan.name);
+      } else {
+        // '9:30-signals' or '13:00-signals'
+        await generateSignalsForAllPortfolios();
+        recordScanRun(scan.name);
+      }
+    } catch (err) {
+      logger.error(`[Watchdog] Recovery failed for ${scan.name}:`, err.message);
+    }
+
+    break; // Only recover one scan per watchdog cycle — next cycle handles the rest
+  }
+}
 
 // ─── Pre-market thesis ─────────────────────────────────────────────────────
 // Generated at 8:30 AM, consumed at 9:30 AM signal generation.
@@ -160,6 +357,7 @@ Respond in JSON only:
     ].filter(Boolean).join('\n');
 
     preMarketThesisDate = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    recordScanRun('pre-market');
     logger.info(`[Pre-Market] Thesis: ${json.marketMood} | ${json.keyTheme}`);
 
     // Send morning brief to Telegram
@@ -581,7 +779,14 @@ async function generateSignalsForAllPortfolios() {
       return;
     }
 
+    // Check AV budget before firing Claude + market data (expensive operation)
+    const avBudget = getAVBudget();
+    if (avBudget.remaining < 20) {
+      logger.warn(`[Signal Gen] AV budget critically low (${avBudget.remaining} calls remaining) — sector ETF data will use cache`);
+    }
+
     let totalSignals = 0;
+    let portfoliosScanned = 0; // tracks portfolios that actually ran through signal gen
     for (const portfolio of eligiblePortfolios) {
       try {
         // Gate: non-Upstox portfolios must have recently verified capital
@@ -727,6 +932,7 @@ async function generateSignalsForAllPortfolios() {
         const fullContext = [extraContext, preMarketCtx].filter(Boolean).join('\n\n');
         const signals = await generateTradeSignals(portfolio.id, fullContext);
         totalSignals += signals.length;
+        portfoliosScanned++;
 
         // Post-signal logging
         const buySignals = signals.filter(s => s.side === 'BUY');
@@ -742,6 +948,29 @@ async function generateSignalsForAllPortfolios() {
     }
 
     logger.info(`Signal generation complete: ${totalSignals} signals across ${eligiblePortfolios.length} portfolios`);
+
+    // Determine which heartbeat name applies (9:30 or 13:00)
+    const { h } = nowIST();
+    const heartbeatName = h < 12 ? '9:30-signals' : '13:00-signals';
+    recordScanRun(heartbeatName, totalSignals);
+
+    // If scan ran for at least one portfolio but found zero signals — tell the user.
+    // Silence = ambiguity. User needs to know: "system ran, market had nothing for us."
+    if (portfoliosScanned > 0 && totalSignals === 0) {
+      let regimeNote = '';
+      try {
+        const { getMarketRegime: getRegime } = await import('../services/technicalAnalysis.js');
+        const regime = await getRegime();
+        regimeNote = ` Current regime: *${regime.regime}*${regime.aggressionMultiplier < 0.7 ? ' (defensive mode)' : ''}.`;
+      } catch { /* ignore */ }
+
+      await alertEligibleUsers(
+        `📊 *Market Scan Complete — ${nowISTStr()} IST*\n\n` +
+        `Scanned the full NSE market. No setups met the conviction threshold.${regimeNote}\n\n` +
+        `_Cash preserved and ready to deploy when the right opportunity appears._\n` +
+        `_Next scan: 11:00 AM (pivot) → 1:00 PM (full) → 2:30 PM (pivot)_`
+      );
+    }
   } catch (error) {
     logger.error('Signal generation batch error:', error);
   }
@@ -887,10 +1116,10 @@ ${signal.rationale || ''}${repeatNote}`;
           }
         };
 
-        await bot.sendMessage(chatId, msgText, {
-          parse_mode: 'Markdown',
-          ...inlineKeyboard
-        });
+        await withRetry(
+          () => bot.sendMessage(chatId, msgText, { parse_mode: 'Markdown', ...inlineKeyboard }),
+          `signal #${signal.id} notify to ${chatId}`
+        );
 
         // Update notification tracking
         await prisma.tradeSignal.update({
@@ -1245,6 +1474,16 @@ async function generateSignalsAtPivot(timeLabel) {
   }
 
   logger.info(`[${timeLabel}] Pivot scan complete: ${generated}/${eligible.length} portfolios generated`);
+
+  // Record heartbeat
+  const heartbeatName = timeLabel === '11:00 AM' ? '11:00-pivot' : '14:30-pivot';
+  recordScanRun(heartbeatName, generated);
+
+  // Notify if scan ran but found nothing — user should know system is alive
+  if (eligible.length > 0 && generated === 0) {
+    // All portfolios had enough active signals — this is normal, just log
+    logger.info(`[${timeLabel}] All portfolios had sufficient active signals — pivot scan skipped`);
+  }
 }
 
 /**
@@ -1336,14 +1575,36 @@ export function initSignalNotifier() {
     timezone: 'Asia/Kolkata'
   });
 
-  // EOD review at 3:45 PM — Haiku reviews today's signals + sends lesson
+  // EOD review at 3:45 PM — Sonnet reviews today's signals + overnight watchlist
   cron.schedule('45 15 * * 1-5', async () => {
     if (!isTradingDay(new Date())) return;
     logger.info('[EOD Review] Running end-of-day signal review...');
     await eodReview();
+    recordScanRun('eod-review');
   }, {
     timezone: 'Asia/Kolkata'
   });
+
+  // ─── Reliability: Watchdog + Startup Recovery ──────────────────────────────
+
+  // Watchdog: every 15 min during market+pre-market hours — detects missed scans
+  // and checks Alpha Vantage budget. Recovers missed scans automatically.
+  cron.schedule('*/15 8-16 * * 1-5', async () => {
+    await checkScanHealthAndRecover();
+  }, {
+    timezone: 'Asia/Kolkata'
+  });
+
+  // Startup recovery: fires 12s after init (gives DB/bot time to stabilize).
+  // If a deploy happened during market hours and missed the 9:30 AM scan,
+  // this detects it and runs signal generation immediately.
+  setTimeout(async () => {
+    try {
+      await runStartupRecovery();
+    } catch (err) {
+      logger.error('[Startup Recovery] Error:', err.message);
+    }
+  }, 12000);
 
   logger.info('Signal notifier initialized:');
   logger.info('  Pre-market intelligence: 8:30 AM IST');
@@ -1353,6 +1614,8 @@ export function initSignalNotifier() {
   logger.info('  Order status polling: every 5 min, 9 AM-4 PM IST');
   logger.info('  Mid-day holdings sync (DDPI): every 30 min, 9-3:30 PM IST');
   logger.info('  EOD review: 3:45 PM IST');
+  logger.info('  Watchdog (missed scan recovery): every 15 min, 8-4 PM IST');
+  logger.info('  Startup recovery: fires 12s after init');
 }
 
 export default { initSignalNotifier, notifyPendingSignals, generateSignalsForAllPortfolios, pollPendingOrders, generateSignalsConditional, syncAllUpstoxFunds, generateSignalsAtPivot };

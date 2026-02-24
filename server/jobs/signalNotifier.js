@@ -8,7 +8,6 @@ import { syncUpstoxFunds, syncUpstoxHoldings, getEffectiveCash } from '../servic
 import { buildPreMarketContext } from '../services/marketIntelligence.js';
 import { ANALYST_IDENTITY } from '../services/analystPrompts.js';
 import { getMarketRegime, buildHoldingsTechnicals } from '../services/technicalAnalysis.js';
-import { scanTradingUniverse } from '../services/opportunityScanner.js';
 import { isTradingDay } from '../utils/marketHolidays.js';
 import { getSystemPauseState } from '../services/pauseState.js';
 import logger from '../services/logger.js';
@@ -53,34 +52,36 @@ async function generatePreMarketIntelligence() {
   if (eligible.length === 0) return;
 
   try {
-    logger.info('[Pre-Market] Fetching sector context and scanning trading universe...');
+    logger.info('[Pre-Market] Fetching sector context and warming holdings cache...');
 
-    // 1. Sector ETF OHLCV (buildPreMarketContext sleeps 12s between 5 ETF calls = ~60s)
+    // 1. Sector ETF OHLCV — yesterday's performance across all sectors (60s with rate-limit sleeps)
     const { contextText, sectorRanking } = await buildPreMarketContext();
 
-    // 2. Market regime from NIFTYBEES technicals (free — already cached from step 1)
+    // 2. Market regime — free, NIFTYBEES already cached from step 1
     const regime = await getMarketRegime();
 
-    // 3. Universe scan — 12 stocks × 13s sleep = ~2.6 min. Warms the cache for 9:30 AM signal gen.
-    // This is the most important step: Claude sees REAL technical data at signal time.
-    logger.info('[Pre-Market] Scanning trading universe (warms cache for 9:30 AM)...');
-    const universeScan = await scanTradingUniverse();
-
-    // 4. Holdings technicals for all eligible portfolios (warm cache for each portfolio's holdings)
+    // 3. Holdings technicals — warm cache for each portfolio's held positions
+    //    9:30 AM signal gen will use these as free cache hits (no sleep needed at signal time)
     for (const p of eligible) {
       if (p.holdings?.length) {
-        await buildHoldingsTechnicals(p.holdings, true); // true = sleep between calls
+        await buildHoldingsTechnicals(p.holdings, true);
       }
     }
 
-    // Pull in last night's watchlist if it was generated today
+    // Pull in last night's watchlist if generated today
     const overnightWatchlist = getTomorrowWatchlist();
 
-    const anthropic = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
+    // Detect market stress for early warning
+    const isStressed = regime.regime === 'HIGH_VOL_BEAR' ||
+      (regime.regime === 'BEAR' && (regime.aggressionMultiplier ?? 1) <= 0.5);
 
+    // Leading/lagging sector summary from yesterday's ETF data
+    const leadingStr  = sectorRanking.filter(s => s.change > 0.5).map(s => `${s.label} (+${s.change.toFixed(1)}%)`).join(', ');
+    const laggingStr  = sectorRanking.filter(s => s.change < -0.5).map(s => `${s.label} (${s.change.toFixed(1)}%)`).join(', ');
+
+    const anthropic = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
     const dateStr = new Date().toLocaleDateString('en-IN', {
-      weekday: 'long', day: 'numeric', month: 'long',
-      timeZone: 'Asia/Kolkata'
+      weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Asia/Kolkata'
     });
 
     const prompt = `${ANALYST_IDENTITY}
@@ -90,29 +91,47 @@ ${contextText}
 === MARKET REGIME ===
 ${regime.details}
 ${regime.rationale}
+${isStressed ? '⚠️ MARKET STRESS DETECTED — defensive posture required' : ''}
 === END REGIME ===
 
-${universeScan}
-${overnightWatchlist ? `\n${overnightWatchlist}\n` : ''}
+${overnightWatchlist ? overnightWatchlist + '\n' : ''}
 Today is ${dateStr}. Market opens in ~45 minutes.
 
-The data above is REAL — sector ETF performance from yesterday, live technical indicators for 12 key NSE stocks. Use this data, not assumptions.
+Yesterday's sector rotation summary:
+- Leading: ${leadingStr || 'none significant'}
+- Lagging: ${laggingStr || 'none significant'}
 
-Based on this data, set the trading thesis for today:
-- Which sectors showed momentum yesterday? Where is institutional money flowing?
-- Which specific stocks from the opportunity scan are in the best technical position for today?
-- What's the regime-appropriate aggression level?
+${isStressed ? `
+STRESS MODE — DEFENSIVE MORNING BRIEF:
+The market regime indicates significant stress. Your morning brief must:
+1. Identify which holdings are most vulnerable and recommend pre-market decisions on them
+2. Name the specific support levels that, if broken, trigger a full exit
+3. Identify if there are any safe-haven or counter-cyclical plays (GOLDBEES, defensive FMCG, PHARMA)
+4. Set expectations: this is capital preservation day, not growth day
+` : `
+FULL MARKET INTELLIGENCE BRIEF:
+Based on yesterday's sector performance and the regime, set today's complete trading thesis.
+You know the ENTIRE NSE market — every sector, every major stock, every thematic play.
+
+Address:
+1. Where is institutional money flowing today based on yesterday's sector leadership?
+2. Which specific stocks (anywhere in NSE — not limited to any list) are primed for today?
+3. What's the dominant theme? (PSU capex day? Banking NIM story? IT deal momentum? Auto sales? Power sector? Pharma FDA clearances?)
+4. How aggressive should today be — and why specifically?
+5. Any global macro context you know that's relevant today (FII patterns, crude oil impact, dollar strength)?
+`}
 
 Respond in JSON only:
 {
   "marketMood": "bullish|bearish|mixed|rangebound",
-  "keyTheme": "one sentence — the dominant narrative today",
-  "focusSectors": ["BANKING", "IT"],
-  "avoidSectors": ["PHARMA"],
-  "watchlist": ["STOCK1", "STOCK2", "STOCK3"],
-  "playbook": "2 sentences — how to play today based on technical data. Specific, actionable. Reference actual setups.",
+  "keyTheme": "one crisp sentence — TODAY's dominant narrative",
+  "focusSectors": ["BANKING", "POWER"],
+  "avoidSectors": ["IT"],
+  "watchlist": ["STOCK1", "STOCK2", "STOCK3", "STOCK4", "STOCK5"],
+  "playbook": "2-3 specific, actionable sentences on how to trade today. Name actual stocks and entry logic, not generic advice.",
   "aggression": "high|medium|low",
-  "topSetup": "best single setup from the opportunity scan above — name the stock, the setup type, and why today"
+  "topSetup": "The single best trade for today — name the stock, why today specifically, expected move",
+  "riskWarning": "Key risk to watch — what would change the thesis and force a full position review"
 }`;
 
     const response = await anthropic.messages.create({
@@ -124,18 +143,18 @@ Respond in JSON only:
     const text = response.content[0].text.trim();
     const json = JSON.parse(text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim());
 
-    // Build thesis string for injection into 9:30 AM signal generation
+    // Build thesis string — injected into 9:30 AM signal generation as context
     todayPreMarketThesis = [
       '=== PRE-MARKET INTELLIGENCE (8:30 AM) ===',
-      `Market mood: ${json.marketMood.toUpperCase()} | Regime: ${regime.regime}`,
-      `Today's theme: ${json.keyTheme}`,
-      `Focus sectors: ${json.focusSectors?.join(', ') || 'broad'}`,
-      json.avoidSectors?.length ? `Avoid: ${json.avoidSectors.join(', ')}` : '',
+      `Regime: ${regime.regime} | Mood: ${json.marketMood.toUpperCase()} | Aggression: ${json.aggression.toUpperCase()}`,
+      `Theme: ${json.keyTheme}`,
+      `Focus sectors: ${json.focusSectors?.join(', ') || 'broad market'}`,
+      json.avoidSectors?.length ? `Avoid sectors: ${json.avoidSectors.join(', ')}` : '',
       `Watchlist: ${json.watchlist?.join(', ') || ''}`,
       `Playbook: ${json.playbook}`,
-      json.topSetup ? `Top setup: ${json.topSetup}` : '',
-      `Aggression level: ${json.aggression.toUpperCase()}`,
-      overnightWatchlist || '',
+      json.topSetup        ? `Best setup: ${json.topSetup}` : '',
+      json.riskWarning     ? `Risk watch: ${json.riskWarning}` : '',
+      overnightWatchlist   || '',
       '=== END PRE-MARKET INTELLIGENCE ===',
     ].filter(Boolean).join('\n');
 
@@ -145,23 +164,25 @@ Respond in JSON only:
     // Send morning brief to Telegram
     const bot = getBot();
     if (bot) {
-      const moodEmoji = { bullish: '🟢', bearish: '🔴', mixed: '🟡', rangebound: '⚪' }[json.marketMood] || '🟡';
-      const aggrEmoji = { high: '⚡', medium: '📊', low: '🛡️' }[json.aggression] || '📊';
-      const regimeEmoji = { BULL: '🚀', PULLBACK: '📉', BEAR: '🐻', HIGH_VOL_BEAR: '⚠️', NEUTRAL: '➡️' }[regime.regime] || '➡️';
+      const moodEmoji  = { bullish: '🟢', bearish: '🔴', mixed: '🟡', rangebound: '⚪' }[json.marketMood] || '🟡';
+      const aggrEmoji  = { high: '⚡', medium: '📊', low: '🛡️' }[json.aggression] || '📊';
+      const regimeEmoji = { BULL: '🚀', PULLBACK: '📈', BEAR: '🐻', HIGH_VOL_BEAR: '🚨', NEUTRAL: '➡️' }[regime.regime] || '➡️';
       const msg = [
-        `${moodEmoji} *Pre-Market Brief — ${dateStr}*`,
+        `${isStressed ? '🚨' : moodEmoji} *Pre-Market Brief — ${dateStr}*`,
+        `${regimeEmoji} ${regime.regime}${isStressed ? ' — STRESS MODE' : ''}`,
         '',
         `*Theme:* ${json.keyTheme}`,
-        `${regimeEmoji} *Regime:* ${regime.regime} — _${regime.rationale.slice(0, 120)}..._`,
         '',
-        `*Focus:* ${json.focusSectors?.join(', ')}`,
+        `*Focus sectors:* ${json.focusSectors?.join(', ')}`,
         json.avoidSectors?.length ? `*Avoid:* ${json.avoidSectors.join(', ')}` : null,
-        `*Watch:* ${json.watchlist?.join(', ')}`,
-        json.topSetup ? `\n*Best setup:* ${json.topSetup}` : null,
+        `*Watchlist:* ${json.watchlist?.join(', ')}`,
+        '',
+        json.topSetup    ? `*Best setup:* ${json.topSetup}` : null,
+        json.riskWarning ? `*Risk watch:* ${json.riskWarning}` : null,
         '',
         `${aggrEmoji} _${json.playbook}_`,
         '',
-        `_Signals with live technical data at 9:30 AM →_`,
+        `_Full market signals at 9:30 AM →_`,
       ].filter(l => l !== null).join('\n');
 
       for (const p of eligible) {

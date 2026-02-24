@@ -1,345 +1,309 @@
+/**
+ * server/services/technicalAnalysis.js
+ *
+ * Technical indicator computation from daily OHLCV series.
+ * Feeds real, data-grounded technical analysis into every Claude signal call
+ * so recommendations are timed against actual market structure — not training-data guesses.
+ *
+ * Data source: Alpha Vantage TIME_SERIES_DAILY via marketIntelligence.fetchDailyData()
+ * Cached per trading day — each symbol costs exactly 1 API call per day.
+ * Universe is pre-fetched at 8:30 AM; 9:30 AM signal gen runs on cache hits (free).
+ *
+ * Legacy exports (calculateRSI etc.) retained for backward compatibility.
+ */
+
+import { fetchDailyData } from './marketIntelligence.js';
 import logger from './logger.js';
 
-/**
- * Technical Analysis Service
- * Calculates RSI, MACD, Bollinger Bands, Moving Averages, Volume analysis
- */
+// ── Core math ─────────────────────────────────────────────────────────────────
 
 /**
- * Calculate RSI (Relative Strength Index)
- * @param {array} prices - Array of closing prices (most recent last)
- * @param {number} period - Period for RSI (default 14)
- * @returns {number} RSI value (0-100)
+ * Wilder's RSI — identical to TradingView default.
+ * @param {number[]} closes  Ascending (oldest → newest), min length period + 1
+ * @param {number}   period
  */
-export function calculateRSI(prices, period = 14) {
-  if (prices.length < period + 1) return null;
+export function computeRSI(closes, period = 14) {
+  if (closes.length < period + 1) return null;
+  const c = closes.slice(-Math.min(closes.length, period * 4));
 
-  let gains = 0;
-  let losses = 0;
-
-  // Calculate initial average gain/loss
+  let avgGain = 0, avgLoss = 0;
   for (let i = 1; i <= period; i++) {
-    const change = prices[i] - prices[i - 1];
-    if (change > 0) gains += change;
-    else losses += Math.abs(change);
+    const d = c[i] - c[i - 1];
+    if (d > 0) avgGain += d; else avgLoss += Math.abs(d);
   }
+  avgGain /= period;
+  avgLoss /= period;
 
-  let avgGain = gains / period;
-  let avgLoss = losses / period;
-
-  // Calculate subsequent values
-  for (let i = period + 1; i < prices.length; i++) {
-    const change = prices[i] - prices[i - 1];
-    const gain = change > 0 ? change : 0;
-    const loss = change < 0 ? Math.abs(change) : 0;
-
-    avgGain = (avgGain * (period - 1) + gain) / period;
-    avgLoss = (avgLoss * (period - 1) + loss) / period;
+  for (let i = period + 1; i < c.length; i++) {
+    const d = c[i] - c[i - 1];
+    avgGain = (avgGain * (period - 1) + Math.max(0, d))  / period;
+    avgLoss = (avgLoss * (period - 1) + Math.max(0, -d)) / period;
   }
 
   if (avgLoss === 0) return 100;
-  const rs = avgGain / avgLoss;
-  const rsi = 100 - (100 / (1 + rs));
-
-  return Math.round(rsi * 100) / 100;
+  return parseFloat((100 - 100 / (1 + avgGain / avgLoss)).toFixed(1));
 }
 
 /**
- * Calculate MACD (Moving Average Convergence Divergence)
- * @param {array} prices - Array of closing prices
- * @returns {object} MACD line, Signal line, Histogram
+ * Exponential Moving Average.
+ * @param {number[]} closes  Ascending
+ * @param {number}   period
  */
-export function calculateMACD(prices) {
-  if (prices.length < 26) return null;
-
-  const ema12 = calculateEMA(prices, 12);
-  const ema26 = calculateEMA(prices, 26);
-  const macdLine = ema12 - ema26;
-
-  // Signal line is 9-day EMA of MACD line
-  const macdHistory = [macdLine]; // Simplified - should track history
-  const signalLine = calculateEMA(macdHistory, 9);
-  const histogram = macdLine - signalLine;
-
-  return {
-    macd: Math.round(macdLine * 100) / 100,
-    signal: Math.round(signalLine * 100) / 100,
-    histogram: Math.round(histogram * 100) / 100,
-    status: histogram > 0 ? 'BULLISH' : 'BEARISH',
-  };
-}
-
-/**
- * Calculate EMA (Exponential Moving Average)
- * @param {array} prices - Array of prices
- * @param {number} period - EMA period
- * @returns {number} EMA value
- */
-export function calculateEMA(prices, period) {
-  if (prices.length < period) return null;
-
-  const multiplier = 2 / (period + 1);
-  let ema = prices.slice(0, period).reduce((a, b) => a + b, 0) / period;
-
-  for (let i = period; i < prices.length; i++) {
-    ema = (prices[i] - ema) * multiplier + ema;
+export function computeEMA(closes, period) {
+  if (closes.length < period) return null;
+  const k = 2 / (period + 1);
+  let ema = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < closes.length; i++) {
+    ema = closes[i] * k + ema * (1 - k);
   }
-
-  return ema;
+  return parseFloat(ema.toFixed(2));
 }
 
 /**
- * Calculate Simple Moving Average
- * @param {array} prices - Array of prices
- * @param {number} period - SMA period
- * @returns {number} SMA value
+ * Wilder's Average True Range — for stop sizing and volatility detection.
+ * @param {Array<{high, low, close}>} series  Ascending
+ * @param {number} period
  */
-export function calculateSMA(prices, period) {
-  if (prices.length < period) return null;
-  const recent = prices.slice(-period);
-  return recent.reduce((a, b) => a + b, 0) / period;
-}
-
-/**
- * Calculate Bollinger Bands
- * @param {array} prices - Array of prices
- * @param {number} period - Period (default 20)
- * @param {number} stdDev - Standard deviations (default 2)
- * @returns {object} Upper, Middle, Lower bands
- */
-export function calculateBollingerBands(prices, period = 20, stdDev = 2) {
-  if (prices.length < period) return null;
-
-  const sma = calculateSMA(prices, period);
-  const recentPrices = prices.slice(-period);
-
-  // Calculate standard deviation
-  const variance = recentPrices.reduce((sum, price) => {
-    return sum + Math.pow(price - sma, 2);
-  }, 0) / period;
-
-  const standardDeviation = Math.sqrt(variance);
-
-  return {
-    upper: Math.round((sma + stdDev * standardDeviation) * 100) / 100,
-    middle: Math.round(sma * 100) / 100,
-    lower: Math.round((sma - stdDev * standardDeviation) * 100) / 100,
-    bandwidth: Math.round((standardDeviation / sma) * 10000) / 100, // As percentage
-  };
-}
-
-/**
- * Analyze volume for breakouts
- * @param {array} volumes - Array of volume data (most recent last)
- * @param {number} period - Period to compare (default 20)
- * @returns {object} Volume analysis
- */
-export function analyzeVolume(volumes, period = 20) {
-  if (volumes.length < period + 1) return null;
-
-  const recentVolumes = volumes.slice(-period - 1, -1);
-  const avgVolume = recentVolumes.reduce((a, b) => a + b, 0) / period;
-  const currentVolume = volumes[volumes.length - 1];
-
-  const volumeRatio = currentVolume / avgVolume;
-
-  return {
-    avgVolume: Math.round(avgVolume),
-    currentVolume: Math.round(currentVolume),
-    ratio: Math.round(volumeRatio * 100) / 100,
-    status: volumeRatio > 2 ? 'BREAKOUT' : volumeRatio > 1.5 ? 'HIGH' : 'NORMAL',
-  };
-}
-
-/**
- * Calculate price momentum
- * @param {array} prices - Array of prices
- * @param {number} period - Period to calculate momentum
- * @returns {object} Momentum analysis
- */
-export function calculateMomentum(prices, period = 10) {
-  if (prices.length < period + 1) return null;
-
-  const currentPrice = prices[prices.length - 1];
-  const pastPrice = prices[prices.length - period - 1];
-
-  const change = currentPrice - pastPrice;
-  const changePercent = (change / pastPrice) * 100;
-
-  return {
-    change: Math.round(change * 100) / 100,
-    changePercent: Math.round(changePercent * 100) / 100,
-    status: changePercent > 20 ? 'STRONG_UP' : 
-            changePercent > 10 ? 'MODERATE_UP' :
-            changePercent < -20 ? 'STRONG_DOWN' :
-            changePercent < -10 ? 'MODERATE_DOWN' : 'NEUTRAL',
-  };
-}
-
-/**
- * Calculate volatility (standard deviation of returns)
- * @param {array} prices - Array of prices
- * @param {number} period - Period for calculation
- * @returns {number} Volatility percentage
- */
-export function calculateVolatility(prices, period = 20) {
-  if (prices.length < period + 1) return null;
-
-  const returns = [];
-  for (let i = prices.length - period; i < prices.length; i++) {
-    const dailyReturn = (prices[i] - prices[i - 1]) / prices[i - 1];
-    returns.push(dailyReturn);
+export function computeATR(series, period = 14) {
+  if (series.length < period + 1) return null;
+  const trs = [];
+  for (let i = 1; i < series.length; i++) {
+    trs.push(Math.max(
+      series[i].high  - series[i].low,
+      Math.abs(series[i].high - series[i - 1].close),
+      Math.abs(series[i].low  - series[i - 1].close),
+    ));
   }
-
-  const avgReturn = returns.reduce((a, b) => a + b, 0) / returns.length;
-  const variance = returns.reduce((sum, ret) => {
-    return sum + Math.pow(ret - avgReturn, 2);
-  }, 0) / returns.length;
-
-  const volatility = Math.sqrt(variance) * Math.sqrt(252); // Annualized
-  return Math.round(volatility * 10000) / 100; // As percentage
+  let atr = trs.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < trs.length; i++) {
+    atr = (atr * (period - 1) + trs[i]) / period;
+  }
+  return parseFloat(atr.toFixed(2));
 }
 
 /**
- * Comprehensive technical analysis for a stock
- * @param {object} stockData - Object with prices and volumes arrays
- * @returns {object} Complete technical analysis
+ * Volume ratio: yesterday's volume vs 20-day average.
+ * @param {number[]} volumes  Ascending
  */
-export function analyzeTechnicals(stockData) {
-  const { prices, volumes, symbol } = stockData;
+export function computeVolumeRatio(volumes) {
+  if (volumes.length < 21) return null;
+  const recent = volumes[volumes.length - 1];
+  const avg    = volumes.slice(-21, -1).reduce((a, b) => a + b, 0) / 20;
+  return avg > 0 ? parseFloat((recent / avg).toFixed(2)) : null;
+}
 
-  if (!prices || prices.length < 30) {
-    logger.warn(`Insufficient data for ${symbol}`);
+// ── Symbol technical profile ──────────────────────────────────────────────────
+
+/**
+ * Full technical profile for a symbol.
+ * Costs exactly 1 Alpha Vantage TIME_SERIES_DAILY call per symbol per day (cached).
+ *
+ * @param {string} symbol
+ * @param {string} exchange
+ * @returns {Promise<object|null>}
+ */
+export async function getSymbolTechnicals(symbol, exchange = 'NSE') {
+  try {
+    const data = await fetchDailyData(symbol, exchange);
+    if (!data?.series || data.series.length < 25) return null;
+
+    const s      = data.series;  // ascending
+    const latest = s[s.length - 1];
+    const closes = s.map(d => d.close);
+    const volumes = s.map(d => d.volume);
+
+    const rsi    = computeRSI(closes);
+    const ema20  = computeEMA(closes, 20);
+    const ema50  = computeEMA(closes, 50);
+    const atr    = computeATR(s.slice(-20), 14);
+    const volRat = computeVolumeRatio(volumes);
+
+    // 52-week range (up to 252 trading days)
+    const year       = s.slice(-252);
+    const high52w    = Math.max(...year.map(d => d.high));
+    const pctFromHigh = parseFloat(((latest.close - high52w) / high52w * 100).toFixed(1));
+
+    // EMA structure
+    const aboveEMA20 = ema20 != null && latest.close > ema20;
+    const aboveEMA50 = ema50 != null && latest.close > ema50;
+    const emaUptrend = ema20 != null && ema50 != null && ema20 > ema50;
+
+    const trend = (aboveEMA20 && aboveEMA50 && emaUptrend) ? 'STRONG UPTREND'
+      : (aboveEMA50 && !aboveEMA20)                        ? 'PULLBACK IN UPTREND'
+      : (!aboveEMA20 && !aboveEMA50 && !emaUptrend)        ? 'DOWNTREND'
+      :                                                      'SIDEWAYS';
+
+    const rsiLabel = rsi == null ? 'N/A'
+      : rsi < 25 ? 'DEEPLY OVERSOLD'
+      : rsi < 35 ? 'OVERSOLD'
+      : rsi < 45 ? 'WEAKENING'
+      : rsi < 55 ? 'NEUTRAL'
+      : rsi < 65 ? 'STRENGTHENING'
+      : rsi < 75 ? 'OVERBOUGHT'
+      : 'EXTREMELY OVERBOUGHT';
+
+    // Setup detection — grade quality
+    let setup = null;
+    if (trend === 'STRONG UPTREND' && rsi >= 48 && rsi <= 68 && volRat >= 1.2) {
+      setup = 'MOMENTUM BUY — uptrend intact + volume confirmation. Enter on minor dips.';
+    } else if (trend === 'PULLBACK IN UPTREND' && rsi >= 32 && rsi <= 52) {
+      setup = 'PULLBACK BUY — dip to EMA20 in uptrend, RSI resetting. High R:R entry zone.';
+    } else if (rsi != null && rsi < 33 && aboveEMA50) {
+      setup = 'OVERSOLD BOUNCE — RSI deeply oversold, EMA50 support intact. Reversal watch.';
+    } else if (trend === 'STRONG UPTREND' && rsi != null && rsi > 72 && volRat != null && volRat < 0.8) {
+      setup = 'OVERBOUGHT + fading volume — trim, avoid fresh entry.';
+    } else if (trend === 'DOWNTREND' && rsi != null && rsi > 60) {
+      setup = 'DEAD CAT BOUNCE — sell into strength, do not buy.';
+    }
+
+    // Prompt-ready summary
+    const parts = [
+      `${symbol}: ₹${latest.close.toFixed(0)}`,
+      rsi    != null ? `RSI ${rsi} (${rsiLabel})`                                               : '',
+      `| ${trend}`,
+      ema20  != null ? `| EMA20 ₹${ema20.toFixed(0)} (${aboveEMA20  ? '✓' : '✗'})` : '',
+      ema50  != null ? `| EMA50 ₹${ema50.toFixed(0)} (${aboveEMA50  ? '✓' : '✗'})` : '',
+      volRat != null ? `| Vol ${volRat}x`                                                        : '',
+      atr    != null ? `| ATR ₹${atr.toFixed(0)}`                                                : '',
+      pctFromHigh    ? `| ${pctFromHigh}% from 52W high`                                         : '',
+      setup          ? `\n     ⚡ ${setup}`                                                       : '',
+    ];
+
+    return {
+      symbol, trend, rsi, ema20, ema50, atr, volRatio: volRat,
+      pctFrom52wHigh: pctFromHigh, setup, rsiLabel,
+      latestClose: latest.close, aboveEMA20, aboveEMA50,
+      summary: parts.filter(Boolean).join(' '),
+    };
+  } catch (err) {
+    logger.warn(`[Technicals] ${symbol}: ${err.message}`);
     return null;
   }
+}
 
+// ── Market regime ─────────────────────────────────────────────────────────────
+
+/**
+ * Detect current market regime using NIFTYBEES as Nifty proxy.
+ * NIFTYBEES data is already cached from buildPreMarketContext() — zero extra API call.
+ *
+ * @returns {Promise<{regime, rationale, details, aggressionMultiplier}>}
+ */
+export async function getMarketRegime() {
   try {
-    const rsi = calculateRSI(prices);
-    const macd = calculateMACD(prices);
-    const bb = calculateBollingerBands(prices);
-    const volumeAnalysis = volumes ? analyzeVolume(volumes) : null;
-    const momentum = calculateMomentum(prices, 10);
-    const volatility = calculateVolatility(prices);
-
-    const sma20 = calculateSMA(prices, 20);
-    const sma50 = calculateSMA(prices, 50);
-    const sma200 = calculateSMA(prices, 200);
-    const currentPrice = prices[prices.length - 1];
-
-    // Determine trend
-    let trend = 'NEUTRAL';
-    if (sma20 && sma50 && sma200) {
-      if (currentPrice > sma20 && sma20 > sma50 && sma50 > sma200) {
-        trend = 'STRONG_UPTREND';
-      } else if (currentPrice > sma20 && sma20 > sma50) {
-        trend = 'UPTREND';
-      } else if (currentPrice < sma20 && sma20 < sma50 && sma50 < sma200) {
-        trend = 'STRONG_DOWNTREND';
-      } else if (currentPrice < sma20 && sma20 < sma50) {
-        trend = 'DOWNTREND';
-      }
+    const data = await fetchDailyData('NIFTYBEES', 'NSE');
+    if (!data?.series || data.series.length < 50) {
+      return { regime: 'UNKNOWN', rationale: 'No data', details: '', aggressionMultiplier: 0.7 };
     }
 
-    // Generate signals
-    const signals = [];
-    
-    // RSI signals
-    if (rsi < 30) signals.push({ type: 'BUY', reason: 'RSI oversold', strength: 'STRONG' });
-    else if (rsi > 70) signals.push({ type: 'SELL', reason: 'RSI overbought', strength: 'STRONG' });
-    
-    // MACD signals
-    if (macd && macd.status === 'BULLISH') {
-      signals.push({ type: 'BUY', reason: 'MACD bullish crossover', strength: 'MODERATE' });
-    }
-    
-    // Volume breakout
-    if (volumeAnalysis && volumeAnalysis.status === 'BREAKOUT') {
-      signals.push({ type: 'BUY', reason: 'Volume breakout', strength: 'STRONG' });
-    }
-    
-    // Momentum
-    if (momentum && momentum.status === 'STRONG_UP') {
-      signals.push({ type: 'BUY', reason: 'Strong momentum', strength: 'MODERATE' });
-    }
+    const s      = data.series;
+    const closes = s.map(d => d.close);
+    const latest = closes[closes.length - 1];
+    const rsi    = computeRSI(closes);
+    const ema20  = computeEMA(closes, 20);
+    const ema50  = computeEMA(closes, 50);
+    const atr    = computeATR(s.slice(-20), 14);
+    const volPct = atr != null ? (atr / latest * 100) : 0;
 
-    // Bollinger Band squeeze/breakout
-    if (bb && bb.bandwidth < 10) {
-      signals.push({ type: 'WATCH', reason: 'Bollinger squeeze - volatility breakout imminent', strength: 'MODERATE' });
+    const aboveEMA20 = ema20 != null && latest > ema20;
+    const aboveEMA50 = ema50 != null && latest > ema50;
+    const emaAligned = ema20 != null && ema50 != null && ema20 > ema50;
+
+    let regime, rationale, aggressionMultiplier;
+
+    if (volPct > 1.8 && !aboveEMA20) {
+      regime               = 'HIGH_VOL_BEAR';
+      aggressionMultiplier = 0.4;
+      rationale = `DANGER ZONE: Elevated volatility (ATR ${volPct.toFixed(1)}% of price) + Nifty below EMA20. Cut all position sizes to 40% of normal. Only execute high-conviction SELLs. No fresh longs until EMA20 is reclaimed.`;
+    } else if (aboveEMA20 && aboveEMA50 && emaAligned && rsi != null && rsi > 52) {
+      regime               = 'BULL';
+      aggressionMultiplier = 1.0;
+      rationale = `BULL MARKET: Nifty above EMA20 (₹${ema20?.toFixed(0)}) and EMA50 (₹${ema50?.toFixed(0)}), RSI ${rsi}. Trend is working. Full conviction on momentum + pullback setups. Size up when confidence ≥80%.`;
+    } else if (!aboveEMA20 && rsi != null && rsi < 45) {
+      regime               = 'BEAR';
+      aggressionMultiplier = 0.5;
+      rationale = `BEAR PHASE: Nifty below EMA20, RSI ${rsi}. Defensive only. Prioritise SELLs and profit-taking. Fresh longs only if R:R ≥ 4:1 at EMA50 support with volume confirmation.`;
+    } else if (aboveEMA50 && !aboveEMA20 && rsi != null && rsi >= 38 && rsi <= 55) {
+      regime               = 'PULLBACK';
+      aggressionMultiplier = 0.75;
+      rationale = `PULLBACK ZONE: Nifty above EMA50 (₹${ema50?.toFixed(0)}) but below EMA20 (₹${ema20?.toFixed(0)}), RSI ${rsi}. Prime entry zone for quality dips. Wait for EMA20 retest stabilisation, then enter with ATR-based stops.`;
+    } else {
+      regime               = 'NEUTRAL';
+      aggressionMultiplier = 0.7;
+      rationale = `MIXED SIGNALS: RSI ${rsi}, EMA alignment unclear. Minimum R:R 3:1. No marginal setups — only Grade A entries.`;
     }
 
     return {
-      symbol,
-      currentPrice,
-      indicators: {
-        rsi,
-        macd,
-        bollingerBands: bb,
-        sma20,
-        sma50,
-        sma200,
-        volume: volumeAnalysis,
-        momentum,
-        volatility,
-      },
-      trend,
-      signals,
-      analysis: {
-        isBullish: signals.filter(s => s.type === 'BUY').length > signals.filter(s => s.type === 'SELL').length,
-        isOversold: rsi < 30,
-        isOverbought: rsi > 70,
-        hasVolumeBre: volumeAnalysis && volumeAnalysis.status === 'BREAKOUT',
-        trendStrength: trend.includes('STRONG') ? 'STRONG' : trend.includes('TREND') ? 'MODERATE' : 'WEAK',
-      },
+      regime, rationale, aggressionMultiplier,
+      details: `NIFTYBEES | RSI ${rsi} | EMA20 ₹${ema20?.toFixed(0)} (${aboveEMA20 ? '✓' : '✗'}) | EMA50 ₹${ema50?.toFixed(0)} (${aboveEMA50 ? '✓' : '✗'}) | ATR ₹${atr?.toFixed(0)} (${volPct.toFixed(1)}% vol)`,
     };
-  } catch (error) {
-    logger.error(`Technical analysis error for ${symbol}:`, error);
-    return null;
+  } catch (err) {
+    logger.warn(`[MarketRegime] ${err.message}`);
+    return { regime: 'UNKNOWN', rationale: 'Data error', details: '', aggressionMultiplier: 0.7 };
   }
 }
 
+// ── Holdings bulk analysis ────────────────────────────────────────────────────
+
 /**
- * Determine risk category based on technical analysis
- * @param {object} technicals - Technical analysis results
- * @param {number} marketCap - Market cap in crores
- * @returns {string} HIGH, MEDIUM, or LOW risk
+ * Build full technical context for portfolio holdings.
+ * Returns formatted block for signal generation prompt injection.
+ *
+ * Alpha Vantage budget: 1 TIME_SERIES_DAILY call per holding per day (cached).
+ * Adds 13s sleep between calls to stay under 5/min rate limit.
+ * Set withSleep=false when cache is already warm (e.g. post-8:30 AM pre-market scan).
+ *
+ * @param {Array}   holdings
+ * @param {boolean} withSleep
+ * @returns {Promise<string>}
  */
-export function determineRiskCategory(technicals, marketCap) {
-  const { indicators, signals } = technicals;
-  
-  let riskScore = 0;
+export async function buildHoldingsTechnicals(holdings, withSleep = true) {
+  if (!holdings?.length) return '';
 
-  // Volatility factor (higher volatility = higher risk)
-  if (indicators.volatility > 40) riskScore += 3;
-  else if (indicators.volatility > 25) riskScore += 2;
-  else riskScore += 1;
+  const lines   = ['=== HOLDINGS — TECHNICAL STATE ==='];
+  let   hasData = false;
 
-  // Market cap factor (smaller = higher risk)
-  if (marketCap < 5000) riskScore += 3; // Small-cap
-  else if (marketCap < 20000) riskScore += 2; // Mid-cap
-  else riskScore += 1; // Large-cap
+  for (const h of holdings.slice(0, 6)) {
+    const tech = await getSymbolTechnicals(h.symbol, h.exchange || 'NSE');
+    if (tech) {
+      lines.push(tech.summary);
+      hasData = true;
+    }
+    if (withSleep) await sleep(13000);
+  }
 
-  // Signal strength (aggressive signals = higher risk)
-  const strongSignals = signals.filter(s => s.strength === 'STRONG').length;
-  if (strongSignals >= 2) riskScore += 1;
+  if (!hasData) return '';
+  lines.push('=== END HOLDINGS TECHNICALS ===');
+  return lines.join('\n');
+}
 
-  // RSI extremes (contrarian plays = higher risk)
-  if (indicators.rsi < 25 || indicators.rsi > 75) riskScore += 1;
+// ── Legacy exports (backward compatibility) ──────────────────────────────────
 
-  // Categorize
-  if (riskScore >= 7) return 'HIGH';
-  if (riskScore >= 4) return 'MEDIUM';
-  return 'LOW';
+export function calculateRSI(prices, period = 14) { return computeRSI(prices, period); }
+export function calculateEMA(prices, period)       { return computeEMA(prices, period); }
+export function calculateSMA(prices, period) {
+  if (prices.length < period) return null;
+  return prices.slice(-period).reduce((a, b) => a + b, 0) / period;
+}
+export function analyzeVolume(volumes, period = 20) {
+  if (volumes.length < period + 1) return null;
+  const avg     = volumes.slice(-period - 1, -1).reduce((a, b) => a + b, 0) / period;
+  const current = volumes[volumes.length - 1];
+  const ratio   = current / avg;
+  return {
+    avgVolume: Math.round(avg), currentVolume: Math.round(current),
+    ratio: Math.round(ratio * 100) / 100,
+    status: ratio > 2 ? 'BREAKOUT' : ratio > 1.5 ? 'HIGH' : 'NORMAL',
+  };
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 export default {
-  calculateRSI,
-  calculateMACD,
-  calculateEMA,
-  calculateSMA,
-  calculateBollingerBands,
-  analyzeVolume,
-  calculateMomentum,
-  calculateVolatility,
-  analyzeTechnicals,
-  determineRiskCategory,
+  computeRSI, computeEMA, computeATR, computeVolumeRatio,
+  getSymbolTechnicals, getMarketRegime, buildHoldingsTechnicals,
+  // legacy
+  calculateRSI, calculateEMA, calculateSMA, analyzeVolume,
 };

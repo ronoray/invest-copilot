@@ -7,6 +7,8 @@ import { isTokenValid, getAuthorizationUrl, getHoldings, getOrderStatus } from '
 import { syncUpstoxFunds, syncUpstoxHoldings, getEffectiveCash } from '../services/capitalGuard.js';
 import { buildPreMarketContext } from '../services/marketIntelligence.js';
 import { ANALYST_IDENTITY } from '../services/analystPrompts.js';
+import { getMarketRegime, buildHoldingsTechnicals } from '../services/technicalAnalysis.js';
+import { scanTradingUniverse } from '../services/opportunityScanner.js';
 import { isTradingDay } from '../utils/marketHolidays.js';
 import { getSystemPauseState } from '../services/pauseState.js';
 import logger from '../services/logger.js';
@@ -51,8 +53,25 @@ async function generatePreMarketIntelligence() {
   if (eligible.length === 0) return;
 
   try {
-    logger.info('[Pre-Market] Fetching sector context...');
+    logger.info('[Pre-Market] Fetching sector context and scanning trading universe...');
+
+    // 1. Sector ETF OHLCV (buildPreMarketContext sleeps 12s between 5 ETF calls = ~60s)
     const { contextText, sectorRanking } = await buildPreMarketContext();
+
+    // 2. Market regime from NIFTYBEES technicals (free — already cached from step 1)
+    const regime = await getMarketRegime();
+
+    // 3. Universe scan — 12 stocks × 13s sleep = ~2.6 min. Warms the cache for 9:30 AM signal gen.
+    // This is the most important step: Claude sees REAL technical data at signal time.
+    logger.info('[Pre-Market] Scanning trading universe (warms cache for 9:30 AM)...');
+    const universeScan = await scanTradingUniverse();
+
+    // 4. Holdings technicals for all eligible portfolios (warm cache for each portfolio's holdings)
+    for (const p of eligible) {
+      if (p.holdings?.length) {
+        await buildHoldingsTechnicals(p.holdings, true); // true = sleep between calls
+      }
+    }
 
     // Pull in last night's watchlist if it was generated today
     const overnightWatchlist = getTomorrowWatchlist();
@@ -67,10 +86,22 @@ async function generatePreMarketIntelligence() {
     const prompt = `${ANALYST_IDENTITY}
 
 ${contextText}
+
+=== MARKET REGIME ===
+${regime.details}
+${regime.rationale}
+=== END REGIME ===
+
+${universeScan}
 ${overnightWatchlist ? `\n${overnightWatchlist}\n` : ''}
 Today is ${dateStr}. Market opens in ~45 minutes.
 
-Based on yesterday's sector performance, set the trading thesis for today. Where is the money flowing? What do you want to own when the bell rings?
+The data above is REAL — sector ETF performance from yesterday, live technical indicators for 12 key NSE stocks. Use this data, not assumptions.
+
+Based on this data, set the trading thesis for today:
+- Which sectors showed momentum yesterday? Where is institutional money flowing?
+- Which specific stocks from the opportunity scan are in the best technical position for today?
+- What's the regime-appropriate aggression level?
 
 Respond in JSON only:
 {
@@ -79,8 +110,9 @@ Respond in JSON only:
   "focusSectors": ["BANKING", "IT"],
   "avoidSectors": ["PHARMA"],
   "watchlist": ["STOCK1", "STOCK2", "STOCK3"],
-  "playbook": "2 sentences — how to play today. Specific, actionable.",
-  "aggression": "high|medium|low"
+  "playbook": "2 sentences — how to play today based on technical data. Specific, actionable. Reference actual setups.",
+  "aggression": "high|medium|low",
+  "topSetup": "best single setup from the opportunity scan above — name the stock, the setup type, and why today"
 }`;
 
     const response = await anthropic.messages.create({
@@ -95,12 +127,13 @@ Respond in JSON only:
     // Build thesis string for injection into 9:30 AM signal generation
     todayPreMarketThesis = [
       '=== PRE-MARKET INTELLIGENCE (8:30 AM) ===',
-      `Market mood: ${json.marketMood.toUpperCase()}`,
+      `Market mood: ${json.marketMood.toUpperCase()} | Regime: ${regime.regime}`,
       `Today's theme: ${json.keyTheme}`,
       `Focus sectors: ${json.focusSectors?.join(', ') || 'broad'}`,
       json.avoidSectors?.length ? `Avoid: ${json.avoidSectors.join(', ')}` : '',
       `Watchlist: ${json.watchlist?.join(', ') || ''}`,
       `Playbook: ${json.playbook}`,
+      json.topSetup ? `Top setup: ${json.topSetup}` : '',
       `Aggression level: ${json.aggression.toUpperCase()}`,
       overnightWatchlist || '',
       '=== END PRE-MARKET INTELLIGENCE ===',
@@ -114,17 +147,21 @@ Respond in JSON only:
     if (bot) {
       const moodEmoji = { bullish: '🟢', bearish: '🔴', mixed: '🟡', rangebound: '⚪' }[json.marketMood] || '🟡';
       const aggrEmoji = { high: '⚡', medium: '📊', low: '🛡️' }[json.aggression] || '📊';
+      const regimeEmoji = { BULL: '🚀', PULLBACK: '📉', BEAR: '🐻', HIGH_VOL_BEAR: '⚠️', NEUTRAL: '➡️' }[regime.regime] || '➡️';
       const msg = [
         `${moodEmoji} *Pre-Market Brief — ${dateStr}*`,
         '',
         `*Theme:* ${json.keyTheme}`,
-        `*Watch:* ${json.watchlist?.join(', ')}`,
+        `${regimeEmoji} *Regime:* ${regime.regime} — _${regime.rationale.slice(0, 120)}..._`,
+        '',
         `*Focus:* ${json.focusSectors?.join(', ')}`,
         json.avoidSectors?.length ? `*Avoid:* ${json.avoidSectors.join(', ')}` : null,
+        `*Watch:* ${json.watchlist?.join(', ')}`,
+        json.topSetup ? `\n*Best setup:* ${json.topSetup}` : null,
         '',
         `${aggrEmoji} _${json.playbook}_`,
         '',
-        `_Signals at 9:30 AM →_`,
+        `_Signals with live technical data at 9:30 AM →_`,
       ].filter(l => l !== null).join('\n');
 
       for (const p of eligible) {
@@ -222,13 +259,21 @@ async function eodReview() {
         return `${s.side} ${s.symbol} @ ₹${entry.toFixed(0)} [${s.status}]${outcome} | conf:${s.confidence}%`;
       }).join('\n') : 'No signals generated today.';
 
-      // Portfolio holdings summary
+      // Portfolio holdings summary with full technical state
+      const holdingsTechEOD = await buildHoldingsTechnicals(portfolio.holdings, false);
       const holdingsSummary = portfolio.holdings.map(h => {
-        const curr = parseFloat(h.currentPrice || 0);
-        const avg  = parseFloat(h.avgPrice || 0);
-        const pnl  = avg > 0 ? ((curr - avg) / avg * 100).toFixed(1) : '0.0';
-        return `${h.symbol}: ₹${curr.toFixed(0)} (avg ₹${avg.toFixed(0)}, ${parseFloat(pnl) >= 0 ? '+' : ''}${pnl}%)`;
+        const curr    = parseFloat(h.currentPrice || 0);
+        const avg     = parseFloat(h.avgPrice || 0);
+        const pnl     = avg > 0 ? ((curr - avg) / avg * 100).toFixed(1) : '0.0';
+        const pnlAmt  = ((curr - avg) * h.quantity).toFixed(0);
+        return `${h.symbol}: ₹${curr.toFixed(0)} (avg ₹${avg.toFixed(0)}, ${parseFloat(pnl) >= 0 ? '+' : ''}${pnl}%, P&L ${parseFloat(pnlAmt) >= 0 ? '+' : ''}₹${pnlAmt})`;
       }).join('\n') || 'No holdings.';
+
+      // Total portfolio P&L
+      const totalInvested = portfolio.holdings.reduce((s, h) => s + h.quantity * parseFloat(h.avgPrice), 0);
+      const totalCurrent  = portfolio.holdings.reduce((s, h) => s + h.quantity * parseFloat(h.currentPrice || h.avgPrice), 0);
+      const totalPnl      = totalCurrent - totalInvested;
+      const totalPnlPct   = totalInvested > 0 ? (totalPnl / totalInvested * 100).toFixed(1) : '0.0';
 
       const availableCash = parseFloat(portfolio.availableCash || portfolio.startingCapital || 0);
 
@@ -239,8 +284,10 @@ ${sectorContext}
 === TODAY'S SIGNALS & OUTCOMES ===
 ${signalLines}
 
-=== CURRENT HOLDINGS ===
+=== PORTFOLIO STATE (CLOSE OF DAY) ===
 ${holdingsSummary}
+Total portfolio P&L: ${parseFloat(totalPnlPct) >= 0 ? '+' : ''}${totalPnlPct}% (${totalPnl >= 0 ? '+' : ''}₹${totalPnl.toFixed(0)})
+${holdingsTechEOD ? '\n' + holdingsTechEOD : ''}
 
 Available capital for tomorrow: ₹${availableCash.toLocaleString('en-IN')}
 

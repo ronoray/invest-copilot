@@ -2,8 +2,10 @@ import Anthropic from '@anthropic-ai/sdk';
 import prisma from './prisma.js';
 import { buildProfileBrief, buildPortfolioAudit, buildGrowthDirective } from './advancedScreener.js';
 import { fetchMarketContext } from './marketData.js';
-import { ANALYST_IDENTITY, ELITE_TRADER_EDGE, MARKET_DATA_INSTRUCTION, buildAccountabilityScorecard } from './analystPrompts.js';
+import { ANALYST_IDENTITY, ELITE_TRADER_EDGE, MARKET_DATA_INSTRUCTION, TECHNICAL_FRAMEWORK, buildAccountabilityScorecard } from './analystPrompts.js';
 import { getEffectiveCash, validateSignals } from './capitalGuard.js';
+import { buildHoldingsTechnicals, getMarketRegime } from './technicalAnalysis.js';
+import { scanTradingUniverse } from './opportunityScanner.js';
 import logger from './logger.js';
 
 const anthropic = new Anthropic({
@@ -46,8 +48,22 @@ export async function generateTradeSignals(portfolioId, extraContext = '') {
     ? `Today's earning target: ₹${dailyTarget.aiTarget}. Earned so far: ₹${dailyTarget.earnedActual}. Gap: ₹${(dailyTarget.aiTarget - dailyTarget.earnedActual).toFixed(0)}.`
     : '';
 
+  // Fetch technical analysis — market regime + holdings state + opportunity scan
+  // All data is cached per day at 8:30 AM; these calls are free (cache hits) by 9:30 AM
+  let marketRegime = { regime: 'UNKNOWN', rationale: '', details: '', aggressionMultiplier: 0.8 };
+  let holdingsTech = '';
+  let universeScan = '';
+  try {
+    [marketRegime, holdingsTech, universeScan] = await Promise.all([
+      getMarketRegime(),
+      buildHoldingsTechnicals(portfolio.holdings || [], false), // false = no sleep (cache warm)
+      scanTradingUniverse(),
+    ]);
+  } catch (e) {
+    logger.warn('Could not fetch technical context:', e.message);
+  }
+
   // Fetch real market data
-  let marketContext = '';
   try {
     marketContext = await fetchMarketContext(portfolio.holdings || []);
   } catch (e) {
@@ -62,15 +78,30 @@ export async function generateTradeSignals(portfolioId, extraContext = '') {
     logger.warn('Could not build scorecard:', e.message);
   }
 
+  // Regime-adjusted sizing multiplier → adjusts conviction thresholds and position sizes
+  const aggMult = marketRegime.aggressionMultiplier ?? 0.8;
+  const minConviction = aggMult < 0.6 ? 78 : aggMult < 0.8 ? 72 : 68;
+  const maxPosPct     = aggMult < 0.6 ? 20 : aggMult < 0.8 ? 25 : 30;
+
   const prompt = `${ANALYST_IDENTITY}
 
 ${ELITE_TRADER_EDGE}
 
+${TECHNICAL_FRAMEWORK}
+
 ${growthDirective}
+
+=== MARKET REGIME — READ THIS FIRST ===
+${marketRegime.details}
+${marketRegime.rationale}
+Aggression multiplier: ${(aggMult * 100).toFixed(0)}% of normal sizing
+=== END MARKET REGIME ===
 
 ${marketContext}
 ${MARKET_DATA_INSTRUCTION}
 
+${holdingsTech ? holdingsTech + '\n' : ''}
+${universeScan ? universeScan + '\n' : ''}
 ${scorecard}
 
 ${portfolioAudit}
@@ -89,31 +120,33 @@ Signals hit the investor's Telegram with an Execute button that fires the Upstox
 - Since capital is ₹${effectiveCash.toLocaleString('en-IN')}, 2–3 focused bets > 5 spread bets. Concentrate on your highest conviction setups.
 ` : ''}
 PORTFOLIO AUDIT DIRECTIVE:
-1. BROKEN THESIS → SELL: Any holding where the original reason to buy no longer holds. Sentiment, momentum, or fundamentals have turned. Cut it and redeploy.
-2. OVERWEIGHT → TRIM: Any single position >20% of portfolio. Lock profits, rebalance.
-3. IDLE CASH → DEPLOY: Find the highest momentum setups available right now and put capital to work.
+1. BROKEN THESIS → SELL: Any holding where the original reason to buy no longer holds. Sentiment, momentum, or fundamentals have turned. Cut it and redeploy — check the technical state above.
+2. OVERWEIGHT → TRIM: Any single position >20% of portfolio. Lock profits, rebalance. RSI > 72 = trim first, ask questions later.
+3. IDLE CASH → DEPLOY: The opportunity scan above shows which setups are live RIGHT NOW. These are data-confirmed, not guesses.
 
 WEALTH MULTIPLICATION MANDATE — GENERATE SIGNALS NOW:
 
-This is not about preserving capital. It is about MULTIPLYING it. Think like a prop desk:
-- Follow the sector ETF data above. Money rotates — align every BUY with the sector wind at your back.
-- MOMENTUM is the edge: stocks breaking out of ranges, leading their sector, showing delivery volume spikes. These are the trades that make 8–15% in days, not weeks.
-- Scan Nifty 50, Nifty Next 50, Nifty Midcap 150, sectoral leaders. Use your knowledge of valuations, PE ranges, and institutional positioning to find asymmetric setups.
+This is not about preserving capital. It is about MULTIPLYING it. Think like a prop desk with institutional discipline:
+- The technical data above is REAL. Use it. RSI + EMA alignment tells you timing. Volume confirms the move. ATR sizes the stop.
+- ONLY trade setups in the opportunity scan: STRONG UPTREND or PULLBACK IN UPTREND with RSI not overbought. These are Grade A and B setups.
+- MOMENTUM is the edge: stocks in confirmed uptrends with volume 1.2x+ average. These are where institutional money is flowing.
+- Sector ETF data above tells you where market money is rotating. Align every BUY with sector momentum at your back.
 
-For every signal:
-1. THE SETUP: Sector momentum + stock-level catalyst (breakout, earnings, policy, institutional accumulation). Why NOW, not tomorrow?
-2. THE TRADE: Entry, target, stop. Minimum R:R 2.5:1 — target 3:1. Be specific — "entry ₹342, target ₹378, stop ₹326".
-3. THE EDGE: What does the market not yet see? Delivery volume, option OI buildup, bulk deal, sector rotation — what is the INSTITUTIONAL signal here?
-4. THE SIZE: ₹${effectiveCash.toLocaleString('en-IN')} available. Conviction ≥85% → size 25–30%. Conviction 70–84% → 15–20%. Below 70% → skip it.
+For every signal you generate:
+1. THE SETUP: Reference the technical data provided — which specific indicator confirms the entry? (e.g., "RSI at 52 in STRONG UPTREND with 1.4x volume = Grade A momentum buy")
+2. THE TRADE: Entry = EMA level or breakout level from the data. Target = entry + 3× ATR minimum. Stop = entry − 1.5× ATR.
+3. THE EDGE: What does the market not yet see? Delivery volume, sector rotation, institutional accumulation — the INSTITUTIONAL signal.
+4. THE SIZE: Regime = ${marketRegime.regime}. Max single position = ${maxPosPct}% of ₹${effectiveCash.toLocaleString('en-IN')}. Confidence ≥85% → ${maxPosPct}%. Confidence 70-84% → ${Math.round(maxPosPct * 0.7)}%. Below ${minConviction}% → skip.
 
-${scorecard ? 'ACCOUNTABILITY: Your previous calls are above. Own the wins and own the losses. Adjust your conviction levels based on what has worked. If a setup is still valid, re-enter with updated levels. Never abandon a working thesis just because the first attempt was wrong.' : ''}
+${scorecard ? 'ACCOUNTABILITY: Your previous calls are above. Own the wins and losses. If a setup is still technically valid (trend intact, RSI not extreme), re-enter with fresh ATR-based levels. Never re-enter if technical state has deteriorated.' : ''}
 
 RULES (non-negotiable):
-- BUY capital constraint: sum of (quantity × price) for ALL BUY signals ≤ ₹${effectiveCash.toLocaleString('en-IN')}. Verify your math before responding — show it in capitalCheck.
-- SELL signals ONLY for stocks you currently hold. If the thesis is broken, EXIT decisively.
-- Confidence minimum 70 to include a signal. Below that, the R:R doesn't justify the capital at risk.
-- In a risk-off market (Gold up, broad indices weak): prioritise SELL/TRIM signals and only add high-conviction BUYs with tight stops.
-- Return fewer signals rather than forcing marginal trades. 2 great signals beat 5 mediocre ones every time.
+- BUY capital constraint: sum of (quantity × price) for ALL BUY signals ≤ ₹${effectiveCash.toLocaleString('en-IN')}. Verify your math — show it in capitalCheck.
+- SELL signals ONLY for stocks you currently hold. Check the holdings technical state — if RSI > 72 + EMA20 losing support, EXIT.
+- Confidence minimum ${minConviction} in ${marketRegime.regime} regime. Below that, the R:R doesn't justify the capital risk.
+- Return fewer signals rather than forcing marginal trades. 2 Grade A signals beat 5 marginal ones every time.
+- If the regime is BEAR or HIGH_VOL_BEAR: generate SELL/TRIM signals first, then only add longs with R:R ≥ 4:1.
+- If genuinely no Grade A or B setups exist, return empty array — never force a bad trade.
 
 Respond in this EXACT JSON format (no markdown, no extra text):
 {
@@ -124,12 +157,12 @@ Respond in this EXACT JSON format (no markdown, no extra text):
       "side": "BUY",
       "quantity": 10,
       "price": 150.00,
-      "triggerType": "MARKET",
-      "triggerPrice": null,
+      "triggerType": "LIMIT",
+      "triggerPrice": 149.00,
       "triggerLow": null,
       "triggerHigh": null,
       "confidence": 85,
-      "rationale": "CAPITAL: 10×₹150=₹1,500. THESIS: [why]. CATALYST: [what triggers]. R:R 2.5:1. Stop at ₹X invalidates if [condition]."
+      "rationale": "CAPITAL: 10×₹150=₹1,500. SETUP: RSI 52 (neutral→strengthening) + STRONG UPTREND + Vol 1.4x = Grade A momentum. ENTRY: ₹149 (EMA20 retest). TARGET: ₹163 (3×ATR=₹14). STOP: ₹143 (1.5×ATR=₹7). R:R 2.1:1. CATALYST: [what triggers]. INVALIDATION: close below EMA50 ₹138."
     }
   ],
   "capitalCheck": "Signal 1: 10×₹150=₹1,500. Total: ₹1,500 / ₹${effectiveCash.toLocaleString('en-IN')} available = OK"
@@ -137,14 +170,13 @@ Respond in this EXACT JSON format (no markdown, no extra text):
 
 Technical notes:
 - Maximum 5 signals (quality over quantity)
-- triggerType: MARKET (execute now), LIMIT (at specific price), ZONE (between triggerLow and triggerHigh)
-- MARKET orders: set "price" field to the current approximate market price (for capital validation). triggerPrice/triggerLow/triggerHigh = null
-- LIMIT orders: set triggerPrice
+- triggerType: MARKET (execute now), LIMIT (at specific price — preferred), ZONE (between triggerLow and triggerHigh)
+- MARKET orders: set "price" to approximate current market price. triggerPrice/triggerLow/triggerHigh = null
+- LIMIT orders: set triggerPrice (should be at or below current price for BUYs — EMA20/50 retest levels preferred)
 - ZONE orders: set triggerLow and triggerHigh
-- EVERY signal MUST include a "price" field with the approximate current price of the stock — this is mandatory for capital validation
-- confidence: 0-100 (minimum 60 to be worth including)
-- CRITICAL CAPITAL CHECK: Before finalizing your response, add up (quantity × price) for ALL BUY signals. If the total exceeds ₹${effectiveCash.toLocaleString('en-IN')}, you MUST reduce quantities or remove signals until the total fits. Show your math in the rationale of the first signal.
-- If genuinely no good setups exist today, return empty array — never force a bad trade`;
+- EVERY signal MUST include "price" field — this is mandatory for capital validation
+- confidence: 0-100 (minimum ${minConviction} in current ${marketRegime.regime} regime)
+- CRITICAL: Before finalizing, add up (quantity × price) for ALL BUY signals. If total > ₹${effectiveCash.toLocaleString('en-IN')}, reduce quantities until it fits. Show math in capitalCheck.`;
 
   try {
     const message = await anthropic.messages.create({

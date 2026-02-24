@@ -67,7 +67,10 @@ export async function fetchDailyData(symbol, exchange = 'NSE') {
       volume: parseInt  (ts[d]['5. volume'] || 0),
     } : null;
 
-    const data = { today: parse(dates[0]), yesterday: parse(dates[1]) };
+    // Full ascending series (oldest → newest) for technical analysis
+    const series = [...dates].reverse().map(parse).filter(Boolean);
+
+    const data = { today: parse(dates[0]), yesterday: parse(dates[1]), series };
     dailyDataCache.set(cacheKey, data);
     return data;
   } catch (err) {

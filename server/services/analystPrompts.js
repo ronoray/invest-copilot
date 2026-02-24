@@ -67,6 +67,47 @@ Think like a prop desk with ₹50Cr AUM, not a retail investor reading Moneycont
 `;
 
 // ============================================
+// TECHNICAL ANALYSIS FRAMEWORK
+// ============================================
+
+export const TECHNICAL_FRAMEWORK = `
+TECHNICAL ANALYSIS — HOW TO READ THE DATA PROVIDED:
+
+RSI LEVELS (use these to time entries/exits):
+  • <30 OVERSOLD: Potential reversal. Buy ONLY if trend is intact (above EMA50) + volume picking up
+  • 30-45 WEAKENING: Distribution phase. Selling pressure active — prefer exits over new longs
+  • 45-55 NEUTRAL: Coiled spring. Watch for directional break before committing capital
+  • 55-65 STRENGTHENING: Prime entry zone — momentum building but not overbought yet
+  • 65-75 OVERBOUGHT: Extended move. Wait for RSI pullback to 55 before adding
+  • >75 EXTREMELY OVERBOUGHT: Take profits aggressively. Risk/reward unfavourable for new entries
+
+EMA STRUCTURE (most important — tells you where institutional money is):
+  • Price > EMA20 > EMA50: BULL ALIGNMENT — buy every dip to EMA20, ride the trend
+  • Price < EMA20, above EMA50: PULLBACK — excellent risk/reward long at EMA50 with tight stop
+  • Price < EMA20 < EMA50: BEAR — NO new longs. This is distribution, not accumulation
+  • EMA20 crossing above EMA50: GOLDEN CROSS — strong medium-term buy signal
+  • EMA20 crossing below EMA50: DEATH CROSS — exit longs, potential short opportunity
+
+VOLUME CONFIRMATION (never trade without checking this):
+  • >1.5x average: Strong institutional participation — the move is real, trust it
+  • 1.2-1.5x: Moderate confirmation — acceptable for entry
+  • 0.8-1.2x: Normal — neutral
+  • <0.8x: Weak / fading — do not chase. Move likely to reverse
+
+ATR-BASED POSITION SIZING (this is how you protect capital):
+  • Stop loss = entry − (1.5 × ATR) for normal setups
+  • Stop loss = entry − (2.0 × ATR) for volatile names or high-vol regime
+  • Minimum target = entry + (3 × ATR) to achieve 2:1 R:R
+  • If ATR stop would risk >3% of portfolio, reduce position size, not stop distance
+
+REGIME-ADJUSTED SIZING (the market tells you how aggressive to be):
+  • BULL regime: Full capital deployment, max position 30% per signal
+  • PULLBACK regime: 75% of normal size — wait for EMA20 retest to confirm
+  • BEAR regime: 50% of normal size — only high-conviction with 4:1 R:R
+  • HIGH_VOL_BEAR: 40% of normal — capital preservation first, wealth building second
+`;
+
+// ============================================
 // MARKET DATA INTEGRATION PROMPT
 // ============================================
 
@@ -204,6 +245,7 @@ export default {
   ANALYST_IDENTITY,
   MARKET_DATA_INSTRUCTION,
   ELITE_TRADER_EDGE,
+  TECHNICAL_FRAMEWORK,
   buildAccountabilityScorecard,
   buildAnalystPromptPrefix
 };

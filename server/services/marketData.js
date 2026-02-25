@@ -182,7 +182,11 @@ async function scrapeNSEPrice(symbol) {
     });
 
     const data = response.data;
-    const priceInfo = data.priceInfo;
+    const priceInfo = data?.priceInfo;
+
+    if (!priceInfo?.lastPrice) {
+      throw new Error(`No ${symbol} data`);
+    }
 
     return {
       symbol,

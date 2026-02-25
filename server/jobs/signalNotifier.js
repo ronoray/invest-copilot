@@ -315,7 +315,7 @@ async function generatePreMarketIntelligence() {
 
     const anthropic = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
     const dateStr = new Date().toLocaleDateString('en-IN', {
-      weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Asia/Kolkata'
+      weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata'
     });
 
     const prompt = `${ANALYST_IDENTITY}
@@ -330,6 +330,7 @@ ${isStressed ? '⚠️ MARKET STRESS DETECTED — defensive posture required' : 
 
 ${overnightWatchlist ? overnightWatchlist + '\n' : ''}
 Today is ${dateStr}. Market opens in ~45 minutes.
+CRITICAL CONTEXT: The Union Budget 2026 was already presented on 1 February 2026 and is fully in effect. Do NOT use "pre-budget" or "ahead of budget" narratives — the budget is history. Base your analysis on post-budget sector dynamics, Q3/Q4 FY26 earnings trends, and current macro reality (RBI stance, FII flows, crude, INR). Use the sector ETF data above as your primary signal for TODAY's actual positioning.
 
 Yesterday's sector rotation summary:
 - Leading: ${leadingStr || 'none significant'}
@@ -369,7 +370,7 @@ Respond in JSON only:
 }`;
 
     const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-sonnet-4-6',
       max_tokens: 400,
       messages: [{ role: 'user', content: prompt }],
     });

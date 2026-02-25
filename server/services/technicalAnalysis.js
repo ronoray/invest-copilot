@@ -227,6 +227,9 @@ export async function getSymbolTechnicals(symbol, exchange = 'NSE') {
 
 // ── Market regime ─────────────────────────────────────────────────────────────
 
+// Cache the most recent successful regime — used as fallback when data fetch fails
+let _lastKnownRegime = null;
+
 /**
  * Detect current market regime using NIFTYBEES as Nifty proxy.
  * NIFTYBEES data is already cached from buildPreMarketContext() — zero extra API call.
@@ -237,6 +240,10 @@ export async function getMarketRegime() {
   try {
     const data = await fetchDailyData('NIFTYBEES', 'NSE');
     if (!data?.series || data.series.length < 50) {
+      if (_lastKnownRegime) {
+        logger.info(`[MarketRegime] NIFTYBEES data unavailable — using cached regime: ${_lastKnownRegime.regime}`);
+        return _lastKnownRegime;
+      }
       return { regime: 'UNKNOWN', rationale: 'No data', details: '', aggressionMultiplier: 0.7 };
     }
 
@@ -277,12 +284,18 @@ export async function getMarketRegime() {
       rationale = `MIXED SIGNALS: RSI ${rsi}, EMA alignment unclear. Minimum R:R 3:1. No marginal setups — only Grade A entries.`;
     }
 
-    return {
+    const result = {
       regime, rationale, aggressionMultiplier,
       details: `NIFTYBEES | RSI ${rsi} | EMA20 ₹${ema20?.toFixed(0)} (${aboveEMA20 ? '✓' : '✗'}) | EMA50 ₹${ema50?.toFixed(0)} (${aboveEMA50 ? '✓' : '✗'}) | ATR ₹${atr?.toFixed(0)} (${volPct.toFixed(1)}% vol)`,
     };
+    _lastKnownRegime = result;
+    return result;
   } catch (err) {
     logger.warn(`[MarketRegime] ${err.message}`);
+    if (_lastKnownRegime) {
+      logger.info(`[MarketRegime] Using cached regime: ${_lastKnownRegime.regime}`);
+      return _lastKnownRegime;
+    }
     return { regime: 'UNKNOWN', rationale: 'Data error', details: '', aggressionMultiplier: 0.7 };
   }
 }

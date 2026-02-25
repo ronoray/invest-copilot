@@ -138,7 +138,12 @@ BALANCE: This is not about being safe. It's about being SMART about risk:
 - The goal: maximum capture of today's specific market opportunity with defined downside on every trade.
 `;
 
+  const nowIST = new Date().toLocaleDateString('en-IN', {
+    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata'
+  });
+
   const prompt = `${ANALYST_IDENTITY}
+CURRENT DATE: ${nowIST}. The Union Budget 2026 was presented on 1 February 2026 and is in effect. Do NOT reference pre-budget or 2025 narratives.
 
 ${ELITE_TRADER_EDGE}
 
@@ -213,7 +218,7 @@ Notes:
 
   try {
     const message = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-sonnet-4-6',
       max_tokens: 2000,
       messages: [{ role: 'user', content: prompt }],
     });

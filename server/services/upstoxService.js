@@ -57,7 +57,7 @@ async function loadInstrumentCache() {
 /**
  * Resolve a trading symbol (e.g. "INFY") to an Upstox instrument key (e.g. "NSE_EQ|INE009A01021")
  */
-async function resolveInstrumentKey(symbol, exchange = 'NSE_EQ') {
+export async function resolveInstrumentKey(symbol, exchange = 'NSE_EQ') {
   if (exchange !== 'NSE_EQ') {
     // For non-NSE, fall back to old format (may need BSE cache later)
     return `${exchange}|${symbol}`;

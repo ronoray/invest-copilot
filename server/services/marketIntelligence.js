@@ -12,6 +12,7 @@
 
 import axios from 'axios';
 import logger from './logger.js';
+import { getUpstoxDailyCandles } from './upstoxMarketData.js';
 
 const ALPHA_VANTAGE_KEY = process.env.ALPHA_VANTAGE_KEY;
 const BASE_URL = 'https://www.alphavantage.co/query';
@@ -42,6 +43,18 @@ export async function fetchDailyData(symbol, exchange = 'NSE') {
 
   if (dailyDataCache.has(cacheKey)) return dailyDataCache.get(cacheKey);
 
+  // ── 1. Upstox historical candles (primary — authoritative, no rate limit) ──
+  try {
+    const result = await getUpstoxDailyCandles(symbol, 150);
+    if (result?.series?.length >= 10) {
+      dailyDataCache.set(cacheKey, result);
+      return result;
+    }
+  } catch (upstoxErr) {
+    logger.warn(`[MarketIntel] Upstox candles failed for ${symbol}: ${upstoxErr.message} — trying Alpha Vantage`);
+  }
+
+  // ── 2. Alpha Vantage TIME_SERIES_DAILY (fallback) ──────────────────────────
   try {
     const suffix = exchange === 'NSE' ? '.NS' : '.BO';
     const response = await axios.get(BASE_URL, {
@@ -129,7 +142,6 @@ export async function buildPreMarketContext() {
       );
 
       ranked.push({ symbol: proxy.symbol, label: proxy.label, change: sessionChange });
-      await sleep(12000);
     } catch (e) {
       lines.push(`${proxy.label}: Error`);
     }
@@ -155,6 +167,3 @@ export async function buildPreMarketContext() {
   return { contextText: lines.join('\n'), sectorRanking: ranked };
 }
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}

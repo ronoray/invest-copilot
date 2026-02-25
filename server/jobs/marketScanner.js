@@ -1,5 +1,6 @@
 import prisma from '../services/prisma.js';
 import { getCurrentPrice, getWatchlistSignals } from '../services/marketData.js';
+import { getUpstoxLTP } from '../services/upstoxMarketData.js';
 import { triageSignalRegen } from '../services/signalTriage.js';
 import { generateTradeSignals, expireOldSignals } from '../services/signalGenerator.js';
 import { getPrevDayHighLow } from '../services/marketIntelligence.js';
@@ -84,7 +85,6 @@ async function ensurePrevDayHighLow() {
         prevDayHighLow.set(h.symbol, hl);
         logger.info(`[Market Scanner] ${h.symbol} prev day H/L: ₹${hl.high.toFixed(2)} / ₹${hl.low.toFixed(2)}`);
       }
-      await sleep(12000);
     } catch (e) {
       logger.warn(`[Market Scanner] Could not fetch prev day H/L for ${h.symbol}: ${e.message}`);
     }
@@ -97,6 +97,9 @@ async function ensurePrevDayHighLow() {
 /**
  * Update all portfolio holdings with current prices.
  * Returns [{symbol, price}] for deviation tracking.
+ *
+ * Primary path: Upstox batch LTP — all holdings in ONE API call, <1 second.
+ * Fallback: sequential Alpha Vantage with 12s sleep (existing behavior).
  */
 async function updatePortfolioTask() {
   const updatedPrices = [];
@@ -105,6 +108,37 @@ async function updatePortfolioTask() {
     const holdings = await prisma.holding.findMany();
     let updated = 0;
 
+    // ── Primary: Upstox batch LTP ────────────────────────────────────────────
+    try {
+      const symbols = holdings.map(h => h.symbol);
+      const ltpMap = await getUpstoxLTP(symbols);
+
+      for (const holding of holdings) {
+        const ltp = ltpMap.get(holding.symbol);
+        if (ltp?.price > 0) {
+          await prisma.holding.update({
+            where: { id: holding.id },
+            data: { currentPrice: ltp.price }
+          });
+          updatedPrices.push({ symbol: holding.symbol, price: ltp.price });
+          updated++;
+          logger.info(`[Scanner] ${holding.symbol}: ₹${ltp.price} (Upstox)`);
+        }
+      }
+
+      if (updatedPrices.length === holdings.length) {
+        logger.info(`Portfolio update: ${updated}/${holdings.length} stocks (Upstox batch)`);
+        return updatedPrices; // All done — skip Alpha Vantage loop
+      }
+
+      logger.warn(`[Scanner] Upstox batch partial (${updatedPrices.length}/${holdings.length}) — falling back to Alpha Vantage`);
+      updatedPrices.length = 0; // Reset and re-fetch all via AV for consistency
+      updated = 0;
+    } catch (upstoxErr) {
+      logger.warn(`[Scanner] Upstox batch LTP failed: ${upstoxErr.message} — falling back to Alpha Vantage`);
+    }
+
+    // ── Fallback: sequential Alpha Vantage ───────────────────────────────────
     for (const holding of holdings) {
       try {
         const priceData = await getCurrentPrice(holding.symbol, holding.exchange);
@@ -124,7 +158,7 @@ async function updatePortfolioTask() {
       }
     }
 
-    logger.info(`Portfolio update: ${updated}/${holdings.length} stocks`);
+    logger.info(`Portfolio update: ${updated}/${holdings.length} stocks (Alpha Vantage fallback)`);
   } catch (error) {
     logger.error('Portfolio update task error:', error);
   }

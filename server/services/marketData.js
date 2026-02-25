@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { PrismaClient } from '@prisma/client';
 import logger from './logger.js';
+import { getUpstoxLTP } from './upstoxMarketData.js';
 
 const prisma = new PrismaClient();
 const ALPHA_VANTAGE_KEY = process.env.ALPHA_VANTAGE_KEY;
@@ -68,10 +69,32 @@ const NSE_SUFFIX = '.NS';
 const BSE_SUFFIX = '.BO';
 
 /**
- * Fetch current price for a symbol
+ * Fetch current price for a symbol.
+ * Priority: 1) Upstox LTP (real-time, no rate limit)
+ *           2) Alpha Vantage GLOBAL_QUOTE (15-20 min delay, 500/day cap)
+ *           3) NSE scraper (last resort)
  */
 export async function getCurrentPrice(symbol, exchange = 'NSE') {
-  // If budget is exhausted, skip Alpha Vantage entirely and use NSE fallback
+  // ── 1. Upstox LTP (primary — real-time, batch-capable) ───────────────────
+  try {
+    const ltpMap = await getUpstoxLTP([symbol]);
+    const data = ltpMap.get(symbol);
+    if (data?.price > 0) {
+      return {
+        symbol,
+        exchange,
+        price: data.price,
+        change: data.change,
+        changePercent: data.changePercent,
+        volume: data.volume,
+        timestamp: new Date(),
+      };
+    }
+  } catch (upstoxErr) {
+    logger.warn(`[MarketData] Upstox LTP failed for ${symbol}: ${upstoxErr.message} — trying Alpha Vantage`);
+  }
+
+  // ── 2. Alpha Vantage (fallback) ───────────────────────────────────────────
   if (_isAvBlocked()) {
     logger.warn(`[AV Budget] Limit reached (${_avBudget.count}/500) — using NSE fallback for ${symbol}`);
     return await scrapeNSEPrice(symbol);
@@ -109,7 +132,7 @@ export async function getCurrentPrice(symbol, exchange = 'NSE') {
   } catch (error) {
     logger.error(`Error fetching price for ${symbol}:`, error.message);
 
-    // Fallback to NSE direct scraping if Alpha Vantage fails
+    // ── 3. NSE scraper (last resort) ───────────────────────────────────────
     return await scrapeNSEPrice(symbol);
   }
 }
@@ -332,22 +355,46 @@ export async function fetchMarketContext(holdings = []) {
   const now = new Date();
   const timeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' });
 
-  // ── Sector ETFs (API, cached 25 min) ──────────────────────────────────────
+  // ── Sector ETFs (batch Upstox LTP, cached 25 min) ────────────────────────
   let sectorLines;
   if (sectorEtfCache.lines && (Date.now() - sectorEtfCache.timestamp) < SECTOR_CACHE_TTL_MS) {
     sectorLines = sectorEtfCache.lines;
   } else {
     sectorLines = [];
-    for (const etf of SECTOR_ETFS) {
-      try {
-        const data = await getCurrentPrice(etf.symbol, 'NSE');
-        const sign = data.changePercent >= 0 ? '+' : '';
-        sectorLines.push(`${etf.label} (${etf.symbol}): ₹${data.price.toFixed(2)} (${sign}${data.changePercent.toFixed(2)}%)`);
-      } catch (e) {
-        sectorLines.push(`${etf.label} (${etf.symbol}): unavailable`);
-      }
-      await sleep(12000); // Alpha Vantage free-tier rate limit
+    const etfSymbols = SECTOR_ETFS.map(e => e.symbol);
+    let ltpMap = new Map();
+
+    // Try Upstox batch first (single call, no sleep needed)
+    try {
+      ltpMap = await getUpstoxLTP(etfSymbols);
+    } catch (upstoxErr) {
+      logger.warn(`[MarketData] Upstox batch LTP for ETFs failed: ${upstoxErr.message} — falling back to Alpha Vantage`);
     }
+
+    if (ltpMap.size > 0) {
+      // Upstox path: build lines from batch result
+      for (const etf of SECTOR_ETFS) {
+        const data = ltpMap.get(etf.symbol);
+        if (data) {
+          sectorLines.push(`${etf.label} (${etf.symbol}): ₹${data.price.toFixed(2)}`);
+        } else {
+          sectorLines.push(`${etf.label} (${etf.symbol}): unavailable`);
+        }
+      }
+    } else {
+      // Fallback: sequential Alpha Vantage (with rate-limit sleep)
+      for (const etf of SECTOR_ETFS) {
+        try {
+          const data = await getCurrentPrice(etf.symbol, 'NSE');
+          const sign = data.changePercent >= 0 ? '+' : '';
+          sectorLines.push(`${etf.label} (${etf.symbol}): ₹${data.price.toFixed(2)} (${sign}${data.changePercent.toFixed(2)}%)`);
+        } catch (e) {
+          sectorLines.push(`${etf.label} (${etf.symbol}): unavailable`);
+        }
+        await sleep(12000); // Alpha Vantage free-tier rate limit
+      }
+    }
+
     sectorEtfCache.lines = sectorLines;
     sectorEtfCache.timestamp = Date.now();
   }

@@ -66,6 +66,7 @@ export async function generateTradeSignals(portfolioId, extraContext = '') {
     (marketRegime.regime === 'BEAR' && marketRegime.aggressionMultiplier <= 0.5);
 
   // Fetch real market data
+  let marketContext = '';
   try {
     marketContext = await fetchMarketContext(portfolio.holdings || []);
   } catch (e) {

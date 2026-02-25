@@ -103,14 +103,15 @@ export async function validateSignals(signals, portfolioId) {
       // Cross-check AI's price estimate against live market price
       const deviation = Math.abs(aiPrice - livePrice) / livePrice * 100;
       if (deviation > 40) {
-        // AI's price is wildly wrong (>40% off from live) — signal is based on bad data, drop it
-        logger.warn(`[Capital Guard] BUY ${sig.symbol}: DROPPED — AI price ₹${aiPrice.toFixed(0)} vs live ₹${livePrice.toFixed(0)} (${deviation.toFixed(0)}% deviation — stale/hallucinated price)`);
-        continue;
-      }
-      // Use live price for capital check (more accurate than AI estimate)
-      price = livePrice;
-      if (Math.abs(aiPrice - livePrice) / livePrice > 0.05) {
-        logger.info(`[Capital Guard] ${sig.symbol}: using live ₹${livePrice.toFixed(0)} for capital check (AI estimated ₹${aiPrice.toFixed(0)})`);
+        // Live price may be stale (scraper/API lag) — don't drop, use AI price so signal reaches Telegram for user review
+        logger.warn(`[Capital Guard] ${sig.symbol}: live ₹${livePrice.toFixed(0)} vs AI ₹${aiPrice.toFixed(0)} (${deviation.toFixed(0)}% deviation — live price suspect, using AI estimate)`);
+        price = aiPrice;
+      } else {
+        // Use live price for capital check (more accurate than AI estimate)
+        price = livePrice;
+        if (Math.abs(aiPrice - livePrice) / livePrice > 0.05) {
+          logger.info(`[Capital Guard] ${sig.symbol}: using live ₹${livePrice.toFixed(0)} for capital check (AI estimated ₹${aiPrice.toFixed(0)})`);
+        }
       }
     } else if (livePrice > 0) {
       // MARKET order or no AI price — use live price

@@ -268,24 +268,26 @@ async function handleExecuteSignal(botInstance, query, signalId) {
       price = parseFloat(signal.triggerLow);
     }
 
-    // Validate LIMIT price against live market price (reject if >20% deviation)
+    // Validate LIMIT price against live market price (warn if >40% deviation)
+    // Threshold is 40% (not 20%) because Alpha Vantage / NSE scraper prices can be
+    // significantly delayed — false positives at 20% blocked valid signals.
     if (orderType === 'LIMIT' && price > 0) {
       try {
         const liveData = await getCurrentPrice(signal.symbol, signal.exchange);
         const currentPrice = liveData?.price || liveData?.lastPrice;
         if (currentPrice && currentPrice > 0) {
           const deviation = Math.abs(price - currentPrice) / currentPrice;
-          if (deviation > 0.20) {
-            logger.warn(`Signal #${signalId} price validation failed: signal=${price}, market=${currentPrice}, deviation=${(deviation * 100).toFixed(1)}%`);
+          if (deviation > 0.40) {
+            logger.warn(`Signal #${signalId} price validation: signal=₹${price}, market=₹${currentPrice}, deviation=${(deviation * 100).toFixed(1)}% — offering Force LIMIT`);
             await botInstance.editMessageReplyMarkup(
               { inline_keyboard: [
-                [{ text: '📊 Place as MARKET order', callback_data: `sig_mkt_${signalId}` }],
+                [{ text: `⚡ Force LIMIT at ₹${price.toFixed(2)}`, callback_data: `sig_mkt_${signalId}` }],
                 [{ text: '🚫 Dismiss', callback_data: `sig_dismiss_${signalId}` }]
               ] },
               { chat_id: chatId, message_id: messageId }
             ).catch(() => {});
             await botInstance.sendMessage(chatId,
-              `⚠️ *Price Validation Failed*\n\nSignal price: ${formatPrice(price)}\nCurrent market price: ${formatPrice(currentPrice)}\nDeviation: ${(deviation * 100).toFixed(1)}%\n\n_The signal price is too far from the current market price. This could lead to order rejection by the exchange._`,
+              `⚠️ *Large Price Deviation Detected*\n\nSignal price: ₹${price.toFixed(2)}\nLive price (AV/NSE): ₹${currentPrice.toFixed(2)}\nDeviation: ${(deviation * 100).toFixed(1)}%\n\n_Note: Live price may be stale (Alpha Vantage can lag 15–20 min). You can force the LIMIT at the original signal price — it will only fill if/when the market reaches that level._`,
               { parse_mode: 'Markdown' }
             );
             return;
@@ -438,7 +440,7 @@ async function handleExecuteSignal(botInstance, query, signalId) {
   }
 }
 
-// Handle "Place as MARKET order" fallback after price validation failure
+// Handle "Force LIMIT at signal price" after large price deviation warning
 async function handleExecuteMarketFallback(botInstance, query, signalId) {
   const chatId = query.message.chat.id;
   const messageId = query.message.message_id;
@@ -512,18 +514,25 @@ async function handleExecuteMarketFallback(botInstance, query, signalId) {
       }
     }
 
+    // Force LIMIT at original signal price — safer than MARKET (fills only at intended level)
+    const forceLimitPrice = parseFloat(signal.triggerPrice || signal.triggerLow || 0);
+    if (!forceLimitPrice || forceLimitPrice <= 0) {
+      await botInstance.sendMessage(chatId, `❌ Cannot place Force LIMIT — signal has no price set. Please dismiss and re-generate signals.`, { parse_mode: 'Markdown' });
+      return;
+    }
+
     const orderParams = {
       symbol: signal.symbol,
       exchange: `${signal.exchange}_EQ`,
       transactionType: signal.side,
-      orderType: 'MARKET',
+      orderType: 'LIMIT',
       quantity: signal.quantity,
-      price: 0,
+      price: forceLimitPrice,
       triggerPrice: 0,
       portfolioId: signal.portfolioId
     };
 
-    logger.info(`Executing signal #${signalId} as MARKET order (fallback):`, orderParams);
+    logger.info(`Executing signal #${signalId} as Force LIMIT @ ₹${forceLimitPrice}:`, orderParams);
 
     const result = await placeOrder(userId, orderParams);
 
@@ -537,32 +546,32 @@ async function handleExecuteMarketFallback(botInstance, query, signalId) {
       data: {
         signalId,
         action: 'EXECUTE',
-        note: `MARKET order (price fallback) ${result.orderId} placed via Telegram by ${query.from.first_name || query.from.id}`
+        note: `Force LIMIT @ ₹${forceLimitPrice} (price deviation override) ${result.orderId} placed via Telegram by ${query.from.first_name || query.from.id}`
       }
     });
 
     try {
       await botInstance.editMessageReplyMarkup(
-        { inline_keyboard: [[{ text: `⏳ Verifying MARKET order ${result.orderId}...`, callback_data: 'noop' }]] },
+        { inline_keyboard: [[{ text: `⏳ Verifying LIMIT order ${result.orderId}...`, callback_data: 'noop' }]] },
         { chat_id: chatId, message_id: messageId }
       );
     } catch (editErr) {
-      logger.warn('Could not edit signal message after market execute:', editErr.message);
+      logger.warn('Could not edit signal message after force LIMIT execute:', editErr.message);
     }
 
     await botInstance.sendMessage(chatId,
-      `📡 *MARKET Order Sent*\n${signal.side} ${signal.quantity}x ${signal.symbol}\nOrder ID: \`${result.orderId}\`\n_Verifying with exchange..._`,
+      `📡 *Force LIMIT Order Sent*\n${signal.side} ${signal.quantity}x ${signal.symbol} @ ₹${forceLimitPrice.toFixed(2)}\nOrder ID: \`${result.orderId}\`\n_Will fill when market reaches this price. Verifying with exchange..._`,
       { parse_mode: 'Markdown' }
     );
 
     // Poll for settlement
     signal._messageId = messageId;
     pollOrderViaTelegram(botInstance, chatId, userId, signalId, signal, result.orderId, result.dbOrderId)
-      .catch(err => logger.error(`Polling failed for MARKET fallback signal #${signalId}:`, err));
+      .catch(err => logger.error(`Polling failed for Force LIMIT signal #${signalId}:`, err));
   } catch (error) {
-    logger.error(`Failed to execute MARKET fallback for signal #${signalId}:`, error);
+    logger.error(`Failed to execute Force LIMIT for signal #${signalId}:`, error);
     const errorMsg = error.message || 'Unknown error';
-    await botInstance.sendMessage(chatId, `❌ *MARKET Order Failed*\nSignal #${signalId}: ${errorMsg}`, { parse_mode: 'Markdown' });
+    await botInstance.sendMessage(chatId, `❌ *Force LIMIT Order Failed*\nSignal #${signalId}: ${errorMsg}`, { parse_mode: 'Markdown' });
   }
 }
 
@@ -1915,7 +1924,7 @@ Use /mute to disable all alerts`;
           return;
         }
 
-        // Handle "Place as MARKET order" (after price validation failure)
+        // Handle "Force LIMIT at signal price" (after large price deviation warning)
         if (action === 'mkt') {
           await handleExecuteMarketFallback(botInstance, query, signalId);
           return;

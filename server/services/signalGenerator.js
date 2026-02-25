@@ -85,6 +85,44 @@ export async function generateTradeSignals(portfolioId, extraContext = '') {
   const minConviction = aggMult < 0.6 ? 80 : aggMult < 0.8 ? 74 : 68;
   const maxPosPct     = aggMult < 0.6 ? 18 : aggMult < 0.8 ? 25 : 30;
 
+  // Profit-taking candidates — holdings at or near the portfolio profit target
+  const profitThreshold = (portfolio.profitTargetPct || 10) / 100;
+  const profitCandidates = (portfolio.holdings || []).filter(h => {
+    const current = parseFloat(h.currentPrice || 0);
+    const avg = parseFloat(h.avgPrice || 0);
+    if (!current || !avg || avg <= 0) return false;
+    return (current - avg) / avg >= profitThreshold * 0.7; // alert at 70% of target
+  });
+
+  let profitTakingBlock = '';
+  if (profitCandidates.length > 0) {
+    const targetPct = portfolio.profitTargetPct || 10;
+    const alertPct  = (targetPct * 0.7).toFixed(0);
+    const totalProfit = profitCandidates.reduce((sum, h) => {
+      return sum + (parseFloat(h.currentPrice) - parseFloat(h.avgPrice)) * h.quantity;
+    }, 0);
+    const candidateLines = profitCandidates.map(h => {
+      const current = parseFloat(h.currentPrice);
+      const avg     = parseFloat(h.avgPrice);
+      const pnlPct  = ((current - avg) / avg * 100).toFixed(1);
+      const pnlAmt  = ((current - avg) * h.quantity).toFixed(0);
+      return `- ${h.symbol}: avg ₹${avg.toFixed(2)} → now ₹${current.toFixed(2)} (+${pnlPct}% | ₹${pnlAmt} profit on ${h.quantity} shares)`;
+    }).join('\n');
+    profitTakingBlock = `
+🎯 PROFIT-TAKING MANDATE — NON-NEGOTIABLE:
+These holdings have reached or are approaching the ${targetPct}% profit target. You MUST evaluate each for a SELL signal:
+
+${candidateLines}
+
+Rules:
+1. P&L ≥ ${targetPct}%: Generate a SELL signal to lock in profits. Capturing ₹${totalProfit.toFixed(0)} IS the mission — not riding it back to zero.
+2. P&L ≥ ${alertPct}% but below target: Generate SELL if technicals show topping (RSI > 70, price below EMA20, or bearish volume divergence).
+3. Partial sells allowed: sell 50–75% to lock gains, keep 25–50% for further upside if momentum intact.
+4. Profit-taking IS wealth creation. A booked ₹${totalProfit.toFixed(0)} compounds. An unrealised gain does not.
+
+`;
+  }
+
   // Two completely different mandates: stressed market vs normal
   const mandate = isStressed ? `
 ⚠️ MARKET STRESS MODE — CAPITAL PROTECTION FIRST ⚠️
@@ -178,7 +216,7 @@ ${portfolio.broker === 'UPSTOX' && portfolio.apiEnabled ? `UPSTOX LIVE TRADING �
 - LIMIT orders strongly preferred — realistic entry levels that will actually fill.
 - Capital: ₹${effectiveCash.toLocaleString('en-IN')}. 2–3 focused positions > 5 spread positions. Concentrate on highest conviction.
 ` : ''}
-${mandate}
+${profitTakingBlock}${mandate}
 
 ${scorecard ? `ACCOUNTABILITY: Your previous calls are above. Own every outcome. If a setup remains technically valid, re-enter with updated levels. If conditions have changed, say so and move on.` : ''}
 

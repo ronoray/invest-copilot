@@ -299,7 +299,7 @@ Notes:
   try {
     const message = await anthropic.messages.create({
       model: 'claude-sonnet-4-6',
-      max_tokens: 2000,
+      max_tokens: 3000,
       messages: [{ role: 'user', content: prompt }],
     });
 
@@ -351,7 +351,10 @@ Notes:
     logger.info(`Generated ${createdSignals.length} trade signals for portfolio ${portfolioId}`);
     return createdSignals;
   } catch (error) {
-    logger.error('Signal generation failed:', error.message);
+    const errDetail = error?.message || error?.error?.message || JSON.stringify(error) || String(error);
+    const errStatus = error?.status || error?.statusCode || '';
+    logger.error(`Signal generation failed [${errStatus}]: ${errDetail}`);
+    if (error?.stack) logger.error('Stack:', error.stack.slice(0, 600));
     return [];
   }
 }

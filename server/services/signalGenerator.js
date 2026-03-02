@@ -6,6 +6,7 @@ import { ANALYST_IDENTITY, ELITE_TRADER_EDGE, MARKET_DATA_INSTRUCTION, TECHNICAL
 import { getEffectiveCash, validateSignals } from './capitalGuard.js';
 import { buildHoldingsTechnicals, getMarketRegime } from './technicalAnalysis.js';
 import { fetchPreMarketNews } from './marketNews.js';
+import { getUpstoxLTP } from './upstoxMarketData.js';
 import logger from './logger.js';
 
 const anthropic = new Anthropic({
@@ -313,6 +314,44 @@ Notes:
 
     // Capital guard: validate signals against effective cash
     const validatedSignals = await validateSignals(result.signals, portfolioId);
+
+    // ── Live price anchor: correct stale AI prices before saving ──────────────
+    // Claude's training data prices can be months old. Fetch Upstox LTP for all
+    // non-held BUY signals and correct any price > 20% off live market.
+    try {
+      const heldSymbols = new Set((portfolio.holdings || []).map(h => h.symbol));
+      const buySymbolsNeedingCheck = validatedSignals
+        .filter(s => s.side === 'BUY' && !heldSymbols.has(s.symbol) && (s.triggerPrice || s.price))
+        .map(s => s.symbol);
+
+      if (buySymbolsNeedingCheck.length > 0) {
+        const ltpMap = await getUpstoxLTP(buySymbolsNeedingCheck);
+        for (const sig of validatedSignals) {
+          if (sig.side !== 'BUY' || heldSymbols.has(sig.symbol)) continue;
+          const ltp = ltpMap.get(sig.symbol);
+          if (!ltp?.price) continue;
+
+          const sigPrice = parseFloat(sig.triggerPrice || sig.price || 0);
+          if (!sigPrice) continue;
+          const deviation = Math.abs(sigPrice - ltp.price) / ltp.price;
+          if (deviation > 0.20) {
+            // Correct to live price (1% below LTP for LIMIT headroom)
+            const corrected = parseFloat((ltp.price * 0.99).toFixed(2));
+            logger.warn(`[SignalGen] Price corrected for ${sig.symbol}: AI said ₹${sigPrice} vs live ₹${ltp.price} (${(deviation * 100).toFixed(1)}% off) → setting ₹${corrected}`);
+            if (sig.triggerPrice) sig.triggerPrice = corrected;
+            sig.price = corrected;
+            // Also recalculate quantity so total cost stays within capital
+            const newQty = Math.floor(effectiveCash * 0.30 / corrected); // max 30% of cash in one position
+            if (newQty > 0 && newQty !== sig.quantity) {
+              logger.warn(`[SignalGen] Quantity adjusted for ${sig.symbol}: ${sig.quantity} → ${newQty} (price corrected)`);
+              sig.quantity = newQty;
+            }
+          }
+        }
+      }
+    } catch (priceErr) {
+      logger.warn(`[SignalGen] Live price anchor check failed: ${priceErr.message} — using AI prices as-is`);
+    }
 
     // Set expiry to end of today (3:30 PM IST = 10:00 UTC)
     const expiresAt = new Date();

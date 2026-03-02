@@ -3,6 +3,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { PrismaClient } from '@prisma/client';
 import logger from './logger.js';
 import { getCurrentPrice } from './marketData.js';
+import { getUpstoxLTP } from './upstoxMarketData.js';
 import { scanMarketForOpportunities, buildProfileBrief } from './advancedScreener.js';
 import { generateMultiAssetRecommendations } from './multiAssetRecommendations.js';
 import { placeOrder, getAuthorizationUrl, isTokenValid, getFunds, getHoldings, getPositions, getOrderBook } from './upstoxService.js';
@@ -298,26 +299,41 @@ async function handleExecuteSignal(botInstance, query, signalId) {
       price = parseFloat(signal.triggerLow);
     }
 
-    // Validate LIMIT price against live market price (warn if >40% deviation)
-    // Threshold is 40% (not 20%) because Alpha Vantage / NSE scraper prices can be
-    // significantly delayed — false positives at 20% blocked valid signals.
+    // Validate LIMIT price against live Upstox market price
     if (orderType === 'LIMIT' && price > 0) {
       try {
-        const liveData = await getCurrentPrice(signal.symbol, signal.exchange);
-        const currentPrice = liveData?.price || liveData?.lastPrice;
+        let currentPrice = null;
+        // Prefer Upstox LTP (real-time); fall back to Alpha Vantage / NSE scraper
+        try {
+          const ltpMap = await getUpstoxLTP([signal.symbol]);
+          const ltpData = ltpMap.get(signal.symbol);
+          if (ltpData?.price > 0) currentPrice = ltpData.price;
+        } catch (_) { /* fall through */ }
+        if (!currentPrice) {
+          const liveData = await getCurrentPrice(signal.symbol, signal.exchange);
+          currentPrice = liveData?.price || liveData?.lastPrice || null;
+        }
+
         if (currentPrice && currentPrice > 0) {
           const deviation = Math.abs(price - currentPrice) / currentPrice;
           if (deviation > 0.40) {
-            logger.warn(`Signal #${signalId} price validation: signal=₹${price}, market=₹${currentPrice}, deviation=${(deviation * 100).toFixed(1)}% — offering Force LIMIT`);
+            logger.warn(`Signal #${signalId} price validation: signal=₹${price}, market=₹${currentPrice}, deviation=${(deviation * 100).toFixed(1)}% — offering live-price LIMIT`);
+            // Signal price is stale/hallucinated. Offer to execute at live price instead.
+            const liveLimit = parseFloat((currentPrice * 0.999).toFixed(2)); // 0.1% below LTP
+            // Store live price in DB for the Force LIMIT handler
+            await prisma.tradeSignal.update({
+              where: { id: signalId },
+              data: { triggerHigh: liveLimit } // reuse triggerHigh as live-price anchor
+            });
             await botInstance.editMessageReplyMarkup(
               { inline_keyboard: [
-                [{ text: `⚡ Force LIMIT at ₹${price.toFixed(2)}`, callback_data: `sig_mkt_${signalId}` }],
+                [{ text: `✅ Execute @ ₹${liveLimit.toFixed(2)} (live price)`, callback_data: `sig_mkt_${signalId}` }],
                 [{ text: '🚫 Dismiss', callback_data: `sig_dismiss_${signalId}` }]
               ] },
               { chat_id: chatId, message_id: messageId }
             ).catch(() => {});
             await botInstance.sendMessage(chatId,
-              `⚠️ *Large Price Deviation Detected*\n\nSignal price: ₹${price.toFixed(2)}\nLive price (AV/NSE): ₹${currentPrice.toFixed(2)}\nDeviation: ${(deviation * 100).toFixed(1)}%\n\n_Note: Live price may be stale (Alpha Vantage can lag 15–20 min). You can force the LIMIT at the original signal price — it will only fill if/when the market reaches that level._`,
+              `⚠️ *Stale Signal Price Corrected*\n\nAI signal price: ₹${price.toFixed(2)}\nLive price (Upstox): ₹${currentPrice.toFixed(2)}\nDeviation: ${(deviation * 100).toFixed(1)}%\n\n_The AI used outdated training data for this price. Tap above to execute a LIMIT order at the current live price (₹${liveLimit.toFixed(2)}). It will fill immediately at market or better._`,
               { parse_mode: 'Markdown' }
             );
             return;
@@ -470,7 +486,7 @@ async function handleExecuteSignal(botInstance, query, signalId) {
   }
 }
 
-// Handle "Force LIMIT at signal price" after large price deviation warning
+// Handle "Execute at live price" after large price deviation warning
 async function handleExecuteMarketFallback(botInstance, query, signalId) {
   const chatId = query.message.chat.id;
   const messageId = query.message.message_id;
@@ -502,9 +518,9 @@ async function handleExecuteMarketFallback(botInstance, query, signalId) {
       return;
     }
 
-    await botInstance.answerCallbackQuery(query.id, { text: 'Placing MARKET order...' }).catch(() => {});
+    await botInstance.answerCallbackQuery(query.id, { text: 'Placing order at live price...' }).catch(() => {});
     await botInstance.editMessageReplyMarkup(
-      { inline_keyboard: [[{ text: '⏳ Placing MARKET order...', callback_data: 'noop' }]] },
+      { inline_keyboard: [[{ text: '⏳ Placing order at live price...', callback_data: 'noop' }]] },
       { chat_id: chatId, message_id: messageId }
     ).catch(() => {});
 
@@ -512,43 +528,42 @@ async function handleExecuteMarketFallback(botInstance, query, signalId) {
     try {
       await syncUpstoxFunds(userId);
     } catch (syncErr) {
-      logger.warn(`Pre-execution fund sync failed for MARKET signal #${signalId}: ${syncErr.message}`);
+      logger.warn(`Pre-execution fund sync failed for live-price signal #${signalId}: ${syncErr.message}`);
     }
 
-    // Capital check for BUY orders
-    if (signal.side === 'BUY') {
-      let estimatedPrice = 0;
+    // Resolve execution price:
+    // triggerHigh was set by handleExecuteSignal as the live-price anchor when deviation > 40%.
+    // If not set (e.g. old signal), fall back to fresh Upstox LTP.
+    let execPrice = signal.triggerHigh ? parseFloat(signal.triggerHigh) : 0;
+    if (!execPrice || execPrice <= 0) {
       try {
-        const priceData = await getCurrentPrice(signal.symbol, signal.exchange);
-        estimatedPrice = priceData?.price || priceData?.lastPrice || parseFloat(signal.triggerPrice || signal.triggerLow || 0);
-      } catch (e) {
-        estimatedPrice = parseFloat(signal.triggerPrice || signal.triggerLow || 0);
-      }
-
-      if (estimatedPrice > 0) {
-        const capitalCheck = await preOrderCapitalCheck(signal.portfolioId, 'BUY', signal.quantity, estimatedPrice, signalId);
-        if (!capitalCheck.allowed) {
-          logger.warn(`Signal #${signalId} MARKET fallback capital check failed: ${capitalCheck.reason}`);
-          await botInstance.editMessageReplyMarkup(
-            { inline_keyboard: [
-              [{ text: '🚫 Dismiss', callback_data: `sig_dismiss_${signalId}` }]
-            ] },
-            { chat_id: chatId, message_id: messageId }
-          ).catch(() => {});
-          await botInstance.sendMessage(chatId,
-            `💰 *Capital Check Failed*\n\nOrder cost: ₹${capitalCheck.orderCost.toLocaleString('en-IN')}\nAvailable cash: ₹${capitalCheck.effectiveCash.toLocaleString('en-IN')}\n\n_${capitalCheck.reason}_`,
-            { parse_mode: 'Markdown' }
-          );
-          return;
-        }
-      }
+        const ltpMap = await getUpstoxLTP([signal.symbol]);
+        const ltp = ltpMap.get(signal.symbol);
+        if (ltp?.price > 0) execPrice = parseFloat((ltp.price * 0.999).toFixed(2));
+      } catch (_) {}
+    }
+    if (!execPrice || execPrice <= 0) {
+      await botInstance.sendMessage(chatId, `❌ Cannot determine live price for ${signal.symbol}. Please dismiss and re-generate signals.`, { parse_mode: 'Markdown' });
+      return;
     }
 
-    // Force LIMIT at original signal price — safer than MARKET (fills only at intended level)
-    const forceLimitPrice = parseFloat(signal.triggerPrice || signal.triggerLow || 0);
-    if (!forceLimitPrice || forceLimitPrice <= 0) {
-      await botInstance.sendMessage(chatId, `❌ Cannot place Force LIMIT — signal has no price set. Please dismiss and re-generate signals.`, { parse_mode: 'Markdown' });
-      return;
+    // Capital check for BUY orders using live price
+    if (signal.side === 'BUY') {
+      const capitalCheck = await preOrderCapitalCheck(signal.portfolioId, 'BUY', signal.quantity, execPrice, signalId);
+      if (!capitalCheck.allowed) {
+        logger.warn(`Signal #${signalId} live-price capital check failed: ${capitalCheck.reason}`);
+        await botInstance.editMessageReplyMarkup(
+          { inline_keyboard: [
+            [{ text: '🚫 Dismiss', callback_data: `sig_dismiss_${signalId}` }]
+          ] },
+          { chat_id: chatId, message_id: messageId }
+        ).catch(() => {});
+        await botInstance.sendMessage(chatId,
+          `💰 *Capital Check Failed*\n\nOrder cost: ₹${capitalCheck.orderCost.toLocaleString('en-IN')}\nAvailable cash: ₹${capitalCheck.effectiveCash.toLocaleString('en-IN')}\n\n_${capitalCheck.reason}_`,
+          { parse_mode: 'Markdown' }
+        );
+        return;
+      }
     }
 
     const orderParams = {
@@ -557,12 +572,12 @@ async function handleExecuteMarketFallback(botInstance, query, signalId) {
       transactionType: signal.side,
       orderType: 'LIMIT',
       quantity: signal.quantity,
-      price: forceLimitPrice,
+      price: execPrice,
       triggerPrice: 0,
       portfolioId: signal.portfolioId
     };
 
-    logger.info(`Executing signal #${signalId} as Force LIMIT @ ₹${forceLimitPrice}:`, orderParams);
+    logger.info(`Executing signal #${signalId} at live price ₹${execPrice}:`, orderParams);
 
     const result = await placeOrder(userId, orderParams);
 
@@ -576,7 +591,7 @@ async function handleExecuteMarketFallback(botInstance, query, signalId) {
       data: {
         signalId,
         action: 'EXECUTE',
-        note: `Force LIMIT @ ₹${forceLimitPrice} (price deviation override) ${result.orderId} placed via Telegram by ${query.from.first_name || query.from.id}`
+        note: `Live-price LIMIT @ ₹${execPrice} (stale signal price corrected) ${result.orderId} placed via Telegram by ${query.from.first_name || query.from.id}`
       }
     });
 
@@ -586,22 +601,22 @@ async function handleExecuteMarketFallback(botInstance, query, signalId) {
         { chat_id: chatId, message_id: messageId }
       );
     } catch (editErr) {
-      logger.warn('Could not edit signal message after force LIMIT execute:', editErr.message);
+      logger.warn('Could not edit signal message after live-price execute:', editErr.message);
     }
 
     await botInstance.sendMessage(chatId,
-      `📡 *Force LIMIT Order Sent*\n${signal.side} ${signal.quantity}x ${signal.symbol} @ ₹${forceLimitPrice.toFixed(2)}\nOrder ID: \`${result.orderId}\`\n_Will fill when market reaches this price. Verifying with exchange..._`,
+      `📡 *Order Placed at Live Price*\n${signal.side} ${signal.quantity}x ${signal.symbol} @ ₹${execPrice.toFixed(2)}\nOrder ID: \`${result.orderId}\`\n_LIMIT order at current market price — should fill immediately. Verifying with exchange..._`,
       { parse_mode: 'Markdown' }
     );
 
     // Poll for settlement
     signal._messageId = messageId;
     pollOrderViaTelegram(botInstance, chatId, userId, signalId, signal, result.orderId, result.dbOrderId)
-      .catch(err => logger.error(`Polling failed for Force LIMIT signal #${signalId}:`, err));
+      .catch(err => logger.error(`Polling failed for live-price signal #${signalId}:`, err));
   } catch (error) {
-    logger.error(`Failed to execute Force LIMIT for signal #${signalId}:`, error);
+    logger.error(`Failed to execute live-price order for signal #${signalId}:`, error);
     const errorMsg = error.message || 'Unknown error';
-    await botInstance.sendMessage(chatId, `❌ *Force LIMIT Order Failed*\nSignal #${signalId}: ${errorMsg}`, { parse_mode: 'Markdown' });
+    await botInstance.sendMessage(chatId, `❌ *Order Failed*\nSignal #${signalId}: ${errorMsg}`, { parse_mode: 'Markdown' });
   }
 }
 

@@ -6,6 +6,7 @@ import prisma from './prisma.js';
 import logger from './logger.js';
 import { getFunds, getHoldings, getPositions, getOrderStatus } from './upstoxService.js';
 import { getCurrentPrice } from './marketData.js';
+import { getUpstoxLTP } from './upstoxMarketData.js';
 
 /**
  * Get effective cash for a portfolio, accounting for pending signal reservations.
@@ -82,36 +83,58 @@ export async function validateSignals(signals, portfolioId) {
   // Sort BUY signals by confidence descending (best signals get funded first)
   buySignals.sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
 
+  // Batch-fetch Upstox LTP for all BUY symbols (single API call, real-time)
+  const buySymbols = buySignals.map(s => s.symbol);
+  let upstoxLTPMap = new Map();
+  try {
+    if (buySymbols.length > 0) {
+      upstoxLTPMap = await getUpstoxLTP(buySymbols);
+    }
+  } catch (e) {
+    logger.warn(`[Capital Guard] Upstox batch LTP failed: ${e.message}`);
+  }
+
   // Validate BUY signals against remaining cash
   for (const sig of buySignals) {
     let aiPrice = parseFloat(sig.triggerPrice || sig.triggerLow || sig.price || 0);
     const quantity = Math.max(1, parseInt(sig.quantity) || 1);
 
-    // Always fetch live price — catches AI hallucinations and stale estimates
-    let livePrice = 0;
-    try {
-      const liveData = await getCurrentPrice(sig.symbol, sig.exchange || 'NSE');
-      livePrice = parseFloat(liveData?.price || liveData?.lastPrice || 0);
-    } catch (e) {
-      logger.warn(`[Capital Guard] Live price fetch failed for ${sig.symbol}: ${e.message}`);
+    // Primary: Upstox real-time LTP. Secondary: Alpha Vantage / NSE scraper.
+    let upstoxPrice = upstoxLTPMap.get(sig.symbol)?.price || 0;
+    let avPrice = 0;
+    if (!upstoxPrice) {
+      try {
+        const liveData = await getCurrentPrice(sig.symbol, sig.exchange || 'NSE');
+        avPrice = parseFloat(liveData?.price || liveData?.lastPrice || 0);
+      } catch (e) {
+        logger.warn(`[Capital Guard] AV price fetch failed for ${sig.symbol}: ${e.message}`);
+      }
     }
+    const livePrice = upstoxPrice || avPrice;
 
     // Determine price to use for capital check
     let price = 0;
 
-    if (livePrice > 0 && aiPrice > 0) {
-      // Cross-check AI's price estimate against live market price
+    if (upstoxPrice > 0 && aiPrice > 0) {
+      // Upstox is real-time — always trust it over AI training data
+      const deviation = Math.abs(aiPrice - upstoxPrice) / upstoxPrice * 100;
+      if (deviation > 20) {
+        logger.warn(`[Capital Guard] ${sig.symbol}: Upstox ₹${upstoxPrice.toFixed(0)} vs AI ₹${aiPrice.toFixed(0)} (${deviation.toFixed(0)}% deviation — AI price is stale, using Upstox LTP)`);
+        price = upstoxPrice;
+        // Also correct the signal price so DB stores the real value
+        sig.price = upstoxPrice;
+        if (sig.triggerPrice) sig.triggerPrice = parseFloat((upstoxPrice * 0.999).toFixed(2));
+      } else {
+        price = upstoxPrice;
+      }
+    } else if (livePrice > 0 && aiPrice > 0) {
+      // Alpha Vantage can be stale — only use if within 40% of AI estimate
       const deviation = Math.abs(aiPrice - livePrice) / livePrice * 100;
       if (deviation > 40) {
-        // Live price may be stale (scraper/API lag) — don't drop, use AI price so signal reaches Telegram for user review
-        logger.warn(`[Capital Guard] ${sig.symbol}: live ₹${livePrice.toFixed(0)} vs AI ₹${aiPrice.toFixed(0)} (${deviation.toFixed(0)}% deviation — live price suspect, using AI estimate)`);
+        logger.warn(`[Capital Guard] ${sig.symbol}: AV ₹${livePrice.toFixed(0)} vs AI ₹${aiPrice.toFixed(0)} (${deviation.toFixed(0)}% — AV may be stale, using AI price)`);
         price = aiPrice;
       } else {
-        // Use live price for capital check (more accurate than AI estimate)
         price = livePrice;
-        if (Math.abs(aiPrice - livePrice) / livePrice > 0.05) {
-          logger.info(`[Capital Guard] ${sig.symbol}: using live ₹${livePrice.toFixed(0)} for capital check (AI estimated ₹${aiPrice.toFixed(0)})`);
-        }
       }
     } else if (livePrice > 0) {
       // MARKET order or no AI price — use live price

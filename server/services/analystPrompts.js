@@ -114,9 +114,9 @@ REGIME-ADJUSTED SIZING (the market tells you how aggressive to be):
 export const MARKET_DATA_INSTRUCTION = `
 REAL-TIME DATA USAGE:
 - Where real-time market data is provided above, use those exact prices as your anchor
-- For stocks without provided live data, use your knowledge to estimate current levels and state your basis (e.g., "RELIANCE trading around ₹2,950 based on recent range")
-- Combine provided data with your analytical reasoning — the data is an INPUT to your analysis, not a cage around it
-- Your job is to REASON, ANALYZE, and RECOMMEND — not just parrot provided numbers
+- CRITICAL — STALE TRAINING PRICES: Your knowledge of stock prices is from mid-2025. Since then, stocks have split, corrected, and re-rated significantly. HDFCBANK, for example, has undergone major changes. Do NOT pull prices from memory for stocks NOT shown in the live data sections above.
+- For any stock NOT visible in the live data: estimate price as a percentage of a large-cap benchmark you do know. Better yet, focus your BUY recommendations on stocks ALREADY SHOWN in the market data above (sector ETFs + portfolio holdings) where you have verified live prices.
+- The system will auto-correct any signal price that deviates >20% from live Upstox feed before execution — but you should still anchor to visible live data, not memory.
 `;
 
 // ============================================

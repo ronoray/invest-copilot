@@ -12,6 +12,7 @@ import { getMarketRegime, buildHoldingsTechnicals } from '../services/technicalA
 import { isTradingDay } from '../utils/marketHolidays.js';
 import { getSystemPauseState } from '../services/pauseState.js';
 import { getAVBudget } from '../services/marketData.js';
+import { fetchPreMarketNews } from '../services/marketNews.js';
 import logger from '../services/logger.js';
 
 // ─── Reliability infrastructure ───────────────────────────────────────────────
@@ -332,6 +333,16 @@ async function generatePreMarketIntelligence() {
       }
     }
 
+    // 4. Pre-market news intelligence — VIX, FII/DII, corporate announcements
+    //    Warms the cache here so every 9:30 AM / 11 AM / 1 PM signal call is a free hit
+    const allHeldSymbols = [...new Set(eligible.flatMap(p => (p.holdings || []).map(h => h.symbol)))];
+    let newsContext = '';
+    try {
+      newsContext = await fetchPreMarketNews(allHeldSymbols);
+    } catch (e) {
+      logger.warn(`[Pre-Market] News fetch failed: ${e.message}`);
+    }
+
     // Pull in last night's watchlist if generated today
     const overnightWatchlist = getTomorrowWatchlist();
 
@@ -357,7 +368,7 @@ ${regime.details}
 ${regime.rationale}
 ${isStressed ? '⚠️ MARKET STRESS DETECTED — defensive posture required' : ''}
 === END REGIME ===
-
+${newsContext}
 ${overnightWatchlist ? overnightWatchlist + '\n' : ''}
 Today is ${dateStr}. Market opens in ~45 minutes.
 CRITICAL CONTEXT: The Union Budget 2026 was already presented on 1 February 2026 and is fully in effect. Do NOT use "pre-budget" or "ahead of budget" narratives — the budget is history. Base your analysis on post-budget sector dynamics, Q3/Q4 FY26 earnings trends, and current macro reality (RBI stance, FII flows, crude, INR). Use the sector ETF data above as your primary signal for TODAY's actual positioning.

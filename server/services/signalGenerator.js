@@ -5,6 +5,7 @@ import { fetchMarketContext } from './marketData.js';
 import { ANALYST_IDENTITY, ELITE_TRADER_EDGE, MARKET_DATA_INSTRUCTION, TECHNICAL_FRAMEWORK, buildAccountabilityScorecard } from './analystPrompts.js';
 import { getEffectiveCash, validateSignals } from './capitalGuard.js';
 import { buildHoldingsTechnicals, getMarketRegime } from './technicalAnalysis.js';
+import { fetchPreMarketNews } from './marketNews.js';
 import logger from './logger.js';
 
 const anthropic = new Anthropic({
@@ -71,6 +72,15 @@ export async function generateTradeSignals(portfolioId, extraContext = '') {
     marketContext = await fetchMarketContext(portfolio.holdings || []);
   } catch (e) {
     logger.warn('Could not fetch market context for signal generation:', e.message);
+  }
+
+  // Pre-market news intelligence (VIX, FII/DII, announcements for held stocks)
+  let newsContext = '';
+  try {
+    const holdingSymbols = (portfolio.holdings || []).map(h => h.symbol);
+    newsContext = await fetchPreMarketNews(holdingSymbols);
+  } catch (e) {
+    logger.warn(`[SignalGen] News fetch failed: ${e.message}`);
   }
 
   // Macro intelligence: GOLDBEES direction as fear/risk-off gauge
@@ -227,6 +237,7 @@ ${marketRegime.details}
 ${marketRegime.rationale}
 ${isStressed ? '🔴 STRESS MODE ACTIVE — See mandate below' : `Aggression: ${(aggMult * 100).toFixed(0)}% of normal sizing`}
 === END MARKET REGIME ===
+${newsContext}
 ${macroContext}
 ${marketContext}
 ${MARKET_DATA_INSTRUCTION}
@@ -272,7 +283,7 @@ Respond in this EXACT JSON format (no markdown, no extra text):
       "triggerLow": null,
       "triggerHigh": null,
       "confidence": 85,
-      "rationale": "CAPITAL: 10×₹150=₹1,500. SECTOR: [sector momentum context]. SETUP: [technical state + why today specifically]. ENTRY: ₹149 (why this level). TARGET: ₹163. STOP: ₹143. R:R [X]:1. CATALYST: [what triggers the move]. INVALIDATION: [what kills the thesis]."
+      "rationale": "Write 2-3 sentences as a world-class fund manager speaking directly to the investor. Lead with WHY this trade makes sense TODAY — weave in what's happening in the world, what the company's actual situation is, and why this specific price level is the right entry. Include the key numbers naturally (e.g. 'entering at ₹149, targeting ₹163, stop at ₹143 — 4:1 reward'). End with one sentence on what would kill the thesis. Speak with conviction and clarity. No labels, no bullet points, no jargon — a human thought."
     }
   ],
   "capitalCheck": "Signal 1: 10×₹150=₹1,500. Total: ₹1,500 / ₹${effectiveCash.toLocaleString('en-IN')} available = OK"

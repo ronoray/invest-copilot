@@ -94,13 +94,27 @@ export async function getUpstoxLTP(symbols) {
     timeout: 10000,
   });
 
-  // Response: { data: { 'NSE_EQ|ISIN': { instrument_token, last_price }, ... } }
+  // Response: { data: { 'NSE_EQ:TRADINGSYMBOL': { instrument_token, last_price }, ... } }
+  // Note: response key uses colon+trading-symbol, NOT pipe+ISIN.
   const quoteData = response.data?.data || {};
   const result = new Map();
 
+  // Build reverse map: instrument_key → symbol (for response key resolution)
+  const keyToSymbol = {};
   for (const [symbol, key] of Object.entries(keyMap)) {
-    const q = quoteData[key];
-    if (q && q.last_price > 0) {
+    keyToSymbol[key] = symbol;
+    // Also map colon-format key that Upstox returns in response
+    keyToSymbol[`NSE_EQ:${symbol}`] = symbol;
+  }
+
+  for (const [responseKey, q] of Object.entries(quoteData)) {
+    if (!q || !(q.last_price > 0)) continue;
+    // responseKey is like "NSE_EQ:NIFTYBEES" or "NSE_EQ|INF204KB14I2"
+    const symbol = keyToSymbol[responseKey]
+      || keyToSymbol[q.instrument_token]
+      || responseKey.split(':')[1]  // fallback: extract from "NSE_EQ:SYMBOL"
+      || responseKey.split('|')[1]; // fallback: extract from "NSE_EQ|ISIN"
+    if (symbol) {
       result.set(symbol, {
         price: q.last_price,
         change: 0,          // LTP endpoint doesn't return change

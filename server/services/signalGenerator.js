@@ -73,6 +73,28 @@ export async function generateTradeSignals(portfolioId, extraContext = '') {
     logger.warn('Could not fetch market context for signal generation:', e.message);
   }
 
+  // Macro intelligence: GOLDBEES direction as fear/risk-off gauge
+  // Gold rising = fear premium / geopolitical risk being priced in → likely situational fall
+  // Gold falling = fear subsiding, risk appetite returning → recovery conditions developing
+  let macroContext = '';
+  try {
+    const { fetchDailyData } = await import('./marketIntelligence.js');
+    const goldData = await fetchDailyData('GOLDBEES');
+    if (goldData?.series?.length >= 5) {
+      const recent = goldData.series.slice(-5);
+      const goldChangePct = ((recent[recent.length - 1].close - recent[0].close) / recent[0].close * 100);
+      const goldDir = goldChangePct > 0.8 ? 'RISING' : goldChangePct < -0.8 ? 'FALLING' : 'FLAT';
+      const goldSignal = goldDir === 'RISING'
+        ? `Gold (GOLDBEES) is up ${goldChangePct.toFixed(1)}% over 5 days — RISK-OFF. Fear or geopolitical premium is being priced in. If the broader market is also falling, this is likely a SITUATIONAL fall, not structural. Quality stocks with intact fundamentals are approaching buying opportunities. Use limit orders at support.`
+        : goldDir === 'FALLING'
+        ? `Gold (GOLDBEES) is down ${Math.abs(goldChangePct).toFixed(1)}% over 5 days — RISK-ON. Fear premium is collapsing. Recovery and re-entry conditions are developing. Momentum setups in quality names deserve higher conviction.`
+        : `Gold (GOLDBEES) is flat over 5 days — no strong macro risk signal. Trade the technicals and fundamentals directly.`;
+      macroContext = `\n=== MACRO INTELLIGENCE ===\n${goldSignal}\n\nCRITICAL — DISTINGUISH THE FALL:\nBefore generating signals, explicitly reason: Is today's market weakness driven by FEAR (geopolitical, panic, short-term uncertainty) or FUNDAMENTALS (earnings deterioration, credit stress, structural slowdown)? A fear-driven fall in a fundamentally sound stock is a buying opportunity. A fundamental fall is an exit. Your knowledge of current global events, the company's earnings trajectory, and the gold signal above should inform this call.\n=== END MACRO INTELLIGENCE ===\n`;
+    }
+  } catch (e) {
+    logger.warn('Could not build macro context:', e.message);
+  }
+
   // Build accountability scorecard
   let scorecard = '';
   try {
@@ -140,11 +162,20 @@ PRIORITY 2 — LOOK FOR ASYMMETRIC CRASH OPPORTUNITIES:
 - These are contrarian entries, not momentum plays. They require wider stops and smaller size.
 - Only recommend if R:R is at minimum 5:1 and the fundamental thesis is UNAMBIGUOUSLY intact.
 
-PRIORITY 3 — PROTECT THE CASH:
-- Cash is a position in a stressed market. If there are no obvious exits AND no asymmetric longs, return empty signals array. Preserve capital to deploy when clarity returns.
-- Do not force trades to "be doing something". The best trade right now might be no trade.
+PRIORITY 3 — GENERATE DEFENSIVE INTELLIGENCE (NEVER SILENT):
+- Silence is not analysis. The portfolio manager needs guidance on EVERY trading day, especially in stressed markets.
+- If no exits are warranted AND no high-conviction longs are clear, still generate:
+  * At least 1 signal for the most resilient current holding — with specific levels: what price confirms continued strength, what would invalidate the hold, where to add on a dip to support.
+  * At least 1 opportunistic BUY at a quality stock's support level — a LIMIT order that only executes if the fear-driven price comes to you. This is capital working intelligently, not capital sitting idle.
+- Use a LIMIT triggerType with conservative price at support. If the stock never gets there, the order never fills. If fear drives it there, you've deployed at the optimal level.
+- A crash creates the best entry prices of the year. The portfolio manager who has no orders working during a crash misses the entire opportunity. Deploy limit orders at support. Let the market come to you.
 
-In a crash, the investor who holds cash deploys at the bottom and multiplies wealth. The investor who stays invested loses 30–40% and spends years recovering.
+CRITICAL DISTINCTION — FEAR FALL vs STRUCTURAL FALL:
+- FEAR FALL (geopolitical shock, short-term panic, macro uncertainty): Quality stocks fall with the market despite unchanged fundamentals. This is a BUYING OPPORTUNITY for names with strong earnings, domestic revenue, pricing power.
+- STRUCTURAL FALL (earnings deterioration, rate cycle turning, credit stress): The fundamental investment thesis has changed. Exit and preserve capital.
+- Reason explicitly about which type this is. Use your knowledge of current global events and the company's fundamentals to make this call.
+
+In a fear-driven crash, the investor who has limit orders working at support captures the recovery. The investor who sits in cash watches quality stocks bounce 15% in 5 days without them.
 ` : `
 FULL MARKET SCAN — GENERATE WEALTH SIGNALS NOW:
 
@@ -196,7 +227,7 @@ ${marketRegime.details}
 ${marketRegime.rationale}
 ${isStressed ? '🔴 STRESS MODE ACTIVE — See mandate below' : `Aggression: ${(aggMult * 100).toFixed(0)}% of normal sizing`}
 === END MARKET REGIME ===
-
+${macroContext}
 ${marketContext}
 ${MARKET_DATA_INSTRUCTION}
 
@@ -224,8 +255,8 @@ HARD RULES — NEVER VIOLATED:
 - BUY capital: sum of (quantity × price) for ALL BUY signals ≤ ₹${effectiveCash.toLocaleString('en-IN')}. Verify math in capitalCheck.
 - SELL signals ONLY for stocks actually held. No phantom sells.
 - Minimum confidence: ${minConviction}. Below this, skip it — the R:R doesn't compensate.
-- ${isStressed ? 'In stress mode: no BUY signals unless R:R ≥ 5:1 and deeply oversold.' : '2 great signals beat 5 marginal ones. Quality over quantity, always.'}
-- If no genuinely good setups exist: return empty array. Never force a bad trade.
+- ${isStressed ? 'In stress mode: BUY signals must be LIMIT orders at clear support. R:R ≥ 5:1 for aggressive entries, ≥ 3:1 for quality names at strong support.' : '2 great signals beat 5 marginal ones. Quality over quantity, always.'}
+- Never return an empty signals array. If no active trades are warranted, generate at least 2 signals: defensive holds with specific watch levels, or limit buy orders at support that only execute on further weakness. Silence is not analysis.
 
 Respond in this EXACT JSON format (no markdown, no extra text):
 {

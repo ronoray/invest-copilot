@@ -927,7 +927,7 @@ async function generateSignalsForAllPortfolios() {
         });
 
         // Skip if already have 3+ active signals today for this portfolio
-        if (existingToday >= 3) {
+        if (existingToday >= 6) {
           logger.info(`Portfolio ${portfolio.id} already has ${existingToday} signals today, skipping`);
           continue;
         }

@@ -155,6 +155,15 @@ async function runStartupRecovery() {
 
   if (missing.length === 0) {
     logger.info('[Startup Recovery] All portfolios have today\'s signals — no action needed');
+    // Populate heartbeat for every scan that should have run by now so the watchdog
+    // doesn't re-fire them after this restart (heartbeat is in-memory; wiped on restart).
+    for (const scan of SCAN_SCHEDULE_DEF) {
+      const scanMin = scan.hour * 60 + scan.minute;
+      if (scanMin <= totalMin && !scanHeartbeat.has(scan.name)) {
+        scanHeartbeat.set(scan.name, { at: new Date(), signals: -1 });
+        logger.info(`[Startup Recovery] Heartbeat seeded for ${scan.name} (already ran)`);
+      }
+    }
     return;
   }
 
@@ -211,6 +220,27 @@ async function checkScanHealthAndRecover() {
       scanHeartbeat.set(scan.name, { at: new Date(), signals: 0 });
       logger.info(`[Watchdog] ${scan.name} past recovery deadline — marking stale, skipping`);
       continue;
+    }
+
+    // DB guard: verify signals really are missing before alerting.
+    // Protects against heartbeat being wiped on restart after signals were already generated.
+    {
+      const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
+      const activePortfolios = await prisma.portfolio.findMany({
+        where: { isActive: true, isPaused: false },
+        select: { id: true }
+      });
+      const signalCounts = await Promise.all(
+        activePortfolios.map(p =>
+          prisma.tradeSignal.count({ where: { portfolioId: p.id, createdAt: { gte: startOfToday } } })
+        )
+      );
+      const hasSignalsToday = signalCounts.some(c => c > 0);
+      if (hasSignalsToday) {
+        scanHeartbeat.set(scan.name, { at: new Date(), signals: 0 });
+        logger.info(`[Watchdog] ${scan.name} — signals exist in DB, heartbeat synced (post-restart)`);
+        continue;
+      }
     }
 
     // Missed scan confirmed

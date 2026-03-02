@@ -14,6 +14,51 @@ const prisma = new PrismaClient();
 
 // Create bot instance ONLY ONCE
 let bot = null;
+let _pollingRestartTimer = null;
+let _pollingWatchdog = null;
+let _pollingRestartDelay = 5000; // start at 5s, backs off to 60s max
+
+function _startPolling(delayMs = 0) {
+  if (!bot) return;
+  clearTimeout(_pollingRestartTimer);
+  _pollingRestartTimer = setTimeout(async () => {
+    try {
+      if (bot.isPolling()) {
+        await bot.stopPolling().catch(() => {});
+      }
+    } catch (_) {}
+    try {
+      if (typeof bot.deleteWebHook === 'function') {
+        await bot.deleteWebHook().catch(() => {});
+      }
+    } catch (_) {}
+    try {
+      bot.startPolling({
+        interval: 1000,
+        params: { timeout: 10, allowed_updates: ['message', 'callback_query'] }
+      });
+      logger.info('Telegram bot polling started');
+      _pollingRestartDelay = 5000; // reset backoff on success
+    } catch (e) {
+      logger.error('Failed to start Telegram polling:', e.message);
+      // retry with backoff
+      _pollingRestartDelay = Math.min(_pollingRestartDelay * 2, 60000);
+      _startPolling(_pollingRestartDelay);
+    }
+  }, delayMs);
+}
+
+function _startPollingWatchdog() {
+  clearInterval(_pollingWatchdog);
+  _pollingWatchdog = setInterval(() => {
+    if (!bot) return;
+    if (!bot.isPolling()) {
+      logger.warn('[Telegram] Polling watchdog: polling stopped — restarting');
+      _pollingRestartDelay = 5000;
+      _startPolling(1000);
+    }
+  }, 5 * 60 * 1000); // check every 5 minutes
+}
 
 function getBot() {
   if (!bot && process.env.TELEGRAM_BOT_TOKEN) {
@@ -21,41 +66,26 @@ function getBot() {
       // Init without polling first so we can send messages immediately
       bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: false });
 
-      // Handle errors before polling starts
+      // Self-healing polling error handler — restarts polling with exponential backoff
       bot.on('polling_error', (error) => {
-        // 409 = previous instance still polling; resolves automatically after timeout
-        if (!error.message?.includes('409')) {
-          logger.error('Telegram polling error:', error.message);
-        }
+        const msg = error?.message || String(error) || 'unknown';
+        // 409 = previous instance still polling; resolves automatically
+        if (msg.includes('409')) return;
+        logger.error('Telegram polling error — will restart:', msg);
+        _pollingRestartDelay = Math.min(_pollingRestartDelay * 2, 60000);
+        _startPolling(_pollingRestartDelay);
       });
 
       bot.on('error', (error) => {
-        logger.error('Telegram error:', error.message);
+        logger.error('Telegram error:', error?.message || String(error));
       });
 
-      // Delay polling start by 15s — gives previous container's 10s long-poll time to expire
+      // Delay initial polling start by 15s — gives previous container's 10s long-poll time to expire
       // This eliminates the 409 Conflict on every restart/deploy.
-      // IMPORTANT: node-telegram-bot-api uses deleteWebHook (capital H) not deleteWebhook
-      setTimeout(async () => {
-        try {
-          // Clear any existing webhook before starting polling
-          // Use correct casing: deleteWebHook (capital H in this library version)
-          if (typeof bot.deleteWebHook === 'function') {
-            await bot.deleteWebHook().catch(() => {});
-          }
-        } catch (e) {
-          // ignore — webhook may not be set
-        }
-        try {
-          bot.startPolling({
-            interval: 1000,
-            params: { timeout: 10, allowed_updates: ['message', 'callback_query'] }
-          });
-          logger.info('Telegram bot polling started');
-        } catch (e) {
-          logger.error('Failed to start Telegram polling:', e.message);
-        }
-      }, 15000);
+      _startPolling(15000);
+
+      // Watchdog: restart polling if it silently dies
+      _startPollingWatchdog();
     } catch (error) {
       logger.error('Failed to initialize Telegram bot:', error.message);
     }

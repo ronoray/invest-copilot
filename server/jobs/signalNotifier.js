@@ -1667,6 +1667,19 @@ async function generateSignalsAtPivot(timeLabel) {
         ? (nowMs - new Date(lastSignal.createdAt).getTime()) / 60000
         : 9999;
 
+      // Hard daily cap: if total non-expired signals ≥ 6, don't generate more (same as full scan)
+      const totalToday = await prisma.tradeSignal.count({
+        where: {
+          portfolioId: portfolio.id,
+          createdAt: { gte: today },
+          status: { notIn: ['EXPIRED'] }
+        }
+      });
+      if (totalToday >= 6) {
+        logger.info(`[${timeLabel}] Portfolio ${portfolio.id}: daily cap reached (${totalToday} signals) — skipping pivot`);
+        continue;
+      }
+
       const activeCount = await prisma.tradeSignal.count({
         where: {
           portfolioId: portfolio.id,
@@ -1687,7 +1700,7 @@ async function generateSignalsAtPivot(timeLabel) {
       logger.info(`[${timeLabel}] Portfolio ${portfolio.id}: ${signals.length} signals from pivot scan`);
       await new Promise(r => setTimeout(r, 2000));
     } catch (err) {
-      logger.error(`[${timeLabel}] Portfolio ${portfolio.id}:`, err.message);
+      logger.error(`[${timeLabel}] Portfolio ${portfolio.id}: ${err?.message || String(err)}`);
     }
   }
 

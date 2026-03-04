@@ -1808,8 +1808,9 @@ Use /mute to disable all alerts`;
 
         await botInstance.sendMessage(chatId, out, { parse_mode: 'Markdown' });
       } catch (err) {
-        logger.error('/upstox command error:', err);
-        await botInstance.sendMessage(chatId, '❌ Failed to fetch Upstox data. Try again or use /auth if token expired.').catch(() => {});
+        logger.error(`/upstox command error: ${err?.message || String(err)}`);
+        if (err?.stack) logger.error(err.stack.slice(0, 400));
+        await botInstance.sendMessage(chatId, `❌ Failed to fetch Upstox data: ${err?.message || 'unknown error'}. Try again or use /auth if token expired.`).catch(() => {});
       }
     });
 

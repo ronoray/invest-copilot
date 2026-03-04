@@ -164,6 +164,82 @@ async function fetchAnnouncements(symbols = []) {
   }
 }
 
+// ─── Financial news headlines (RSS) ─────────────────────────────────────────
+// Economic Times Markets RSS + Moneycontrol RSS — both public, no auth.
+// Injected into every signal call so Claude knows recent earnings, policy news,
+// sector developments even if they happened after its August 2025 cutoff.
+// This is the primary mechanism that keeps Claude's reasoning current.
+
+const NEWS_FEEDS = [
+  {
+    name: 'Economic Times Markets',
+    url: 'https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms',
+  },
+  {
+    name: 'Moneycontrol News',
+    url: 'https://www.moneycontrol.com/rss/MCtopnews.xml',
+  },
+];
+
+let _headlineCache    = null;
+let _headlineCacheDay = null;
+
+async function fetchNewsHeadlines() {
+  const today = getISTDate();
+  if (_headlineCache !== null && _headlineCacheDay === today) return _headlineCache;
+
+  const headlines = [];
+
+  for (const feed of NEWS_FEEDS) {
+    try {
+      const resp = await axios.get(feed.url, {
+        timeout: 10000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; InvestCopilot/1.0)',
+          'Accept': 'application/rss+xml, application/xml, text/xml',
+        },
+      });
+
+      const xml = resp.data || '';
+
+      // Parse <item> blocks with regex — avoids needing an XML parser dependency
+      const items = [...xml.matchAll(/<item[\s>]([\s\S]*?)<\/item>/gi)];
+      for (const item of items.slice(0, 8)) {
+        const block = item[1];
+        const titleMatch = block.match(/<title>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?<\/title>/i);
+        const pubMatch   = block.match(/<pubDate>(.*?)<\/pubDate>/i);
+
+        if (!titleMatch) continue;
+        const title  = titleMatch[1].replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
+        const pubRaw = pubMatch ? pubMatch[1].trim() : '';
+
+        // Only include today's and yesterday's headlines
+        const pubDate = pubRaw ? new Date(pubRaw) : null;
+        const ageMs   = pubDate ? Date.now() - pubDate.getTime() : 0;
+        if (pubDate && ageMs > 48 * 60 * 60 * 1000) continue; // skip if > 48h old
+
+        if (title.length > 20) headlines.push(title);
+      }
+    } catch (err) {
+      logger.warn(`[MarketNews] RSS feed ${feed.name} failed: ${err.message}`);
+    }
+  }
+
+  // Deduplicate near-identical headlines
+  const seen = new Set();
+  const deduped = headlines.filter(h => {
+    const key = h.toLowerCase().slice(0, 60);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, 12);
+
+  _headlineCache    = deduped;
+  _headlineCacheDay = today;
+  logger.info(`[MarketNews] News headlines: ${deduped.length} items from RSS`);
+  return deduped;
+}
+
 // ─── Main export ──────────────────────────────────────────────────────────────
 
 /**
@@ -185,10 +261,11 @@ export async function fetchPreMarketNews(holdingSymbols = []) {
   });
 
   // Fetch all sources in parallel — failures are handled inside each fetcher
-  const [vix, flow, announcements] = await Promise.all([
+  const [vix, flow, announcements, headlines] = await Promise.all([
     fetchVIX(),
     fetchFIIDII(),
     fetchAnnouncements(holdingSymbols),
+    fetchNewsHeadlines(),
   ]);
 
   const lines = [`=== TODAY'S MARKET INTELLIGENCE (${timeStr} IST) ===`];
@@ -224,6 +301,19 @@ export async function fetchPreMarketNews(holdingSymbols = []) {
     lines.push(`   ⚠️ Check above announcements before trading those stocks today.`);
   } else {
     lines.push(`   No material announcements for held stocks today.`);
+  }
+
+  // Financial news headlines — closes the post-August 2025 knowledge gap
+  // Claude may not know recent earnings/policy from training data, but it
+  // CAN reason about them when injected here as context.
+  lines.push(`\n📰 FINANCIAL NEWS HEADLINES (last 48 hours):`);
+  if (headlines.length > 0) {
+    for (const h of headlines) {
+      lines.push(`   • ${h}`);
+    }
+    lines.push(`   ⚠️ IMPORTANT: These headlines are REAL and CURRENT. If any headline contradicts your training-data assumption about a company or sector, trust the headline. Your training data may be stale on this.`);
+  } else {
+    lines.push(`   News feed unavailable today — rely on technical signals and FII/DII flow.`);
   }
 
   lines.push(`\n=== END MARKET INTELLIGENCE ===`);

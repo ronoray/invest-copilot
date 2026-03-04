@@ -980,51 +980,118 @@ ${holdingLines || '(No holdings yet)'}`;
       }
     });
 
-    // /portfolio (legacy — all holdings)
+    // /portfolio — complete picture across all active portfolios
     botInstance.onText(/^\/portfolio$/, async (msg) => {
       try {
         const telegramUser = await getOrCreateUser(msg.from.id, msg.from.username, msg.from.first_name);
         const portfolios = await getUserPortfolios(telegramUser.user.id);
-        const allHoldings = portfolios.flatMap(p =>
-          (p.holdings || []).map(h => ({ ...h, portfolioName: p.ownerName || p.name }))
-        );
 
-        if (allHoldings.length === 0) {
-          await botInstance.sendMessage(msg.chat.id, '📭 Portfolio empty. Add some holdings first!');
+        const activePortfolios = portfolios.filter(p => !p.isPaused);
+        if (activePortfolios.length === 0) {
+          await botInstance.sendMessage(msg.chat.id, '⏸ All portfolios are on hold. Use /portfolios to see status.');
           return;
         }
 
-        let totalValue = 0;
-        let totalInvested = 0;
+        // Batch-fetch live LTP for all held symbols across all active portfolios
+        const allSymbols = [...new Set(
+          activePortfolios.flatMap(p => (p.holdings || []).map(h => h.symbol)).filter(Boolean)
+        )];
+        let ltpMap = new Map();
+        try {
+          if (allSymbols.length > 0) ltpMap = await getUpstoxLTP(allSymbols);
+        } catch (e) {
+          logger.warn(`[/portfolio] LTP fetch failed: ${e.message}`);
+        }
 
-        const lines = allHoldings.map(h => {
-          const invested = h.quantity * parseFloat(h.avgPrice);
-          const current = h.quantity * parseFloat(h.currentPrice || h.avgPrice);
-          const pl = current - invested;
-          const plPercent = (pl / invested) * 100;
+        // Fetch open PLACING signals for all active portfolios (blocked capital)
+        const portfolioIds = activePortfolios.map(p => p.id);
+        const openSignals = await prisma.tradeSignal.findMany({
+          where: { portfolioId: { in: portfolioIds }, side: 'BUY', status: 'PLACING' },
+          select: { portfolioId: true, symbol: true, quantity: true, triggerPrice: true }
+        });
+        const blockedByPortfolio = {};
+        for (const s of openSignals) {
+          blockedByPortfolio[s.portfolioId] = (blockedByPortfolio[s.portfolioId] || 0) +
+            parseFloat(s.triggerPrice || 0) * s.quantity;
+        }
 
-          totalValue += current;
-          totalInvested += invested;
+        const ts = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
+        let grandTotal = 0;
+        let grandInvested = 0;
+        let grandCash = 0;
+        let grandBlocked = 0;
+        const sections = [];
 
-          return `*${h.symbol}*: ${h.quantity} @ ${formatPrice(h.avgPrice)}\nP&L: ${formatPrice(pl)} (${formatPercent(plPercent)})`;
-        }).join('\n\n');
+        for (const p of activePortfolios) {
+          const cash      = parseFloat(p.availableCash || 0);
+          const blocked   = blockedByPortfolio[p.id] || 0;
+          let holdValue   = 0;
+          let holdInvested = 0;
 
-        const totalPL = totalValue - totalInvested;
-        const totalPLPercent = totalInvested > 0 ? (totalPL / totalInvested) * 100 : 0;
+          const holdLines = (p.holdings || []).map(h => {
+            const liveEntry  = ltpMap.get(h.symbol);
+            const livePrice  = liveEntry?.price || parseFloat(h.currentPrice || h.avgPrice);
+            const avg        = parseFloat(h.avgPrice);
+            const invested   = h.quantity * avg;
+            const value      = h.quantity * livePrice;
+            const pl         = value - invested;
+            const plPct      = invested > 0 ? (pl / invested) * 100 : 0;
+            const plSign     = pl >= 0 ? '+' : '';
+            const stopNote   = h.stopLoss ? `  🛡 ₹${parseFloat(h.stopLoss).toFixed(2)}` : '';
+            const staleMark  = liveEntry ? '' : ' _(stale)_';
 
-        const portfolioMsg = `💼 *ALL HOLDINGS*
-━━━━━━━━━━━━━━━━━━━
-Value: ${formatPrice(totalValue)}
-Invested: ${formatPrice(totalInvested)}
-P&L: ${formatPrice(totalPL)} (${formatPercent(totalPLPercent)})
+            holdValue    += value;
+            holdInvested += invested;
 
-━━━━━━━━━━━━━━━━━━━
-${lines}
+            return `  *${h.symbol}* ${h.quantity}×  Avg ₹${avg.toFixed(0)} → ₹${livePrice.toFixed(0)}${staleMark}\n` +
+                   `  P&L: ${plSign}₹${Math.abs(pl).toFixed(0)} (${plSign}${plPct.toFixed(1)}%)${stopNote}`;
+          }).join('\n');
 
-━━━━━━━━━━━━━━━━━━━
-Use /portfolios for per-portfolio view`;
+          const portfolioTotal = cash + blocked + holdValue;
+          grandTotal   += portfolioTotal;
+          grandInvested += holdInvested;
+          grandCash    += cash;
+          grandBlocked += blocked;
 
-        await botInstance.sendMessage(msg.chat.id, portfolioMsg, { parse_mode: 'Markdown' });
+          const totalPL  = holdValue - holdInvested;
+          const totalPct = holdInvested > 0 ? (totalPL / holdInvested) * 100 : 0;
+          const plSign   = totalPL >= 0 ? '+' : '';
+
+          let section = `💼 *${p.ownerName || p.name}* (${(p.broker || '').replace(/_/g, ' ')})\n`;
+          section += `   Total: *₹${portfolioTotal.toFixed(0)}*  |  Cash: ₹${cash.toFixed(0)}`;
+          if (blocked > 0) section += `  |  Orders: ₹${blocked.toFixed(0)}`;
+          section += `\n`;
+          if (p.holdings?.length > 0) {
+            section += `   Holdings P&L: ${plSign}₹${Math.abs(totalPL).toFixed(0)} (${plSign}${totalPct.toFixed(1)}%)\n`;
+            section += holdLines;
+          } else {
+            section += `   _(No holdings)_`;
+          }
+          sections.push(section);
+        }
+
+        const pausedCount = portfolios.length - activePortfolios.length;
+        const pausedNote  = pausedCount > 0 ? `\n_${pausedCount} portfolio(s) on hold — use /portfolios_` : '';
+
+        const grandPL    = grandTotal - grandCash - grandBlocked - grandInvested + (grandInvested);
+        // Unrealised P&L = holdValue - holdInvested (across all)
+        const grandUnreal = grandTotal - grandCash - grandBlocked - grandInvested;
+        const unrSign    = grandUnreal >= 0 ? '+' : '';
+
+        let out = `💼 *PORTFOLIO SNAPSHOT*  _${ts} IST_\n`;
+        out += `━━━━━━━━━━━━━━━━━━━\n`;
+        out += `*Total Value: ₹${grandTotal.toFixed(0)}*\n`;
+        out += `Cash: ₹${grandCash.toFixed(0)}`;
+        if (grandBlocked > 0) out += `  |  In orders: ₹${grandBlocked.toFixed(0)}`;
+        out += `\n`;
+        out += `Unrealised P&L: ${unrSign}₹${Math.abs(grandUnreal).toFixed(0)}\n`;
+        out += `━━━━━━━━━━━━━━━━━━━\n`;
+        out += sections.join('\n━━━━━━━━━━━━━━━━━━━\n');
+        out += `\n━━━━━━━━━━━━━━━━━━━\n`;
+        out += `_🛡 = trailing stop level_${pausedNote}\n`;
+        out += `_/upstox for full live Upstox snapshot_`;
+
+        await botInstance.sendMessage(msg.chat.id, out, { parse_mode: 'Markdown' });
       } catch (error) {
         logger.error('Portfolio error:', error);
         await botInstance.sendMessage(msg.chat.id, '❌ Failed to fetch portfolio').catch(() => {});

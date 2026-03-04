@@ -32,7 +32,37 @@ export async function generateTradeSignals(portfolioId, extraContext = '') {
   }
 
   const profileBrief = buildProfileBrief(portfolio);
-  const { effectiveCash, reservedCash, rawCash } = await getEffectiveCash(portfolioId);
+
+  // Fetch live Upstox open orders to prevent duplicates and use accurate cash
+  let liveOpenOrders = [];
+  let liveCash = null;
+  try {
+    const { getFunds, getOrderBook } = await import('./upstoxService.js');
+    const upstoxIntegration = await prisma.upstoxIntegration.findFirst({
+      where: { userId: portfolio.userId }
+    });
+    if (upstoxIntegration) {
+      const [fundsResult, orderResult] = await Promise.allSettled([
+        getFunds(portfolio.userId),
+        getOrderBook(portfolio.userId)
+      ]);
+      if (fundsResult.status === 'fulfilled') {
+        liveCash = fundsResult.value?.availableMargin ?? null;
+      }
+      if (orderResult.status === 'fulfilled') {
+        liveOpenOrders = (orderResult.value?.orders || []).filter(o => {
+          const s = (o.status || '').toLowerCase();
+          return s === 'open' || s === 'trigger pending' || s === 'put order req received';
+        });
+      }
+    }
+  } catch (e) {
+    logger.warn('[SignalGen] Could not fetch live Upstox data:', e.message);
+  }
+
+  const { effectiveCash: dbEffectiveCash, reservedCash, rawCash } = await getEffectiveCash(portfolioId);
+  // Prefer live Upstox funds (accurate) over stale DB cash
+  const effectiveCash = liveCash !== null ? liveCash : dbEffectiveCash;
 
   // Build portfolio audit, trajectory, and growth directive
   const portfolioAudit  = buildPortfolioAudit(portfolio, effectiveCash, reservedCash);
@@ -267,9 +297,17 @@ ${portfolioAudit}
 
 ${profileBrief}
 
-AVAILABLE CAPITAL: ₹${effectiveCash.toLocaleString('en-IN')} deployable cash (₹${reservedCash.toFixed(0)} reserved by pending signals).
+AVAILABLE CAPITAL: ₹${effectiveCash.toLocaleString('en-IN')} deployable cash (live from Upstox).
 ${targetContext}
-${extraContext}
+${liveOpenOrders.length > 0 ? `
+OPEN ORDERS ALREADY ON EXCHANGE (DO NOT DUPLICATE):
+${liveOpenOrders.map(o => `- ${(o.transaction_type||'').toUpperCase()} ${o.tradingsymbol || o.trading_symbol}: ₹${o.price} × ${o.pending_quantity || o.quantity} shares (${o.status})`).join('\n')}
+
+CRITICAL RULES for open orders:
+1. Do NOT generate a new ${portfolio.broker === 'UPSTOX' ? 'signal' : 'recommendation'} for any symbol already listed above unless you explicitly intend to REPLACE or CANCEL the existing order.
+2. If you have a BUY and a SELL open for the same symbol (bracket strategy), call it out clearly in the rationale.
+3. Capital locked in open BUY orders above is NOT available — it's already committed on the exchange.
+` : ''}${extraContext}
 
 ${portfolio.broker === 'UPSTOX' && portfolio.apiEnabled ? `UPSTOX LIVE TRADING — ONE TAP EXECUTION:
 - ONLY NSE_EQ CNC delivery. No intraday, no F&O.
@@ -377,9 +415,23 @@ Notes:
       expiresAt.setDate(expiresAt.getDate() + 1);
     }
 
+    // Dedup: skip signals for symbols that already have an open Upstox order in the same direction
+    // This prevents the 1 PM scan from creating duplicates of 9:30 AM orders still sitting on exchange
+    const openOrderKey = new Set(
+      liveOpenOrders.map(o => `${(o.tradingsymbol || o.trading_symbol || '').replace(/-EQ$/, '')}:${(o.transaction_type || '').toUpperCase()}`)
+    );
+    const dedupedSignals = validatedSignals.filter(sig => {
+      const key = `${sig.symbol}:${sig.side}`;
+      if (openOrderKey.has(key)) {
+        logger.info(`[SignalGen] Skipping duplicate signal ${sig.side} ${sig.symbol} — open order already on Upstox`);
+        return false;
+      }
+      return true;
+    });
+
     // Create signals in DB
     const createdSignals = [];
-    for (const sig of validatedSignals.slice(0, 5)) {
+    for (const sig of dedupedSignals.slice(0, 5)) {
       try {
         const created = await prisma.tradeSignal.create({
           data: {

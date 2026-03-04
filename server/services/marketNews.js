@@ -245,3 +245,133 @@ export function getCachedNews() {
   if (_newsCache && _newsCacheDay === today) return _newsCache.text;
   return '';
 }
+
+// ─── Recent IPO intelligence ──────────────────────────────────────────────────
+// NSE lists recently listed IPOs at /api/allIpo.
+// We fetch once per day, cache, and inject into every signal call so Claude
+// can evaluate these as swing trading opportunities.
+
+let _ipoCache    = null;  // formatted string or ''
+let _ipoCacheDay = null;
+
+/**
+ * Parse issue price string from NSE (e.g. "₹150 to ₹160", "150-160", "₹225")
+ * Returns the upper bound (more conservative for premium calculation).
+ */
+function parseIssuePrice(raw) {
+  if (!raw) return 0;
+  const nums = String(raw).replace(/[^\d.–\-]/g, ' ').trim().split(/[\s–\-]+/).map(Number).filter(n => !isNaN(n) && n > 0);
+  return nums.length > 0 ? Math.max(...nums) : 0;
+}
+
+/**
+ * Fetch recently listed IPOs from NSE (last 90 days) and format as signal context.
+ * Cached once per trading day. Gracefully returns '' if NSE is unreachable.
+ */
+export async function fetchRecentIPOContext() {
+  const today = getISTDate();
+  if (_ipoCache !== null && _ipoCacheDay === today) return _ipoCache;
+
+  try {
+    const resp = await nseGet('/api/allIpo');
+    const data = resp.data || {};
+
+    // NSE returns nested structure — normalise across known response shapes
+    const rawList = [
+      ...(Array.isArray(data) ? data : []),
+      ...(Array.isArray(data.recentlyListed)   ? data.recentlyListed   : []),
+      ...(Array.isArray(data.data?.recentlyListed) ? data.data.recentlyListed : []),
+    ];
+
+    if (rawList.length === 0) {
+      _ipoCache    = '';
+      _ipoCacheDay = today;
+      return '';
+    }
+
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - 90);
+    const now = Date.now();
+
+    const ipos = [];
+    for (const item of rawList) {
+      const symbol       = (item.symbol || item.tradingSymbol || '').trim().toUpperCase();
+      const name         = item.companyName || item.name || symbol;
+      const listDateRaw  = item.listingDate || item.listing_date || item.listDate || '';
+      const issuePrice   = parseIssuePrice(item.issuePrice || item.issue_price || item.ipoPrice || '');
+
+      if (!symbol || !listDateRaw) continue;
+
+      // Parse listing date — NSE uses DD-Mon-YYYY or YYYY-MM-DD
+      const listDate = new Date(listDateRaw);
+      if (isNaN(listDate.getTime()) || listDate < cutoff) continue;
+
+      const daysListed = Math.floor((now - listDate.getTime()) / 86400000);
+      ipos.push({ symbol, name, listDate, listDateRaw, issuePrice, daysListed });
+    }
+
+    if (ipos.length === 0) {
+      _ipoCache    = '';
+      _ipoCacheDay = today;
+      return '';
+    }
+
+    // Sort by most recent first
+    ipos.sort((a, b) => b.listDate - a.listDate);
+
+    const lines = ['\n=== RECENTLY LISTED IPOs — PRICE DISCOVERY OPPORTUNITIES ==='];
+    lines.push(`${ipos.length} stocks listed on NSE in the last 90 days. These are in active price discovery — high volatility, institutional positioning still in flux.\n`);
+
+    for (const ipo of ipos) {
+      const issueTxt   = ipo.issuePrice > 0 ? `  Issue price: ₹${ipo.issuePrice}` : '';
+      const ageTxt     = `${ipo.daysListed} days listed`;
+
+      let riskFlags = '';
+      if (ipo.daysListed < 10) {
+        riskFlags = '  ⚠️ SKIP — < 10 days listed, insufficient price history for pattern recognition';
+      } else if (ipo.daysListed >= 25 && ipo.daysListed <= 38) {
+        riskFlags = '  ⚠️ 30-DAY ANCHOR LOCK-IN WINDOW — anchor investors can sell now. Avoid new longs until distribution clears';
+      } else if (ipo.daysListed >= 80 && ipo.daysListed <= 92) {
+        riskFlags = '  ⚠️ Near 90-day QIB lock-in expiry — potential supply overhang';
+      }
+
+      const knowledgeTxt = ipo.listDate > new Date('2025-08-01')
+        ? '  [Post-Aug 2025: fundamentals unknown — price action only]'
+        : '';
+
+      lines.push(`• ${ipo.symbol} (${ipo.name}) — ${ageTxt}${issueTxt}${knowledgeTxt}${riskFlags}`);
+    }
+
+    lines.push(`
+IPO SWING TRADING FRAMEWORK:
+Knowledge boundary — Your training data covers fundamentals of companies listed BEFORE August 2025.
+For companies listed AFTER August 2025: evaluate ONLY from price action, volume, sector context.
+Do NOT fabricate fundamental narratives for post-Aug 2025 IPOs. Price action is your only edge.
+
+Setup criteria:
+• Listing premium >15% holding above listing price → institutional validation. Pullback to listing price = swing buy.
+• Listed below issue price, day 20–40 with reversal volume → capitulation exhaustion. Contrarian long.
+• Tight consolidation (< 3% daily range) after strong listing → accumulation. Breakout = momentum entry.
+• Wide daily swings (> 6% ADR) → price discovery chaos. Wait for range to narrow before entry.
+
+Lock-in calendar (flags above):
+• Day 30: Anchor investors (HNI allottees) free to sell
+• Month 6: Promoter shares unlock (massive supply risk for richly valued IPOs)
+• Year 1: Employee ESOP lock-in expires
+Check listing date against these windows before recommending. A stock at the 30-day window with weak price action = distribution underway.
+
+=== END IPO INTELLIGENCE ===`);
+
+    const text = lines.join('\n');
+    _ipoCache    = text;
+    _ipoCacheDay = today;
+    logger.info(`[MarketNews] IPO intelligence: ${ipos.length} recently listed stocks cached`);
+    return text;
+
+  } catch (err) {
+    logger.warn(`[MarketNews] IPO intelligence fetch failed: ${err?.message || String(err)}`);
+    _ipoCache    = '';
+    _ipoCacheDay = today;
+    return '';
+  }
+}

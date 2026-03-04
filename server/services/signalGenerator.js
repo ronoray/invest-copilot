@@ -5,7 +5,7 @@ import { fetchMarketContext } from './marketData.js';
 import { ANALYST_IDENTITY, ELITE_TRADER_EDGE, MARKET_DATA_INSTRUCTION, TECHNICAL_FRAMEWORK, buildAccountabilityScorecard } from './analystPrompts.js';
 import { getEffectiveCash, validateSignals } from './capitalGuard.js';
 import { buildHoldingsTechnicals, getMarketRegime } from './technicalAnalysis.js';
-import { fetchPreMarketNews } from './marketNews.js';
+import { fetchPreMarketNews, fetchRecentIPOContext } from './marketNews.js';
 import { getUpstoxLTP } from './upstoxMarketData.js';
 import logger from './logger.js';
 
@@ -118,11 +118,15 @@ export async function generateTradeSignals(portfolioId, extraContext = '') {
 
   // Pre-market news intelligence (VIX, FII/DII, announcements for held stocks)
   let newsContext = '';
+  let ipoContext = '';
   try {
     const holdingSymbols = (portfolio.holdings || []).map(h => h.symbol);
-    newsContext = await fetchPreMarketNews(holdingSymbols);
+    [newsContext, ipoContext] = await Promise.all([
+      fetchPreMarketNews(holdingSymbols),
+      fetchRecentIPOContext(),
+    ]);
   } catch (e) {
-    logger.warn(`[SignalGen] News fetch failed: ${e.message}`);
+    logger.warn(`[SignalGen] News/IPO fetch failed: ${e.message}`);
   }
 
   // Macro intelligence: GOLDBEES direction as fear/risk-off gauge
@@ -156,7 +160,7 @@ export async function generateTradeSignals(portfolioId, extraContext = '') {
   }
 
   const aggMult      = marketRegime.aggressionMultiplier ?? 0.8;
-  const minConviction = aggMult < 0.6 ? 80 : aggMult < 0.8 ? 74 : 68;
+  const minConviction = 78; // Hard floor regardless of regime — below 78 means setup is not ready
   const maxPosPct     = aggMult < 0.6 ? 18 : aggMult < 0.8 ? 25 : 30;
 
   // Profit-taking candidates — holdings at or near the portfolio profit target
@@ -231,13 +235,11 @@ PRIORITY 2 — LOOK FOR ASYMMETRIC CRASH OPPORTUNITIES:
 - These are contrarian entries, not momentum plays. They require wider stops and smaller size.
 - Only recommend if R:R is at minimum 5:1 and the fundamental thesis is UNAMBIGUOUSLY intact.
 
-PRIORITY 3 — GENERATE DEFENSIVE INTELLIGENCE (NEVER SILENT):
-- Silence is not analysis. The portfolio manager needs guidance on EVERY trading day, especially in stressed markets.
-- If no exits are warranted AND no high-conviction longs are clear, still generate:
-  * At least 1 signal for the most resilient current holding — with specific levels: what price confirms continued strength, what would invalidate the hold, where to add on a dip to support.
-  * At least 1 opportunistic BUY at a quality stock's support level — a LIMIT order that only executes if the fear-driven price comes to you. This is capital working intelligently, not capital sitting idle.
-- Use a LIMIT triggerType with conservative price at support. If the stock never gets there, the order never fills. If fear drives it there, you've deployed at the optimal level.
-- A crash creates the best entry prices of the year. The portfolio manager who has no orders working during a crash misses the entire opportunity. Deploy limit orders at support. Let the market come to you.
+PRIORITY 3 — DEFENSIVE INTELLIGENCE (EMPTY IS VALID):
+- If no exits are warranted AND no setup clears the 78 conviction threshold, return an empty signals array. Write the reason in capitalCheck: "Stress mode — no setup clears 78 conviction. Cash held. Monitoring [X] for entry at [level]." That IS professional analysis.
+- Do NOT manufacture trades to fill the array. Forced low-conviction entries in a stressed market is how portfolios blow up. The correct position is sometimes cash.
+- IF a genuinely compelling setup exists (quality stock at strong support, RSI < 35, fundamentals unambiguously intact, 5:1 R:R), generate it. The 78 floor still applies — raise your bar, not lower it.
+- If you DO identify a high-conviction defensive LIMIT order (stock at key support, only fills if further weakness), include it. A well-placed limit order that never fills costs nothing. One that fills at the bottom is the year's best trade.
 
 CRITICAL DISTINCTION — FEAR FALL vs STRUCTURAL FALL:
 - FEAR FALL (geopolitical shock, short-term panic, macro uncertainty): Quality stocks fall with the market despite unchanged fundamentals. This is a BUYING OPPORTUNITY for names with strong earnings, domestic revenue, pricing power.
@@ -298,6 +300,7 @@ ${isStressed ? '🔴 STRESS MODE ACTIVE — See mandate below' : `Aggression: ${
 === END MARKET REGIME ===
 ${newsContext}
 ${macroContext}
+${ipoContext}
 ${marketContext}
 ${MARKET_DATA_INSTRUCTION}
 
@@ -333,9 +336,10 @@ ${scorecard ? `ACCOUNTABILITY: Your previous calls are above. Own every outcome.
 HARD RULES — NEVER VIOLATED:
 - BUY capital: sum of (quantity × price) for ALL BUY signals ≤ ₹${effectiveCash.toLocaleString('en-IN')}. Verify math in capitalCheck.
 - SELL signals ONLY for stocks actually held. No phantom sells.
-- Minimum confidence: ${minConviction}. Below this, skip it — the R:R doesn't compensate.
-- ${isStressed ? 'In stress mode: BUY signals must be LIMIT orders at clear support. R:R ≥ 5:1 for aggressive entries, ≥ 3:1 for quality names at strong support.' : '2 great signals beat 5 marginal ones. Quality over quantity, always.'}
-- Never return an empty signals array. If no active trades are warranted, generate at least 2 signals: defensive holds with specific watch levels, or limit buy orders at support that only execute on further weakness. Silence is not analysis.
+- Minimum confidence: 78. Hard floor, no exceptions, no regime override. A setup you're not 78% sure about is a setup you should not take.
+- ${isStressed ? 'Stress mode: BUY signals must be LIMIT orders at clear support. R:R ≥ 5:1 required.' : '2 great signals beat 5 marginal ones. Quality over quantity, always.'}
+- An EMPTY signals array is a valid, professional output. If nothing clears 78, return: {"signals": [], "capitalCheck": "No qualifying setups today — conviction floor not met. Reason: [your analysis]. Cash held."}
+- Do NOT manufacture signals to avoid an empty array. That is activity bias. The market does not always offer edge. Recognising when to sit on cash IS alpha.
 
 Respond in this EXACT JSON format (no markdown, no extra text):
 {
@@ -379,21 +383,41 @@ Notes:
       return [];
     }
 
+    // Empty array is valid — means Claude found no qualifying setups
+    if (result.signals.length === 0) {
+      logger.info(`[SignalGen] Portfolio ${portfolioId}: Claude returned no signals — ${result.capitalCheck || 'no qualifying setups'}`);
+      return [];
+    }
+
     // Capital guard: validate signals against effective cash
     const validatedSignals = await validateSignals(result.signals, portfolioId);
+
+    // ── Hard conviction gate: 78 minimum — post-generation filter ────────────
+    // Claude is instructed to self-filter, but this is the technical guarantee.
+    const convictionFiltered = validatedSignals.filter(sig => {
+      if ((sig.confidence ?? 0) < 78) {
+        logger.info(`[SignalGen] Conviction gate: dropped ${sig.side} ${sig.symbol} at ${sig.confidence} (floor 78)`);
+        return false;
+      }
+      return true;
+    });
+    if (convictionFiltered.length === 0) {
+      logger.info(`[SignalGen] Portfolio ${portfolioId}: all signals filtered by conviction gate (floor 78)`);
+      return [];
+    }
 
     // ── Live price anchor: correct stale AI prices before saving ──────────────
     // Claude's training data prices can be months old. Fetch Upstox LTP for all
     // non-held BUY signals and correct any price > 20% off live market.
     try {
       const heldSymbols = new Set((portfolio.holdings || []).map(h => h.symbol));
-      const buySymbolsNeedingCheck = validatedSignals
+      const buySymbolsNeedingCheck = convictionFiltered
         .filter(s => s.side === 'BUY' && !heldSymbols.has(s.symbol) && (s.triggerPrice || s.price))
         .map(s => s.symbol);
 
       if (buySymbolsNeedingCheck.length > 0) {
         const ltpMap = await getUpstoxLTP(buySymbolsNeedingCheck);
-        for (const sig of validatedSignals) {
+        for (const sig of convictionFiltered) {
           if (sig.side !== 'BUY' || heldSymbols.has(sig.symbol)) continue;
           const ltp = ltpMap.get(sig.symbol);
           if (!ltp?.price) continue;
@@ -434,7 +458,7 @@ Notes:
       ...liveOpenOrders.map(o => `${(o.tradingsymbol || o.trading_symbol || '').replace(/-EQ$/, '')}:${(o.transaction_type || '').toUpperCase()}`),
       ...activeDbSignals.map(s => `${s.symbol}:${s.side}`)
     ]);
-    const dedupedSignals = validatedSignals.filter(sig => {
+    const dedupedSignals = convictionFiltered.filter(sig => {
       const key = `${sig.symbol}:${sig.side}`;
       if (alreadyCoveredKeys.has(key)) {
         logger.info(`[SignalGen] Skipping duplicate signal ${sig.side} ${sig.symbol} — already covered by active signal or open Upstox order`);

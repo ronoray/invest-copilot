@@ -361,9 +361,7 @@ async function generatePreMarketIntelligence() {
       weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata'
     });
 
-    const prompt = `${ANALYST_IDENTITY}
-
-${contextText}
+    const marketBase = `${contextText}
 
 === MARKET REGIME ===
 ${regime.details}
@@ -373,102 +371,147 @@ ${isStressed ? '⚠️ MARKET STRESS DETECTED — defensive posture required' : 
 ${newsContext}
 ${overnightWatchlist ? overnightWatchlist + '\n' : ''}
 Today is ${dateStr}. Market opens in ~45 minutes.
-CRITICAL CONTEXT: The Union Budget 2026 was already presented on 1 February 2026 and is fully in effect. Do NOT use "pre-budget" or "ahead of budget" narratives — the budget is history. Base your analysis on post-budget sector dynamics, Q3/Q4 FY26 earnings trends, and current macro reality (RBI stance, FII flows, crude, INR). Use the sector ETF data above as your primary signal for TODAY's actual positioning.
+CRITICAL CONTEXT: The Union Budget 2026 was already presented on 1 February 2026 and is fully in effect.
+Yesterday's sector rotation: Leading — ${leadingStr || 'none'} | Lagging — ${laggingStr || 'none'}`;
 
-Yesterday's sector rotation summary:
-- Leading: ${leadingStr || 'none significant'}
-- Lagging: ${laggingStr || 'none significant'}
+    const bot = getBot();
+    let firstPortfolioThesis = null; // use first portfolio's thesis as global pre-market context
+
+    // ── Per-portfolio pre-market brief ────────────────────────────────────────
+    // One API call per portfolio — brief is tuned to YOUR specific holdings,
+    // not a generic blast. Claude knows what you hold, what you paid, and
+    // what today's market means specifically for those positions.
+    for (const p of eligible) {
+      try {
+        const holdings = p.holdings || [];
+        const holdingsSummary = holdings.length > 0
+          ? holdings.map(h => {
+              const avg = parseFloat(h.avgPrice || 0);
+              const cur = parseFloat(h.currentPrice || avg);
+              const pct = avg > 0 ? ((cur - avg) / avg * 100).toFixed(1) : '?';
+              return `  ${h.symbol}: ${h.quantity} shares @ avg ₹${avg.toFixed(2)} (now ~₹${cur.toFixed(2)}, ${pct}%)`;
+            }).join('\n')
+          : '  No open positions — fully in cash';
+
+        const availCash = parseFloat(p.availableCash || 0);
+
+        const prompt = `${ANALYST_IDENTITY}
+
+${marketBase}
+
+=== YOUR PORTFOLIO (${p.ownerName || p.name || p.broker}) ===
+Available cash: ₹${availCash.toLocaleString('en-IN')}
+Holdings:
+${holdingsSummary}
+=== END PORTFOLIO ===
 
 ${isStressed ? `
 STRESS MODE — DEFENSIVE MORNING BRIEF:
-The market regime indicates significant stress. Your morning brief must:
-1. Identify which holdings are most vulnerable and recommend pre-market decisions on them
-2. Name the specific support levels that, if broken, trigger a full exit
-3. Identify if there are any safe-haven or counter-cyclical plays (GOLDBEES, defensive FMCG, PHARMA)
-4. Set expectations: this is capital preservation day, not growth day
+For each holding above: is it at risk today? What support level matters?
+Are any safe-haven plays (GOLDBEES, defensive FMCG, PHARMA) worth adding?
+Set expectations: capital preservation today, not growth.
 ` : `
-FULL MARKET INTELLIGENCE BRIEF:
-Based on yesterday's sector performance and the regime, set today's complete trading thesis.
-You know the ENTIRE NSE market — every sector, every major stock, every thematic play.
-
-Address:
-1. Where is institutional money flowing today based on yesterday's sector leadership?
-2. Which specific stocks (anywhere in NSE — not limited to any list) are primed for today?
-3. What's the dominant theme? (PSU capex day? Banking NIM story? IT deal momentum? Auto sales? Power sector? Pharma FDA clearances?)
-4. How aggressive should today be — and why specifically?
-5. Any global macro context you know that's relevant today (FII patterns, crude oil impact, dollar strength)?
+PORTFOLIO-AWARE MORNING BRIEF:
+1. Market direction: where is institutional money flowing from yesterday's sector leadership?
+2. For each holding above — specific verdict for TODAY: HOLD / ADD / TRIM / EXIT and why.
+   Use the technical state (regime, sector ETF momentum) to justify. Be direct.
+3. Best new opportunity today that fits this portfolio's available cash (₹${availCash.toLocaleString('en-IN')}).
+4. Today's dominant theme — and whether it helps or hurts what this portfolio holds.
 `}
 
 Respond in JSON only:
 {
   "marketMood": "bullish|bearish|mixed|rangebound",
   "keyTheme": "one crisp sentence — TODAY's dominant narrative",
-  "focusSectors": ["BANKING", "POWER"],
+  "focusSectors": ["BANKING"],
   "avoidSectors": ["IT"],
-  "watchlist": ["STOCK1", "STOCK2", "STOCK3", "STOCK4", "STOCK5"],
-  "playbook": "2-3 specific, actionable sentences on how to trade today. Name actual stocks and entry logic, not generic advice.",
+  "holdingsView": [
+    {"symbol": "GOLDBEES", "verdict": "HOLD", "note": "Gold rising with VIX — keep full position. Exit if GOLDBEES breaks ₹130."}
+  ],
+  "topSetup": "Best new trade today for this portfolio — stock, entry, why today",
+  "playbook": "2 sentences: what to do in the first 30 minutes. Specific to this portfolio's actual cash and holdings.",
   "aggression": "high|medium|low",
-  "topSetup": "The single best trade for today — name the stock, why today specifically, expected move",
-  "riskWarning": "Key risk to watch — what would change the thesis and force a full position review"
+  "riskWarning": "What would force a full portfolio review today"
 }`;
 
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 400,
-      messages: [{ role: 'user', content: prompt }],
-    });
+        const response = await anthropic.messages.create({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 600,
+          messages: [{ role: 'user', content: prompt }],
+        });
 
-    const text = response.content[0].text.trim();
-    const json = JSON.parse(text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim());
+        const rawText = response.content[0].text.trim();
+        const json = JSON.parse(rawText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim());
 
-    // Build thesis string — injected into 9:30 AM signal generation as context
-    todayPreMarketThesis = [
-      '=== PRE-MARKET INTELLIGENCE (8:30 AM) ===',
-      `Regime: ${regime.regime} | Mood: ${json.marketMood.toUpperCase()} | Aggression: ${json.aggression.toUpperCase()}`,
-      `Theme: ${json.keyTheme}`,
-      `Focus sectors: ${json.focusSectors?.join(', ') || 'broad market'}`,
-      json.avoidSectors?.length ? `Avoid sectors: ${json.avoidSectors.join(', ')}` : '',
-      `Watchlist: ${json.watchlist?.join(', ') || ''}`,
-      `Playbook: ${json.playbook}`,
-      json.topSetup        ? `Best setup: ${json.topSetup}` : '',
-      json.riskWarning     ? `Risk watch: ${json.riskWarning}` : '',
-      overnightWatchlist   || '',
-      '=== END PRE-MARKET INTELLIGENCE ===',
-    ].filter(Boolean).join('\n');
+        // Store first portfolio's thesis as the global pre-market context for 9:30 AM signal gen
+        if (!firstPortfolioThesis) {
+          firstPortfolioThesis = [
+            '=== PRE-MARKET INTELLIGENCE (8:30 AM) ===',
+            `Regime: ${regime.regime} | Mood: ${json.marketMood.toUpperCase()} | Aggression: ${json.aggression.toUpperCase()}`,
+            `Theme: ${json.keyTheme}`,
+            `Focus sectors: ${json.focusSectors?.join(', ') || 'broad market'}`,
+            json.avoidSectors?.length ? `Avoid sectors: ${json.avoidSectors.join(', ')}` : '',
+            `Playbook: ${json.playbook}`,
+            json.topSetup    ? `Best setup: ${json.topSetup}` : '',
+            json.riskWarning ? `Risk watch: ${json.riskWarning}` : '',
+            overnightWatchlist || '',
+            '=== END PRE-MARKET INTELLIGENCE ===',
+          ].filter(Boolean).join('\n');
+        }
 
-    preMarketThesisDate = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-    recordScanRun('pre-market');
-    logger.info(`[Pre-Market] Thesis: ${json.marketMood} | ${json.keyTheme}`);
+        logger.info(`[Pre-Market] Portfolio ${p.id}: ${json.marketMood} | ${json.keyTheme}`);
 
-    // Send morning brief to Telegram
-    const bot = getBot();
-    if (bot) {
-      const moodEmoji  = { bullish: '🟢', bearish: '🔴', mixed: '🟡', rangebound: '⚪' }[json.marketMood] || '🟡';
-      const aggrEmoji  = { high: '⚡', medium: '📊', low: '🛡️' }[json.aggression] || '📊';
-      const regimeEmoji = { BULL: '🚀', PULLBACK: '📈', BEAR: '🐻', HIGH_VOL_BEAR: '🚨', NEUTRAL: '➡️' }[regime.regime] || '➡️';
-      const msg = [
-        `${isStressed ? '🚨' : moodEmoji} *Pre-Market Brief — ${dateStr}*`,
-        `${regimeEmoji} ${regime.regime}${isStressed ? ' — STRESS MODE' : ''}`,
-        '',
-        `*Theme:* ${json.keyTheme}`,
-        '',
-        `*Focus sectors:* ${json.focusSectors?.join(', ')}`,
-        json.avoidSectors?.length ? `*Avoid:* ${json.avoidSectors.join(', ')}` : null,
-        `*Watchlist:* ${json.watchlist?.join(', ')}`,
-        '',
-        json.topSetup    ? `*Best setup:* ${json.topSetup}` : null,
-        json.riskWarning ? `*Risk watch:* ${json.riskWarning}` : null,
-        '',
-        `${aggrEmoji} _${json.playbook}_`,
-        '',
-        `_Full market signals at 9:30 AM →_`,
-      ].filter(l => l !== null).join('\n');
+        // Send portfolio-specific Telegram brief
+        if (bot) {
+          const tg = p.user?.telegramUser;
+          if (!tg) continue;
 
-      for (const p of eligible) {
-        const tg = p.user?.telegramUser;
-        if (tg) await bot.sendMessage(parseInt(tg.telegramId), msg, { parse_mode: 'Markdown' }).catch(() => {});
+          const moodEmoji  = { bullish: '🟢', bearish: '🔴', mixed: '🟡', rangebound: '⚪' }[json.marketMood] || '🟡';
+          const aggrEmoji  = { high: '⚡', medium: '📊', low: '🛡️' }[json.aggression] || '📊';
+          const regimeEmoji = { BULL: '🚀', PULLBACK: '📈', BEAR: '🐻', HIGH_VOL_BEAR: '🚨', NEUTRAL: '➡️' }[regime.regime] || '➡️';
+
+          // Holdings verdicts section
+          const holdingsLines = (json.holdingsView || [])
+            .map(h => {
+              const v = h.verdict || 'HOLD';
+              const e = { HOLD: '⚪', ADD: '🟢', TRIM: '🟡', EXIT: '🔴' }[v] || '⚪';
+              return `${e} *${h.symbol}*: ${v} — ${h.note || ''}`;
+            }).join('\n');
+
+          const lines = [
+            `${isStressed ? '🚨' : moodEmoji} *Pre\\-Market Brief — ${dateStr}*`,
+            `${regimeEmoji} ${regime.regime}${isStressed ? ' — STRESS MODE' : ''}`,
+            '',
+            `*Theme:* ${json.keyTheme}`,
+            `*Focus:* ${json.focusSectors?.join(', ')}${json.avoidSectors?.length ? `  |  Avoid: ${json.avoidSectors.join(', ')}` : ''}`,
+            '',
+            holdingsLines ? `*Your Positions:*\n${holdingsLines}` : '*Positions:* None — fully in cash',
+            '',
+            json.topSetup ? `*Best setup today:* ${json.topSetup}` : null,
+            json.riskWarning ? `*Watch out for:* ${json.riskWarning}` : null,
+            '',
+            `${aggrEmoji} _${json.playbook}_`,
+            '',
+            `_War room plan at 9:00 AM → signals at 9:30 AM_`,
+          ].filter(l => l !== null).join('\n');
+
+          await bot.sendMessage(parseInt(tg.telegramId), lines, { parse_mode: 'MarkdownV2' }).catch(async (e) => {
+            // Fallback: plain text if MarkdownV2 fails
+            logger.warn(`[Pre-Market] MarkdownV2 failed for portfolio ${p.id}: ${e.message} — sending plain`);
+            const plain = lines.replace(/[*_`\[\]()~>#+=|{}.!\\-]/g, '');
+            await bot.sendMessage(parseInt(tg.telegramId), plain).catch(() => {});
+          });
+        }
+
+        await new Promise(r => setTimeout(r, 500)); // brief pause between portfolios
+      } catch (portfolioErr) {
+        logger.error(`[Pre-Market] Portfolio ${p.id} brief failed: ${portfolioErr?.message || String(portfolioErr)}`);
       }
     }
+
+    todayPreMarketThesis = firstPortfolioThesis || '';
+    preMarketThesisDate = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    recordScanRun('pre-market');
   } catch (err) {
     logger.error('[Pre-Market] Failed:', err.message);
     todayPreMarketThesis = '';

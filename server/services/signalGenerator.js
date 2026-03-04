@@ -82,9 +82,7 @@ export async function generateTradeSignals(portfolioId, extraContext = '') {
   const trajectory      = buildPortfolioTrajectory(portfolio);
   const growthDirective = buildGrowthDirective(portfolio);
 
-  // Get today's target for context
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  // Get today's target for context (reuses `today` declared above)
   const dailyTarget = await prisma.dailyTarget.findUnique({
     where: { portfolioId_date: { portfolioId, date: today } }
   });

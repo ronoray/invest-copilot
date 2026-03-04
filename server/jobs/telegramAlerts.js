@@ -280,7 +280,7 @@ async function runHourlySmartPulse() {
               }
             }
           } catch (portfolioErr) {
-            logger.error(`Smart pulse failed for portfolio ${portfolio.id}:`, portfolioErr.message);
+            logger.error(`Smart pulse failed for portfolio ${portfolio.id}: ${portfolioErr?.message || String(portfolioErr)}`, { stack: portfolioErr?.stack });
           }
         }
 

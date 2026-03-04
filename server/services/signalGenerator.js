@@ -250,32 +250,41 @@ In a fear-driven crash, the investor who has limit orders working at support cap
 ` : `
 FULL MARKET SCAN — GENERATE WEALTH SIGNALS NOW:
 
+⚡ FIRST PRINCIPLE — ETFs DO NOT BUILD WEALTH:
+BANKBEES, NIFTYBEES, ITBEES, GOLDBEES — these are INDEX RETURNS. At ₹20,000 capital, buying an ETF returns 12% annualised at best. That is not the goal. The goal is ALPHA — individual stocks that outperform the index by 2-5× over a 3-15 day swing.
+
+ETF signals are ONLY acceptable in two narrow cases:
+1. The ETF itself has a technically superior setup (e.g., NIFTYBEES breaking out of a 3-week consolidation with volume surge) AND no individual stock in that sector has a better setup
+2. The regime is HIGH_VOL_BEAR and the only genuine edge is a defensive ETF hedge
+
+In ALL other cases, the output MUST be individual stocks with specific company-level catalysts. If you are about to write "NIFTYBEES BUY" or "BANKBEES BUY", stop. Find the specific bank or the specific company within that sector that has the superior setup.
+
 Your scanning universe is the ENTIRE NSE: Nifty 50, Nifty Next 50, Nifty Midcap 150, Nifty Smallcap 250, all sectoral indices, all thematic plays. You are NOT limited to any pre-selected list. You know EVERY major company in India — their valuations, growth trajectories, sector dynamics, and current positioning.
 
 TODAY'S MARKET DYNAMICS — WHAT TELLS YOU WHERE TO LOOK:
-1. The sector ETF performance above tells you WHERE money is flowing RIGHT NOW. If BANKBEES is up 1.5%, banking stocks are the hunting ground. If ITBEES is lagging, avoid IT. Follow the sector momentum.
-2. The market regime (${marketRegime.regime}) tells you HOW to trade. Use it to calibrate aggression and setup quality threshold.
+1. Sector ETF performance above tells you WHERE to hunt for individual stocks — NOT to buy the ETF. BANKBEES up 1.5% = hunt for the specific bank that is breaking out. ITBEES lagging = avoid IT stocks entirely.
+2. The market regime (${marketRegime.regime}) tells you HOW aggressive to be. Use it to calibrate conviction threshold and position sizing.
 3. Your holdings' technical state tells you WHEN to sell. RSI > 72 + EMA20 breaking = trim. Below EMA50 with deteriorating volume = exit.
-4. Your training knowledge covers: RBI cycle impacts on banking, crude oil correlations with ONGC/BPCL/RELIANCE, PLI scheme beneficiaries, defense capex plays, RE sector dynamics, PSU re-rating cycles, IT deal flow patterns, FMCG rural recovery themes, hospital sector consolidation, chemical sector China+1 plays, auto EV transition winners. USE ALL OF IT.
+4. Your training knowledge covers: RBI cycle impacts on individual banks (ICICI vs HDFC vs Kotak), crude oil correlations (ONGC/BPCL/RELIANCE — pick the best setup), PLI beneficiaries (Dixon, Amber, Kaynes), defense capex plays (HAL, BEL, Data Patterns, MTAR), RE dynamics (Macrotech, Prestige, Sobha), PSU re-rating cycles (specific PSUs with order inflows), IT deal flow (TCS vs Infosys vs mid-tier like Persistent/Coforge), FMCG rural recovery (HUL vs Dabur vs Marico — who has pricing power NOW), hospital consolidation (Apollo vs Fortis vs Max), chemical China+1 (SRF, PI Industries, Aarti), auto EV transition (Tata Motors, Olectra, Uno Minda). APPLY COMPANY-LEVEL THINKING, NOT SECTOR-LEVEL.
 
 HOW TO BUILD TODAY'S SIGNALS:
-Step 1 — Read today's sector rotation from the ETF data above. Which 2-3 sectors have wind at their back today?
-Step 2 — Within those sectors, scan your knowledge for: the strongest fundamental story + best technical setup. Not just large-caps — if a midcap has a better setup, use it.
-Step 3 — For each candidate: What is the SPECIFIC catalyst that makes this a TODAY trade? Is it breakout from consolidation? EMA20 retest in uptrend? Sector ETF momentum pulling it up? Earnings event? Policy catalyst?
-Step 4 — Size it properly: ATR-based stop (1.5× ATR), target 3× ATR minimum. If the stop would risk >3% of portfolio, reduce quantity, not stop distance.
+Step 1 — Read today's sector rotation from ETF data. Which 2-3 sectors have wind at their back?
+Step 2 — Within those sectors, identify the SPECIFIC COMPANY with: (a) strongest fundamental story for THIS swing AND (b) best technical setup. Ask: why this company over its peers in the same sector?
+Step 3 — For each candidate: What is the SPECIFIC catalyst for a 3-15 day swing? Breakout from consolidation? EMA20 retest in uptrend? Sector rotation lag (sector ETF already moved but this stock hasn't)? Earnings surprise? Institutional accumulation pattern?
+Step 4 — Size it: ATR-based stop (1.5× ATR), target 3× ATR minimum. If stop risks >3% of ₹20,000 (i.e., >₹600), reduce quantity — never widen the stop.
 
-THE EDGE YOU LOOK FOR:
-- Stocks where the sector is running but the specific company hasn't moved yet (sector rotation lag)
-- Companies with strong delivery volume patterns indicating institutional accumulation
-- Stocks consolidating near 52-week highs with rising volume — breakout imminent
-- Quality names at EMA50 support after a market-wide pullback — institutional buyers waiting there
-- Policy/regulatory catalysts not yet priced in (budget allocations, order wins, capacity expansion)
+THE ALPHA EDGE YOU HUNT FOR:
+- Sector ETF has already moved 3% this week but one quality stock in that sector is still lagging by 2% — sector rotation lag, compression about to resolve
+- Stock showing delivery volume surge (>2× 20-day avg) while price is still below resistance — institutional accumulation before breakout
+- Quality company near EMA50 support while its sector ETF holds trend — classic institutional re-entry zone
+- PLI/capex/policy beneficiary with order-win news (from NSE announcements injected above) — priced in over 3-15 days
+- Midcap with improving fundamentals + technical momentum that large-cap peers don't have — disproportionate upside
 
-BALANCE: This is not about being safe. It's about being SMART about risk:
-- Take real positions. Idle cash doesn't grow wealth.
-- Size based on conviction — don't put 5% into a 90% conviction trade. That's wasted edge.
-- But always have an invalidation level. Know exactly what would make you wrong and place the stop there.
-- The goal: maximum capture of today's specific market opportunity with defined downside on every trade.
+BALANCE — SMART RISK, NOT SAFE RISK:
+- Take real positions in individual stocks. ETF-only signals = index returns = wealth destruction by inflation.
+- Size based on conviction: a 90% conviction trade deserves a full position, not a 5% nibble.
+- But always have an invalidation level. Know exactly what makes you wrong and place the stop there.
+- The goal: maximum capture of today's specific market opportunity in individual companies, with defined downside on every trade.
 `;
 
   const nowIST = new Date().toLocaleDateString('en-IN', {

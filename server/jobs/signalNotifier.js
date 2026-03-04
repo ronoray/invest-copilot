@@ -13,6 +13,7 @@ import { isTradingDay } from '../utils/marketHolidays.js';
 import { getSystemPauseState } from '../services/pauseState.js';
 import { getAVBudget } from '../services/marketData.js';
 import { fetchPreMarketNews } from '../services/marketNews.js';
+import { runPriceGuard } from './priceGuard.js';
 import logger from '../services/logger.js';
 
 // ─── Reliability infrastructure ───────────────────────────────────────────────
@@ -1678,9 +1679,10 @@ export function initSignalNotifier() {
     timezone: 'Asia/Kolkata'
   });
 
-  // Notify pending signals every 5 minutes during market hours
+  // Notify pending signals + run price guard every 5 minutes during market hours
   cron.schedule('*/5 9-15 * * 1-5', async () => {
     await notifyPendingSignals();
+    await runPriceGuard().catch(e => logger.error('[PriceGuard cron] error:', e.message));
   }, {
     timezone: 'Asia/Kolkata'
   });

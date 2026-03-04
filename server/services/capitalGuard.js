@@ -348,6 +348,10 @@ export async function upsertHoldingOnExecution(dbOrderId) {
       }
     });
 
+    // Auto stop-loss: ETFs (endsWith BEES/ETF) get 6% below avg; stocks get 8% below avg
+    const isEtf = order.symbol.endsWith('BEES') || order.symbol.endsWith('ETF');
+    const stopPct = isEtf ? 0.06 : 0.08;
+
     if (side === 'BUY') {
       if (existing) {
         // Weighted average price
@@ -355,26 +359,30 @@ export async function upsertHoldingOnExecution(dbOrderId) {
         const newTotal = filledQty * avgPrice;
         const combinedQty = existing.quantity + filledQty;
         const weightedAvg = (oldTotal + newTotal) / combinedQty;
+        const newStop = parseFloat((weightedAvg * (1 - stopPct)).toFixed(2));
 
         await prisma.holding.update({
           where: { id: existing.id },
           data: {
             quantity: combinedQty,
-            avgPrice: weightedAvg
+            avgPrice: weightedAvg,
+            stopLoss: newStop   // recalculate stop on average-down/up
           }
         });
-        logger.info(`[Capital Guard] Holding updated: ${order.symbol} ${existing.quantity}→${combinedQty} @ ₹${weightedAvg.toFixed(2)} (portfolio ${order.portfolioId})`);
+        logger.info(`[Capital Guard] Holding updated: ${order.symbol} ${existing.quantity}→${combinedQty} @ ₹${weightedAvg.toFixed(2)}, stop=₹${newStop} (portfolio ${order.portfolioId})`);
       } else {
+        const autoStop = parseFloat((avgPrice * (1 - stopPct)).toFixed(2));
         await prisma.holding.create({
           data: {
             portfolioId: order.portfolioId,
             symbol: order.symbol,
             exchange,
             quantity: filledQty,
-            avgPrice
+            avgPrice,
+            stopLoss: autoStop
           }
         });
-        logger.info(`[Capital Guard] Holding created: ${order.symbol} ${filledQty}x @ ₹${avgPrice.toFixed(2)} (portfolio ${order.portfolioId})`);
+        logger.info(`[Capital Guard] Holding created: ${order.symbol} ${filledQty}x @ ₹${avgPrice.toFixed(2)}, stop=₹${autoStop} (${stopPct * 100}% below avg) (portfolio ${order.portfolioId})`);
       }
     } else if (side === 'SELL') {
       if (!existing) {

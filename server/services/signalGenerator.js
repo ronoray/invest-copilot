@@ -119,9 +119,22 @@ export async function generateTradeSignals(portfolioId, extraContext = '') {
   const maxPosPct     = aggMult < 0.6 ? 18 : aggMult < 0.8 ? 25 : 30;
 
   // Profit-taking candidates — holdings at or near the portfolio profit target
+  // Use live LTP (Upstox real-time) so we never miss a target that has been hit
+  // since the last DB price sync.
   const profitThreshold = (portfolio.profitTargetPct || 10) / 100;
+  let holdingLTPMap = new Map();
+  try {
+    const heldSymbols = (portfolio.holdings || []).map(h => h.symbol).filter(Boolean);
+    if (heldSymbols.length > 0) {
+      holdingLTPMap = await getUpstoxLTP(heldSymbols);
+    }
+  } catch (e) {
+    logger.warn('[SignalGen] Live LTP fetch for profit-taking check failed:', e.message);
+  }
+
   const profitCandidates = (portfolio.holdings || []).filter(h => {
-    const current = parseFloat(h.currentPrice || 0);
+    const liveEntry = holdingLTPMap.get(h.symbol);
+    const current = liveEntry?.price || parseFloat(h.currentPrice || 0);
     const avg = parseFloat(h.avgPrice || 0);
     if (!current || !avg || avg <= 0) return false;
     return (current - avg) / avg >= profitThreshold * 0.7; // alert at 70% of target
@@ -132,14 +145,18 @@ export async function generateTradeSignals(portfolioId, extraContext = '') {
     const targetPct = portfolio.profitTargetPct || 10;
     const alertPct  = (targetPct * 0.7).toFixed(0);
     const totalProfit = profitCandidates.reduce((sum, h) => {
-      return sum + (parseFloat(h.currentPrice) - parseFloat(h.avgPrice)) * h.quantity;
+      const liveEntry = holdingLTPMap.get(h.symbol);
+      const current = liveEntry?.price || parseFloat(h.currentPrice || 0);
+      return sum + (current - parseFloat(h.avgPrice)) * h.quantity;
     }, 0);
     const candidateLines = profitCandidates.map(h => {
-      const current = parseFloat(h.currentPrice);
+      const liveEntry = holdingLTPMap.get(h.symbol);
+      const current = liveEntry?.price || parseFloat(h.currentPrice || 0);
       const avg     = parseFloat(h.avgPrice);
       const pnlPct  = ((current - avg) / avg * 100).toFixed(1);
       const pnlAmt  = ((current - avg) * h.quantity).toFixed(0);
-      return `- ${h.symbol}: avg ₹${avg.toFixed(2)} → now ₹${current.toFixed(2)} (+${pnlPct}% | ₹${pnlAmt} profit on ${h.quantity} shares)`;
+      const src     = liveEntry ? 'live' : 'DB';
+      return `- ${h.symbol}: avg ₹${avg.toFixed(2)} → now ₹${current.toFixed(2)} (+${pnlPct}% | ₹${pnlAmt} profit on ${h.quantity} shares) [${src}]`;
     }).join('\n');
     profitTakingBlock = `
 🎯 PROFIT-TAKING MANDATE — NON-NEGOTIABLE:

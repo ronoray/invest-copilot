@@ -260,8 +260,21 @@ async function handleExecuteSignal(botInstance, query, signalId) {
       return;
     }
 
-    if (signal.status === 'EXECUTED' || signal.status === 'PLACING') {
-      await botInstance.answerCallbackQuery(query.id, { text: signal.status === 'PLACING' ? 'Order is being verified...' : 'Already executed' }).catch(() => {});
+    if (signal.status === 'EXECUTED') {
+      await botInstance.answerCallbackQuery(query.id, { text: 'Already executed' }).catch(() => {});
+      return;
+    }
+    if (signal.status === 'PLACING') {
+      await botInstance.answerCallbackQuery(query.id, { text: 'Order already placed — waiting to fill' }).catch(() => {});
+      // Send a real chat message so the user understands what's happening
+      const orderRef = signal.upstoxOrderId ? ` (Upstox order #${signal.upstoxOrderId})` : '';
+      const limitNote = signal.triggerPrice
+        ? `\n\nThis is a *LIMIT order at ₹${signal.triggerPrice}*. It will fill automatically when the market price drops to that level. No action needed — Upstox is watching it.\n\nTo cancel: dismiss this signal, then cancel the order in your Upstox app.`
+        : '';
+      await botInstance.sendMessage(chatId,
+        `⏳ *${signal.symbol} Order Already Open*${orderRef}\n\nYour ${signal.side} order for ${signal.quantity}× ${signal.symbol} is sitting open on Upstox — it was placed earlier and is waiting to fill.${limitNote}`,
+        { parse_mode: 'Markdown' }
+      ).catch(() => {});
       return;
     }
 

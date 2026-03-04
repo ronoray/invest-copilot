@@ -24,13 +24,15 @@ export async function getEffectiveCash(portfolioId, excludeSignalId = null) {
 
   const rawCash = parseFloat(portfolio?.availableCash || 0);
 
-  // Sum cost of all active BUY signals (PENDING, ACKED, SNOOZED, PLACING)
-  // Exclude the signal being executed so it doesn't block itself
+  // Sum cost of all active BUY signals (PENDING, ACKED, SNOOZED only).
+  // PLACING signals are excluded — their cost is already deducted from Upstox's
+  // available_margin (which feeds availableCash), so counting them here would
+  // double-subtract the same capital and push effectiveCash to ₹0 incorrectly.
   const activeSignals = await prisma.tradeSignal.findMany({
     where: {
       portfolioId,
       side: 'BUY',
-      status: { in: ['PENDING', 'ACKED', 'SNOOZED', 'PLACING'] },
+      status: { in: ['PENDING', 'ACKED', 'SNOOZED'] },
       ...(excludeSignalId ? { id: { not: excludeSignalId } } : {})
     },
     select: { quantity: true, triggerPrice: true, triggerLow: true }
@@ -473,7 +475,7 @@ export async function syncUpstoxFunds(userId) {
     const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const expired = await prisma.tradeSignal.updateMany({
       where: {
-        status: { in: ['PENDING', 'SNOOZED'] },
+        status: { in: ['PENDING', 'ACKED', 'SNOOZED'] },
         createdAt: { lt: twentyFourHoursAgo }
       },
       data: { status: 'EXPIRED' }

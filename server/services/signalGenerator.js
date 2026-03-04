@@ -405,7 +405,7 @@ export async function expireOldSignals() {
   const now = new Date();
   const result = await prisma.tradeSignal.updateMany({
     where: {
-      status: 'PENDING',
+      status: { in: ['PENDING', 'ACKED', 'SNOOZED'] },
       expiresAt: { lt: now }
     },
     data: { status: 'EXPIRED' }

@@ -899,26 +899,48 @@ Use /recommend [N] for AI picks`;
         const goal = (portfolio.investmentGoal || 'Not set').replace(/_/g, ' ');
         const experience = portfolio.investmentExperience || 'Not set';
         const capital = formatINR(parseFloat(portfolio.startingCapital || 0));
-        const cash = formatINR(parseFloat(portfolio.availableCash || 0));
+        const availCash = parseFloat(portfolio.availableCash || 0);
+
+        // Fetch live LTP for held symbols (Upstox real-time; fallback to DB currentPrice)
+        const heldSymbols = (portfolio.holdings || []).map(h => h.symbol).filter(Boolean);
+        let liveLTPMap = new Map();
+        try {
+          if (heldSymbols.length > 0) {
+            liveLTPMap = await getUpstoxLTP(heldSymbols);
+          }
+        } catch (e) {
+          logger.warn(`[/portfolio] LTP fetch failed: ${e.message}`);
+        }
+
+        // Fetch open LIMIT orders for this portfolio from DB (PLACING = in-flight on Upstox)
+        const openSignals = await prisma.tradeSignal.findMany({
+          where: { portfolioId: portfolio.id, side: 'BUY', status: 'PLACING' },
+          select: { symbol: true, quantity: true, triggerPrice: true }
+        });
+        const blockedCapital = openSignals.reduce((sum, s) => sum + parseFloat(s.triggerPrice || 0) * s.quantity, 0);
 
         let totalValue = 0;
         let totalInvested = 0;
 
         const holdingLines = (portfolio.holdings || []).map(h => {
+          const liveEntry = liveLTPMap.get(h.symbol);
+          const livePrice = liveEntry?.price || parseFloat(h.currentPrice || h.avgPrice);
           const invested = h.quantity * parseFloat(h.avgPrice);
-          const current = h.quantity * parseFloat(h.currentPrice || h.avgPrice);
+          const current = h.quantity * livePrice;
           const pl = current - invested;
           const plPercent = invested > 0 ? (pl / invested) * 100 : 0;
+          const stopNote = h.stopLoss ? `  Stop: ₹${parseFloat(h.stopLoss).toFixed(2)}` : '';
+          const src = liveEntry ? '' : ' _(stale)_';
 
           totalValue += current;
           totalInvested += invested;
 
-          return `*${h.symbol}*: ${h.quantity} @ ${formatPrice(h.avgPrice)}
-P&L: ${formatPrice(pl)} (${formatPercent(plPercent)})`;
+          return `*${h.symbol}*: ${h.quantity} @ ${formatPrice(h.avgPrice)}  →  ₹${livePrice.toFixed(2)}${src}\nP&L: ${formatPrice(pl)} (${formatPercent(plPercent)})${stopNote}`;
         }).join('\n\n');
 
         const totalPL = totalValue - totalInvested;
         const totalPLPercent = totalInvested > 0 ? (totalPL / totalInvested) * 100 : 0;
+        const totalPortfolioValue = availCash + blockedCapital + totalValue;
 
         // Profile completeness check
         const missingFields = [];
@@ -931,13 +953,20 @@ P&L: ${formatPrice(pl)} (${formatPercent(plPercent)})`;
           : '';
 
         const pausedNote = portfolio.isPaused ? '\n\n⏸ *ON HOLD* — Signals and alerts disabled for this portfolio.' : '';
+
+        let blockedLine = '';
+        if (openSignals.length > 0) {
+          const orderDescs = openSignals.map(s => `${s.quantity}×${s.symbol}@₹${parseFloat(s.triggerPrice || 0).toFixed(0)}`).join(', ');
+          blockedLine = `\n⏳ *In open orders:* ₹${blockedCapital.toFixed(0)} _(${orderDescs})_`;
+        }
+
         const detailMsg = `💼 *${portfolio.ownerName || portfolio.name}* - ${(portfolio.broker || 'Unknown').replace(/_/g, ' ')}
 ━━━━━━━━━━━━━━━━━━━
 Risk: ${risk} | Goal: ${goal}
 Experience: ${experience}
-Capital: ${capital} | Cash: ${cash}
-Value: ${formatPrice(totalValue)}
-P&L: ${formatPrice(totalPL)} (${formatPercent(totalPLPercent)})${completenessNote}${pausedNote}
+Capital: ${capital} | Cash: ${formatPrice(availCash)}${blockedLine}
+*Portfolio Value: ${formatPrice(totalPortfolioValue)}*
+Holdings P&L: ${formatPrice(totalPL)} (${formatPercent(totalPLPercent)})${completenessNote}${pausedNote}
 
 ━━━━━━━━━━━━━━━━━━━
 *Holdings (${(portfolio.holdings || []).length}):*
@@ -1552,7 +1581,19 @@ Use /mute to disable all alerts`;
         }
 
         // ── Step 4: Overall P&L ──
-        const totalPortfolioValue = availableCash + totalHoldingValue;
+        // Open LIMIT orders: Upstox deducts the blocked amount from availableMargin,
+        // but those rupees are still "yours" — they just haven't been deployed yet.
+        // We must add them back so the snapshot reflects total wealth correctly.
+        // Filter is applied AFTER openOrders is computed below, so we compute it here inline.
+        const _openOrdersForCalc = (orderBookResult.orders || []).filter(o => {
+          const s = (o.status || '').toLowerCase();
+          return s === 'open' || s === 'trigger pending' || s === 'put order req received' || s === 'modify pending';
+        });
+        const blockedInOpenOrders = _openOrdersForCalc
+          .filter(o => (o.transaction_type || '').toUpperCase() === 'BUY')
+          .reduce((sum, o) => sum + parseFloat(o.price || 0) * (o.pending_quantity || o.quantity || 0), 0);
+
+        const totalPortfolioValue = availableCash + blockedInOpenOrders + totalHoldingValue;
 
         // /upstox sync: set startingCapital = current total portfolio value (baseline reset)
         let capitalSynced = false;
@@ -1572,10 +1613,7 @@ Use /mute to disable all alerts`;
         const oSign         = overallPnL !== null && overallPnL >= 0 ? '+' : '';
 
         // ── Step 4b: Filter open/pending orders from order book ──
-        const openOrders = (orderBookResult.orders || []).filter(o => {
-          const s = (o.status || '').toLowerCase();
-          return s === 'open' || s === 'trigger pending' || s === 'put order req received' || s === 'modify pending';
-        });
+        const openOrders = _openOrdersForCalc; // already computed above for totalPortfolioValue
 
         // ── Step 5: Build message ──
         const ts = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
@@ -1600,6 +1638,9 @@ Use /mute to disable all alerts`;
 
         out += `━━━━━━━━━━━━━━━━━━━\n`;
         out += `💵 *Free Cash:* ₹${availableCash.toFixed(2)}  _← tradeable now_\n`;
+        if (blockedInOpenOrders > 0) {
+          out += `⏳ *In open LIMIT orders:* ₹${blockedInOpenOrders.toFixed(0)}  _← fills when price hits_\n`;
+        }
         if (usedMargin > 0) {
           out += `🔐 *Locked in positions:* ₹${usedMargin.toFixed(0)}\n`;
         }

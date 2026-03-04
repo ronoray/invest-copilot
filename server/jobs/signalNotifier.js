@@ -821,6 +821,46 @@ async function syncAllUpstoxHoldingsAndExpireStaleSignals() {
 }
 
 /**
+ * Build context string about signals already in-flight (PLACING = live Upstox orders,
+ * PENDING = generated but not yet actioned). Injected into every signal generation
+ * call so Claude doesn't duplicate buys for stocks already ordered.
+ */
+async function buildOpenOrdersContext(portfolioId) {
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const inFlight = await prisma.tradeSignal.findMany({
+    where: {
+      portfolioId,
+      side: 'BUY',
+      status: { in: ['PLACING', 'PENDING', 'ACKED', 'SNOOZED'] },
+      createdAt: { gte: today }
+    },
+    select: { symbol: true, quantity: true, triggerPrice: true, triggerLow: true, status: true }
+  });
+  if (inFlight.length === 0) return '';
+
+  const placing = inFlight.filter(s => s.status === 'PLACING');
+  const pending = inFlight.filter(s => s.status !== 'PLACING');
+
+  const lines = [];
+  if (placing.length > 0) {
+    lines.push('LIVE UPSTOX LIMIT ORDERS ALREADY OPEN (do NOT duplicate these):');
+    for (const s of placing) {
+      const px = s.triggerPrice || s.triggerLow || '?';
+      lines.push(`  - ${s.symbol}: BUY ${s.quantity} @ ₹${px} — order placed on exchange, waiting to fill`);
+    }
+  }
+  if (pending.length > 0) {
+    lines.push('PENDING SIGNALS NOT YET EXECUTED:');
+    for (const s of pending) {
+      const px = s.triggerPrice || s.triggerLow || '?';
+      lines.push(`  - ${s.symbol}: BUY ${s.quantity} @ ₹${px}`);
+    }
+  }
+  lines.push('For any symbol above: skip unless market has moved significantly away from the entry level.');
+  return lines.join('\n');
+}
+
+/**
  * Auto-generate trade signals for all active portfolios.
  * Runs at 9:30 AM and 1:00 PM IST during market hours.
  */
@@ -1005,9 +1045,10 @@ async function generateSignalsForAllPortfolios() {
           logger.warn(`Pre-audit logging failed for portfolio ${portfolio.id}:`, logErr.message);
         }
 
-        // Include pre-market thesis if generated today
+        // Include pre-market thesis and open orders context so Claude never duplicates
         const preMarketCtx = getTodayPreMarketThesis();
-        const fullContext = [extraContext, preMarketCtx].filter(Boolean).join('\n\n');
+        const openOrdersCtx = await buildOpenOrdersContext(portfolio.id);
+        const fullContext = [extraContext, preMarketCtx, openOrdersCtx].filter(Boolean).join('\n\n');
         const signals = await generateTradeSignals(portfolio.id, fullContext);
         totalSignals += signals.length;
         portfoliosScanned++;
@@ -1541,7 +1582,8 @@ async function generateSignalsAtPivot(timeLabel) {
         continue;
       }
 
-      const fullContext = [timeContext, preMarketCtx].filter(Boolean).join('\n\n');
+      const openOrdersCtx = await buildOpenOrdersContext(portfolio.id);
+      const fullContext = [timeContext, preMarketCtx, openOrdersCtx].filter(Boolean).join('\n\n');
       const signals = await generateTradeSignals(portfolio.id, fullContext);
       generated++;
       logger.info(`[${timeLabel}] Portfolio ${portfolio.id}: ${signals.length} signals from pivot scan`);

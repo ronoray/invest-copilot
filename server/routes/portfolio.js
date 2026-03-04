@@ -52,6 +52,22 @@ router.get('/', async (req, res) => {
         }
       });
 
+      // Fetch blocked capital (open LIMIT orders placed on exchange, not yet filled)
+      const allPortfolioIds = portfolios.map(p => p.id);
+      const placingSignals = await prisma.tradeSignal.findMany({
+        where: {
+          portfolioId: { in: allPortfolioIds },
+          side: 'BUY',
+          status: 'PLACING'
+        },
+        select: { portfolioId: true, quantity: true, triggerPrice: true, triggerLow: true }
+      });
+      const blockedByPortfolio = {};
+      for (const s of placingSignals) {
+        const px = parseFloat(s.triggerPrice || s.triggerLow || 0);
+        blockedByPortfolio[s.portfolioId] = (blockedByPortfolio[s.portfolioId] || 0) + s.quantity * px;
+      }
+
       const portfolioResults = portfolios.map(p => {
         // Compute real values from actual holdings
         let totalInvested = 0;
@@ -62,6 +78,9 @@ router.get('/', async (req, res) => {
         }
         const unrealizedPL = totalCurrentValue - totalInvested;
         const unrealizedPLPercent = totalInvested > 0 ? (unrealizedPL / totalInvested) * 100 : 0;
+        const blockedCapital = blockedByPortfolio[p.id] || 0;
+        const availableCash = parseFloat(p.availableCash);
+        const totalPortfolioValue = totalCurrentValue + availableCash + blockedCapital;
 
         return {
           id: p.id,
@@ -70,7 +89,9 @@ router.get('/', async (req, res) => {
           broker: p.broker,
           startingCapital: parseFloat(p.startingCapital),
           currentValue: totalCurrentValue,
-          availableCash: parseFloat(p.availableCash),
+          availableCash,
+          blockedCapital,          // capital locked in open LIMIT orders on exchange
+          totalPortfolioValue,     // full picture: holdings + free cash + blocked
           markets: p.markets,
           currency: p.currency,
           apiEnabled: p.apiEnabled,
@@ -89,7 +110,8 @@ router.get('/', async (req, res) => {
           totalCurrentValue,
           unrealizedPL,
           unrealizedPLPercent: parseFloat(unrealizedPLPercent.toFixed(2)),
-          holdingsCount: p.holdings.length
+          holdingsCount: p.holdings.length,
+          openOrdersCount: placingSignals.filter(s => s.portfolioId === p.id).length
         };
       });
 

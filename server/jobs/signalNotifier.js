@@ -4,7 +4,7 @@ import prisma from '../services/prisma.js';
 import { getBot } from '../services/telegramBot.js';
 import { generateTradeSignals, expireOldSignals } from '../services/signalGenerator.js';
 import { isTokenValid, getAuthorizationUrl, getHoldings, getOrderStatus } from '../services/upstoxService.js';
-import { syncUpstoxFunds, syncUpstoxHoldings, getEffectiveCash } from '../services/capitalGuard.js';
+import { syncUpstoxFunds, syncUpstoxHoldings, getEffectiveCash, updateCashOnExecution, upsertHoldingOnExecution } from '../services/capitalGuard.js';
 import { buildPreMarketContext } from '../services/marketIntelligence.js';
 import { ANALYST_IDENTITY } from '../services/analystPrompts.js';
 import { buildPortfolioTrajectory } from '../services/advancedScreener.js';
@@ -1323,12 +1323,19 @@ async function pollPendingOrders() {
         const chatId = telegramUser ? parseInt(telegramUser.telegramId) : null;
 
         if (['complete', 'traded'].includes(orderStatus)) {
-          // Success — confirm signal
+          // Success — confirm signal, update cash and holdings immediately
           if (linkedSignal.status !== 'EXECUTED') {
             await prisma.tradeSignal.update({
               where: { id: linkedSignal.id },
               data: { status: 'EXECUTED' }
             });
+            // Sync cash and holdings so the DB reflects the fill without waiting for the next scan
+            await updateCashOnExecution(order.id).catch(e =>
+              logger.warn(`pollPendingOrders: updateCash failed for order ${order.id}: ${e.message}`)
+            );
+            await upsertHoldingOnExecution(order.id).catch(e =>
+              logger.warn(`pollPendingOrders: upsertHolding failed for order ${order.id}: ${e.message}`)
+            );
           }
 
           if (bot && chatId && telegramUser.isActive) {

@@ -250,8 +250,13 @@ async function runHourlySmartPulse() {
 
               const recalibrated = await triggerRecalibration(portfolio.id, deviationResult.reason);
               if (recalibrated) {
+                const escMd = (s) => (s || '').replace(/[_*`[]/g, '\\$&');
+                const holdingChanges = (recalibrated.holdings || [])
+                  .filter(h => h.action !== 'HOLD')
+                  .map(h => `${h.action} ${h.symbol} — ${escMd(h.notes || '')}`)
+                  .join('\n') || 'Holdings unchanged';
                 await sendTelegramMessage(chatId,
-                  `🔄 *RECALIBRATION*\n━━━━━━━━━━━━━━━━━━━\n📁 ${portfolioLabel(portfolio)}\n\nDeviation: ${deviationResult.reason}\n\nPlan updated. New target: ₹${(recalibrated.dailyTarget?.amount || 0).toFixed(0)}\n${(recalibrated.holdings || []).filter(h => h.action !== 'HOLD').map(h => `${h.action} ${h.symbol} — ${h.notes || ''}`).join('\n') || 'Holdings unchanged'}`,
+                  `🔄 *RECALIBRATION*\n━━━━━━━━━━━━━━━━━━━\n📁 ${portfolioLabel(portfolio)}\n\nDeviation: ${deviationResult.reason}\n\nPlan updated. New target: ₹${(recalibrated.dailyTarget?.amount || 0).toFixed(0)}\n${holdingChanges}`,
                   { parse_mode: 'Markdown' }
                 );
               }

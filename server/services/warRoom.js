@@ -530,8 +530,11 @@ export async function buildHourlyPulseMessage(portfolioId, deviationResult) {
   else if (pctAchieved >= 40) targetStatus = '🟡 NEEDS PUSH';
   else targetStatus = '🔴 BEHIND';
 
+  // Escape MarkdownV1 special chars in Claude-generated text to prevent Telegram parse errors
+  const escMd = (s) => (s || '').replace(/[_*`[]/g, '\\$&');
+
   const pName = `${portfolio.ownerName || portfolio.name} - ${(portfolio.broker || 'Unknown').replace(/_/g, ' ')}`;
-  const thesisLine = plan.marketThesis?.summary ? `\nThesis: ${plan.marketThesis.summary}` : '';
+  const thesisLine = plan.marketThesis?.summary ? `\nThesis: ${escMd(plan.marketThesis.summary)}` : '';
 
   const msg = `📡 ${timeLabel}
 ━━━━━━━━━━━━━━━━━━━

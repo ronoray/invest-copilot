@@ -5,6 +5,7 @@ import { getBot } from '../services/telegramBot.js';
 import { generateTradeSignals, expireOldSignals } from '../services/signalGenerator.js';
 import { isTokenValid, getAuthorizationUrl, getHoldings, getOrderStatus } from '../services/upstoxService.js';
 import { syncUpstoxFunds, syncUpstoxHoldings, getEffectiveCash, updateCashOnExecution, upsertHoldingOnExecution } from '../services/capitalGuard.js';
+import { getUpstoxLTP } from '../services/upstoxMarketData.js';
 import { buildPreMarketContext } from '../services/marketIntelligence.js';
 import { ANALYST_IDENTITY } from '../services/analystPrompts.js';
 import { buildPortfolioTrajectory } from '../services/advancedScreener.js';
@@ -1160,6 +1161,15 @@ async function notifyPendingSignals() {
       return portfolioHoldingsCache.get(portfolioId);
     }
 
+    // Batch-fetch live LTP for every symbol in pending signals — one Upstox API call
+    const pendingSymbols = [...new Set(signals.map(s => s.symbol).filter(Boolean))];
+    let ltpMap = new Map();
+    try {
+      if (pendingSymbols.length > 0) ltpMap = await getUpstoxLTP(pendingSymbols);
+    } catch (e) {
+      logger.warn(`[notifyPendingSignals] LTP batch failed: ${e.message}`);
+    }
+
     let sentCount = 0;
     let expiredCount = 0;
     for (const signal of signals) {
@@ -1174,14 +1184,33 @@ async function notifyPendingSignals() {
       const heldQty = holdingsMap.get(signal.symbol) || 0;
 
       if (signal.side === 'SELL' && heldQty <= 0) {
-        // Stock already sold — expire this signal silently
-        await prisma.tradeSignal.update({
-          where: { id: signal.id },
-          data: { status: 'EXPIRED' }
-        });
+        await prisma.tradeSignal.update({ where: { id: signal.id }, data: { status: 'EXPIRED' } });
         expiredCount++;
-        logger.info(`Signal #${signal.id} auto-expired: SELL ${signal.symbol} but no longer held (portfolio ${signal.portfolioId})`);
+        logger.info(`Signal #${signal.id} auto-expired: SELL ${signal.symbol} but no longer held`);
         continue;
+      }
+
+      // For SELL: cap quantity at what's actually held (may have changed since signal was created)
+      let effectiveQty = signal.quantity;
+      if (signal.side === 'SELL' && heldQty > 0 && heldQty < signal.quantity) {
+        effectiveQty = heldQty;
+        await prisma.tradeSignal.update({ where: { id: signal.id }, data: { quantity: heldQty } });
+        logger.info(`Signal #${signal.id} SELL qty adjusted ${signal.quantity}→${heldQty} (current holdings)`);
+      }
+
+      // Live LTP for this symbol
+      const ltp = ltpMap.get(signal.symbol)?.price || null;
+
+      // Auto-expire LIMIT BUY if price has run more than 5% above the limit price —
+      // the order will never fill today and the signal is no longer actionable.
+      if (signal.side === 'BUY' && signal.triggerType === 'LIMIT' && ltp && signal.triggerPrice) {
+        const limit = parseFloat(signal.triggerPrice);
+        if (ltp > limit * 1.05) {
+          await prisma.tradeSignal.update({ where: { id: signal.id }, data: { status: 'EXPIRED' } });
+          expiredCount++;
+          logger.info(`Signal #${signal.id} auto-expired: BUY LIMIT ₹${limit} but LTP ₹${ltp.toFixed(2)} (+${((ltp/limit-1)*100).toFixed(1)}% — won't fill today)`);
+          continue;
+        }
       }
 
       try {
@@ -1189,24 +1218,64 @@ async function notifyPendingSignals() {
         const sideEmoji = signal.side === 'BUY' ? '🟢' : '🔴';
         const confidenceBar = '█'.repeat(Math.floor(signal.confidence / 10)) + '░'.repeat(10 - Math.floor(signal.confidence / 10));
 
+        // Signal age
+        const ageMs = now - new Date(signal.createdAt).getTime();
+        const ageMin = Math.floor(ageMs / 60000);
+        const ageStr = ageMin < 60 ? `${ageMin}m ago` : `${Math.floor(ageMin / 60)}h ${ageMin % 60}m ago`;
+
+        // Trigger price display
         let priceInfo = '';
         if (signal.triggerType === 'MARKET') {
           priceInfo = 'At Market Price';
         } else if (signal.triggerType === 'LIMIT') {
           priceInfo = `Limit: ₹${signal.triggerPrice}`;
         } else if (signal.triggerType === 'ZONE') {
-          priceInfo = `Zone: ₹${signal.triggerLow} - ₹${signal.triggerHigh}`;
+          priceInfo = `Zone: ₹${signal.triggerLow}–₹${signal.triggerHigh}`;
+        }
+
+        // Live price context line — always show current LTP vs trigger
+        let ltpLine = '';
+        if (ltp) {
+          const limit = parseFloat(signal.triggerPrice || signal.triggerLow || 0);
+          if (limit > 0) {
+            const distPct = ((ltp - limit) / limit * 100);
+            const absDist = Math.abs(distPct).toFixed(1);
+            if (signal.side === 'BUY') {
+              if (distPct > 2) {
+                ltpLine = `📍 Now: ₹${ltp.toFixed(2)}  _(${absDist}% above limit — waiting for pullback)_`;
+              } else if (distPct < -2) {
+                ltpLine = `📍 Now: ₹${ltp.toFixed(2)}  _(${absDist}% below limit — price dropped, reassess)_`;
+              } else {
+                ltpLine = `📍 Now: ₹${ltp.toFixed(2)}  _(${absDist}% from limit — in zone)_`;
+              }
+            } else {
+              // SELL signal
+              if (distPct < -2) {
+                ltpLine = `📍 Now: ₹${ltp.toFixed(2)}  _(${absDist}% below target — price fell back)_`;
+              } else if (distPct > 2) {
+                ltpLine = `📍 Now: ₹${ltp.toFixed(2)}  _(${absDist}% above target — price surged higher)_`;
+              } else {
+                ltpLine = `📍 Now: ₹${ltp.toFixed(2)}  _(at target)_`;
+              }
+            }
+          } else {
+            // MARKET order — just show current price
+            ltpLine = `📍 Now: ₹${ltp.toFixed(2)}`;
+          }
         }
 
         const portfolioName = signal.portfolio.ownerName || signal.portfolio.name;
         const brokerName = (signal.portfolio.broker || 'Unknown').replace(/_/g, ' ');
         const riskProfile = signal.portfolio.riskProfile || '';
-        const repeatNote = signal.notifyCount > 0 ? `\n⏰ _Reminder #${signal.notifyCount + 1}_` : '';
+        const repeatNote = signal.notifyCount > 0
+          ? `\n⏰ _Reminder #${signal.notifyCount + 1} · Generated ${ageStr}_`
+          : `\n🕐 _Generated ${ageStr}_`;
 
         const msgText = `${sideEmoji} *${signal.side} SIGNAL*
 ━━━━━━━━━━━━━━━━━━━
 *${signal.symbol}* (${signal.exchange})
-Qty: ${signal.quantity} | ${priceInfo}
+Qty: ${effectiveQty} | ${priceInfo}
+${ltpLine}
 
 📁 *${portfolioName}* — ${brokerName}${riskProfile ? ' (' + riskProfile + ')' : ''}
 

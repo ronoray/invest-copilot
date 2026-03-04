@@ -797,43 +797,62 @@ export function initTelegramBot() {
     // /help
     botInstance.onText(/^\/help$/, async (msg) => {
       try {
-        const helpMsg = `📚 *Commands*
+        const helpMsg = `📚 *Invest Co-Pilot — Quick Guide*
 
-*Market:*
-/scan - Generic market scan
-/scan [N] - Scan tuned to portfolio #N
-/price [SYMBOL] - Get stock price
+━━━━━━━━━━━━━━━━━━━
+*🔔 SIGNALS — what the buttons mean*
 
-*Portfolio:*
-/portfolios - List all portfolios
-/portfolio [N] - View portfolio #N details
-/portfolio - View all holdings (legacy)
+When you get a signal card, you'll see 3 buttons:
 
-*AI Analysis:*
-/recommend [N] - AI stock picks for portfolio #N
-/multi [N] - Multi-asset allocation for portfolio #N
+*🚀 Execute* — Places the order on Upstox right now.
+  • LIMIT order: sits on the exchange, fills automatically when price reaches the target. Walk away — nothing else to do.
+  • MARKET order: executes immediately at current price.
 
-*Trading:*
-/upstox - Live snapshot (cash, holdings, P&L, pending orders)
-/upstox sync - Reset P&L baseline to current portfolio value
-/upstox capital N - Manually set starting capital to ₹N
-/upstox withdraw N - Record ₹N sent to bank (adjusts baseline)
-/upstox target N - Set profit-taking threshold to N%
-/auth - Login to Upstox (daily refresh)
+*⏰ Snooze 30m* — Dismiss for 30 minutes, then reminds you again. Use when you want to think about it.
 
-*Signals:*
-/signals - Re-send pending signals
-/regen - Generate fresh signals now
-/report - Full daily report: P&L, trades, next scans
+*❌ Dismiss* — Cancel this signal. No order is placed. The system moves on.
 
-*System:*
-/pause [reason] - Pause signal generation
-/resume - Resume + AI briefing of missed signals
+━━━━━━━━━━━━━━━━━━━
+*📊 WHAT SIGNALS MEAN*
 
-*Settings:*
-/settings - Alert preferences
-/mute - Disable alerts
-/unmute - Enable alerts`;
+🟢 *BUY signal* — System sees a buy opportunity.
+  LIMIT = "buy if price drops to ₹X" (safer, waits for dip)
+  MARKET = "buy right now at current price"
+
+🔴 *SELL signal* — System says take profit or cut loss.
+  LIMIT = "sell when price rises to ₹X" (locks in gains)
+  MARKET = stop-loss triggered — exit immediately
+
+*Confidence bar* ████████░░ 82% — how strongly the system believes in this trade. Below 70% = lower conviction.
+
+━━━━━━━━━━━━━━━━━━━
+*💼 KEY COMMANDS*
+
+/upstox — Your live portfolio: total value, cash, open orders, P&L
+/portfolio — All holdings with live prices and stop levels
+/portfolio 3 — Detailed view of portfolio #3
+/regen — Generate fresh signals right now
+/signals — Re-send any pending signal cards
+/report — Today's summary: trades, P&L, what's next
+
+/auth — Reconnect Upstox (needed daily, done automatically at 9:15 AM)
+/upstox sync — Reset your P&L baseline after adding funds
+/upstox target N — Set your profit goal (default: 10%)
+
+━━━━━━━━━━━━━━━━━━━
+*📡 WHEN TO EXPECT MESSAGES*
+
+• 8:30 AM — Pre-market brief (VIX, FII/DII, gold direction)
+• 9:30 AM — Morning signals (buy/sell opportunities)
+• 11:00 AM — Midday check (new setups, stop adjustments)
+• 1:00 PM — Afternoon signals
+• 2:30 PM — Pre-close signals
+• Hourly (10 AM–3 PM) — Quick pulse (portfolio P&L update)
+• Every 5 min (market hours) — Stop-loss/profit monitoring
+• 7:30 PM — Evening playbook (plan for tomorrow)
+
+━━━━━━━━━━━━━━━━━━━
+/mute · /unmute · /settings`;
 
         await botInstance.sendMessage(msg.chat.id, helpMsg, { parse_mode: 'Markdown' });
       } catch (error) {
@@ -1740,17 +1759,21 @@ Use /mute to disable all alerts`;
           out += '\n';
         }
 
-        // Open/pending orders from order book (not yet filled)
+        // Open LIMIT orders — sitting on the exchange, waiting to fill
         if (openOrders.length > 0) {
           out += `━━━━━━━━━━━━━━━━━━━\n`;
-          out += `*📋 Pending Orders (${openOrders.length}):*\n`;
+          out += `*⏳ Open Orders — waiting to fill (${openOrders.length}):*\n`;
+          out += `_These orders are live on Upstox. No action needed — they fill automatically when the price hits the target._\n`;
           for (const o of openOrders) {
             const side = (o.transaction_type || '').toUpperCase();
             const sideEmoji = side === 'BUY' ? '🟢' : '🔴';
-            const price = o.price > 0 ? `@ ₹${o.price}` : 'MKT';
+            const price = o.price > 0 ? `₹${o.price}` : 'market';
             const pending = o.pending_quantity || o.quantity || 0;
             const sym = (o.trading_symbol || o.tradingsymbol || '').replace(/-EQ$/, '');
-            out += `${sideEmoji} ${side} ${pending}x *${sym}* ${price} _(${o.order_type})_\n`;
+            const action = side === 'BUY'
+              ? `fills when ${sym} drops to ${price}`
+              : `fills when ${sym} rises to ${price}`;
+            out += `${sideEmoji} ${side} ${pending}× *${sym}* @ ${price}  _← ${action}_\n`;
           }
         }
 

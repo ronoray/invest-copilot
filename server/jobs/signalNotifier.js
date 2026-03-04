@@ -1271,16 +1271,37 @@ async function notifyPendingSignals() {
           ? `\n⏰ _Reminder #${signal.notifyCount + 1} · Generated ${ageStr}_`
           : `\n🕐 _Generated ${ageStr}_`;
 
-        const msgText = `${sideEmoji} *${signal.side} SIGNAL*
+        // Plain-English action guide — tells the user exactly what each button does.
+        // Critical for non-traders who have no idea what "PENDING" or "LIMIT" means.
+        let actionGuide = '';
+        if (signal.side === 'BUY') {
+          if (signal.triggerType === 'LIMIT') {
+            const lmtPx = parseFloat(signal.triggerPrice || 0).toFixed(2);
+            actionGuide = `\n👉 *What to do:* Tap *Execute* to place a LIMIT BUY on Upstox at ₹${lmtPx}.\n_The order sits on the exchange and fills automatically if the price drops to ₹${lmtPx}. You don't need to do anything after tapping Execute._`;
+          } else if (signal.triggerType === 'MARKET') {
+            actionGuide = `\n👉 *What to do:* Tap *Execute* to buy ${effectiveQty} shares *right now* at the current market price.\n_Use this when you want to enter immediately, not wait for a dip._`;
+          } else if (signal.triggerType === 'ZONE') {
+            actionGuide = `\n👉 *What to do:* Tap *Execute* to place a LIMIT BUY at the lower end of the zone (₹${signal.triggerLow}).\n_Fills automatically if price drops there._`;
+          }
+        } else {
+          // SELL
+          if (signal.triggerType === 'MARKET') {
+            actionGuide = `\n👉 *What to do:* Tap *Execute* to *SELL IMMEDIATELY* at market price.\n_This is an emergency exit (stop-loss). Act quickly — every second counts._`;
+          } else {
+            const lmtPx = parseFloat(signal.triggerPrice || 0).toFixed(2);
+            actionGuide = `\n👉 *What to do:* Tap *Execute* to place a LIMIT SELL at ₹${lmtPx}.\n_Fills automatically when the price reaches ₹${lmtPx}. Or tap Dismiss to keep holding._`;
+          }
+        }
+
+        const msgText = `${sideEmoji} *${signal.side}: ${signal.symbol}* (${signal.exchange})
 ━━━━━━━━━━━━━━━━━━━
-*${signal.symbol}* (${signal.exchange})
-Qty: ${effectiveQty} | ${priceInfo}
+Qty: *${effectiveQty} shares* | ${priceInfo}
 ${ltpLine}
-
+${actionGuide}
+━━━━━━━━━━━━━━━━━━━
 📁 *${portfolioName}* — ${brokerName}${riskProfile ? ' (' + riskProfile + ')' : ''}
-
 Confidence: ${confidenceBar} ${signal.confidence}%
-${signal.rationale || ''}${repeatNote}`;
+_${signal.rationale || ''}_${repeatNote}`;
 
         // Check if this portfolio's broker is Upstox AND user has valid Upstox integration
         const isUpstoxBroker = signal.portfolio?.broker === 'UPSTOX';

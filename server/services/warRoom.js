@@ -356,8 +356,7 @@ export async function checkDeviations(portfolioId) {
     deviated: reasons.length > 0,
     reason: reasons.join('; '),
     holdingDetails,
-    intradayPL,
-    priceCache
+    intradayPL
   };
 }
 

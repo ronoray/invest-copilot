@@ -5,6 +5,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import prisma from './prisma.js';
 import { getCurrentPrice, fetchMarketContext } from './marketData.js';
+import { getUpstoxLTP } from './upstoxMarketData.js';
 import { ANALYST_IDENTITY, MARKET_DATA_INSTRUCTION, ELITE_TRADER_EDGE, buildAccountabilityScorecard } from './analystPrompts.js';
 import { buildProfileBrief } from './advancedScreener.js';
 import { getEffectiveCash } from './capitalGuard.js';
@@ -257,44 +258,47 @@ export async function checkDeviations(portfolioId) {
   const planHoldings = plan.holdings || [];
   const thresholds = plan.deviationThresholds || {};
 
-  // Fetch live prices for top 8 holdings
-  const sorted = [...holdings]
-    .sort((a, b) => (b.quantity * parseFloat(b.avgPrice)) - (a.quantity * parseFloat(a.avgPrice)))
-    .slice(0, 8);
+  // Batch-fetch live LTP via Upstox (real-time, single API call, no sleep needed)
+  const symbols = holdings.map(h => h.symbol).filter(Boolean);
+  let ltpMap = new Map();
+  try {
+    if (symbols.length > 0) {
+      ltpMap = await getUpstoxLTP(symbols);
+    }
+  } catch (e) {
+    logger.warn(`[WarRoom] Upstox LTP batch failed, falling back to DB prices: ${e.message}`);
+  }
 
   let intradayPL = 0;
   const holdingDetails = [];
-  const priceCache = {};
 
-  for (const h of sorted) {
-    try {
-      const priceData = await getCurrentPrice(h.symbol, h.exchange || 'NSE');
-      if (priceData?.price) {
-        priceCache[h.symbol] = priceData.price;
-        const storedPrice = parseFloat(h.currentPrice || h.avgPrice);
-        const pl = (priceData.price - storedPrice) * h.quantity;
-        const pctMove = storedPrice > 0 ? ((priceData.price - storedPrice) / storedPrice * 100) : 0;
-        intradayPL += pl;
+  for (const h of holdings) {
+    const liveEntry = ltpMap.get(h.symbol);
+    // Primary: Upstox live LTP. Fallback: DB currentPrice. P&L baseline = avgPrice (entry cost).
+    const livePrice = liveEntry?.price || parseFloat(h.currentPrice || 0);
+    if (!livePrice) continue;
 
-        // Find this holding in war room plan
-        const planH = planHoldings.find(ph => ph.symbol === h.symbol);
+    const avgPrice = parseFloat(h.avgPrice || 0);
+    if (!avgPrice) continue;
 
-        holdingDetails.push({
-          symbol: h.symbol,
-          livePrice: priceData.price,
-          storedPrice,
-          pl,
-          pctMove,
-          stopLoss: planH?.stopLoss,
-          intradayTarget: planH?.intradayTarget,
-          addPrice: planH?.addPrice,
-          action: planH?.action
-        });
-      }
-      await new Promise(r => setTimeout(r, 12000)); // Alpha Vantage rate limit
-    } catch (e) {
-      logger.warn(`Price fetch failed for ${h.symbol} in deviation check:`, e.message);
-    }
+    const pl      = (livePrice - avgPrice) * h.quantity;
+    const pctMove = (livePrice - avgPrice) / avgPrice * 100;
+    intradayPL += pl;
+
+    const planH = planHoldings.find(ph => ph.symbol === h.symbol);
+
+    holdingDetails.push({
+      symbol: h.symbol,
+      livePrice,
+      storedPrice: avgPrice,
+      pl,
+      pctMove,
+      stopLoss: planH?.stopLoss,
+      intradayTarget: planH?.intradayTarget,
+      addPrice: planH?.addPrice,
+      action: planH?.action,
+      live: !!liveEntry   // flag: true = Upstox real-time, false = DB fallback
+    });
   }
 
   // Check deviation conditions
@@ -501,7 +505,8 @@ export async function buildHourlyPulseMessage(portfolioId, deviationResult) {
       actionCallout = '⚠️ UNDER PRESSURE';
     }
 
-    holdingLines.push(`${hd.symbol}: ₹${hd.livePrice.toFixed(0)} (${plSign}₹${hd.pl.toFixed(0)})${actionCallout ? ' ' + actionCallout : ''}`);
+    const staleMark = hd.live === false ? ' _(stale)_' : '';
+    holdingLines.push(`${hd.symbol}: ₹${hd.livePrice.toFixed(0)} (${plSign}₹${hd.pl.toFixed(0)})${staleMark}${actionCallout ? ' ' + actionCallout : ''}`);
   }
 
   // Check for pending signals

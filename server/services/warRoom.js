@@ -661,7 +661,7 @@ Respond with ONLY valid JSON (no markdown):
     const jsonStr = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
     return JSON.parse(jsonStr);
   } catch (error) {
-    logger.error(`Evening playbook generation failed for portfolio ${portfolioId}:`, error.message);
+    logger.error(`Evening playbook generation failed for portfolio ${portfolioId}: ${error?.message || String(error)}`);
     throw error;
   }
 }

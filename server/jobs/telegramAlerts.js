@@ -105,7 +105,7 @@ async function saveAnalysis(userId, category, analysis, metadata = {}) {
       }
     });
   } catch (error) {
-    logger.error(`Failed to save analysis ${category}:`, error.message);
+    logger.error(`Failed to save analysis ${category}: ${error?.message || String(error)}`);
   }
 }
 
@@ -487,25 +487,27 @@ async function runEveningPlaybook() {
               `${p.action} ${p.quantity}x ${p.symbol} @ ₹${p.price} (${p.orderType}) — ${p.rationale}`
             ).join('\n');
 
+            // Build compact section: forward-looking first, brief accountability last
+            const reviewLine = review
+              ? `_${review.accountability || ''}_${review.whatWorked ? ` ✅ ${review.whatWorked}` : ''}`
+              : '';
+
             const section = `📁 *${portfolioLabel(portfolio)}*
 
-TODAY'S GRADE: *${review.grade || '?'}*
-${review.whatWorked ? `✅ ${review.whatWorked}` : ''}
-${review.whatFailed ? `❌ ${review.whatFailed}` : ''}
-${review.accountability || ''}
+🌍 *Macro:* ${playbook.macroThesis || 'N/A'}
 
-${verdicts ? `HOLDING VERDICTS:\n${verdicts}` : ''}
+${verdicts ? `*Positions:*\n${verdicts}` : ''}
 
-${plays ? `TOMORROW'S ORDERS:\n${plays}` : ''}
+${plays ? `*Tomorrow's trades:*\n${plays}` : '*No trades queued for tomorrow*'}
 
-🌍 MACRO: ${playbook.macroThesis || 'N/A'}
-📈 WEEKLY: ${playbook.weeklyProgress || 'N/A'}`;
+📈 ${playbook.weeklyProgress || 'N/A'}
+${reviewLine ? `\n${reviewLine}` : ''}`;
 
             sections.push(section);
 
             await saveAnalysis(telegramUser.user.id, 'EVENING_PLAYBOOK', JSON.stringify(playbook), { time: 'evening', portfolioId: portfolio.id });
           } catch (playbookErr) {
-            logger.error(`Evening playbook failed for portfolio ${portfolio.id}:`, playbookErr.message);
+            logger.error(`Evening playbook failed for portfolio ${portfolio.id}: ${playbookErr?.message || String(playbookErr)}`);
             sections.push(`📁 *${portfolioLabel(portfolio)}*\n⚠️ Playbook generation failed.`);
           }
         }

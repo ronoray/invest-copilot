@@ -7,6 +7,7 @@ import { getEffectiveCash, validateSignals } from './capitalGuard.js';
 import { buildHoldingsTechnicals, getMarketRegime } from './technicalAnalysis.js';
 import { fetchPreMarketNews, fetchRecentIPOContext } from './marketNews.js';
 import { getUpstoxLTP } from './upstoxMarketData.js';
+import { scanTradingUniverse } from './opportunityScanner.js';
 import logger from './logger.js';
 
 const anthropic = new Anthropic({
@@ -119,14 +120,16 @@ export async function generateTradeSignals(portfolioId, extraContext = '') {
   // Pre-market news intelligence (VIX, FII/DII, announcements for held stocks)
   let newsContext = '';
   let ipoContext = '';
+  let opportunityScan = '';
   try {
     const holdingSymbols = (portfolio.holdings || []).map(h => h.symbol);
-    [newsContext, ipoContext] = await Promise.all([
+    [newsContext, ipoContext, opportunityScan] = await Promise.all([
       fetchPreMarketNews(holdingSymbols),
       fetchRecentIPOContext(),
+      scanTradingUniverse(),
     ]);
   } catch (e) {
-    logger.warn(`[SignalGen] News/IPO fetch failed: ${e.message}`);
+    logger.warn(`[SignalGen] News/IPO/scan fetch failed: ${e.message}`);
   }
 
   // Macro intelligence: GOLDBEES direction as fear/risk-off gauge
@@ -314,6 +317,7 @@ ${marketContext}
 ${MARKET_DATA_INSTRUCTION}
 
 ${holdingsTech ? holdingsTech + '\n' : ''}
+${opportunityScan ? opportunityScan + '\n' : ''}
 ${scorecard}
 
 ${portfolioAudit}

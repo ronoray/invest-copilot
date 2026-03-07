@@ -71,7 +71,7 @@ export async function scanTradingUniverse() {
     } catch (e) {
       logger.warn(`[OpportunityScanner] ${stock.symbol}: ${e.message}`);
     }
-    await sleep(13000); // Alpha Vantage free tier: 5 calls/min
+    // No sleep needed — Upstox candles is primary data source (no rate limit)
   }
 
   logger.info(`[OpportunityScanner] ${results.length}/${TRADING_UNIVERSE.length} symbols analyzed`);
@@ -159,6 +159,3 @@ function scoreSetup(tech) {
   return score;
 }
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}

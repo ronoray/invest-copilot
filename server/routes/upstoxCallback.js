@@ -196,10 +196,11 @@ router.post('/webhook/upstox/orders', async (req, res) => {
         }
       }
 
-      // Notify user via Telegram about order completion/rejection
+      // Notify user via Telegram + handle linked TradeSignal
       if (status === 'complete' || status === 'rejected' || status === 'cancelled') {
+        let order;
         try {
-          const order = await prisma.upstoxOrder.findFirst({
+          order = await prisma.upstoxOrder.findFirst({
             where: { orderId },
             include: {
               integration: {
@@ -209,80 +210,111 @@ router.post('/webhook/upstox/orders', async (req, res) => {
               }
             }
           });
-
-          const telegramUser = order?.integration?.user?.telegramUser;
-          if (telegramUser) {
-            const bot = getBot();
-            if (bot) {
-              const emoji = status === 'complete' ? '✅' : status === 'rejected' ? '❌' : '🚫';
-              const msg = `${emoji} *Order ${status.toUpperCase()}*\n${order.transactionType} ${order.quantity}x *${order.symbol}*${orderData.average_price ? '\nPrice: ₹' + orderData.average_price : ''}${orderData.status_message ? '\n' + orderData.status_message : ''}`;
-              await bot.sendMessage(parseInt(telegramUser.telegramId), msg, { parse_mode: 'Markdown' });
-            }
-          }
-        } catch (tgErr) {
-          logger.warn('Could not send order update notification:', tgErr.message);
+        } catch (fetchErr) {
+          logger.warn(`Could not fetch order ${orderId} for notification: ${fetchErr?.message || String(fetchErr)}`);
         }
 
-        // Fix 1: Roll back linked TradeSignal on rejection/cancellation
-        if (status === 'rejected' || status === 'cancelled') {
-          try {
-            const linkedSignal = await prisma.tradeSignal.findFirst({
-              where: { upstoxOrderId: order.id }
-            });
+        if (order) {
+          // Detect EOD expiry: Upstox cancels unfilled day-validity LIMIT orders at market close.
+          // These are NOT failures — the order simply never filled. Treat differently from
+          // genuine rejections (invalid price, insufficient funds) or manual cancels.
+          const statusMsg = (orderData.status_message || '').toLowerCase();
+          const istHour = parseInt(new Date().toLocaleString('en-IN', { hour: 'numeric', hour12: false, timeZone: 'Asia/Kolkata' }));
+          const isEodExpiry = status === 'cancelled' && (
+            statusMsg.includes('day') ||
+            statusMsg.includes('expir') ||
+            statusMsg.includes('validity') ||
+            statusMsg.includes('cancelled at') ||
+            istHour >= 15  // after 15:00 IST = almost certainly an EOD sweep
+          );
 
-            if (linkedSignal) {
-              // Reset signal to PENDING so it can be re-sent with Execute button
-              await prisma.tradeSignal.update({
-                where: { id: linkedSignal.id },
-                data: {
-                  status: 'PENDING',
-                  upstoxOrderId: null,
-                  lastNotifiedAt: null
-                }
+          // Handle linked TradeSignal first (DB work before any Telegram calls)
+          if (status === 'rejected' || status === 'cancelled') {
+            try {
+              const linkedSignal = await prisma.tradeSignal.findFirst({
+                where: { upstoxOrderId: order.id }
               });
 
-              // Record rollback
-              await prisma.signalAck.create({
-                data: {
-                  signalId: linkedSignal.id,
-                  action: 'ROLLBACK',
-                  note: `Order ${status}: ${orderData.status_message || 'No reason provided'}`
-                }
-              });
-
-              logger.info(`ROLLBACK: Signal ${linkedSignal.id} reset to PENDING after order ${status} (${orderData.status_message || ''})`);
-
-              // Re-send signal with Execute/Snooze/Dismiss buttons
-              const telegramUser = order?.integration?.user?.telegramUser;
-              if (telegramUser) {
-                const bot = getBot();
-                if (bot) {
-                  const chatId = parseInt(telegramUser.telegramId);
-                  const reason = orderData.status_message || 'Unknown reason';
-                  const sideEmoji = linkedSignal.side === 'BUY' ? '🟢' : '🔴';
-
-                  const rollbackMsg = `⚠️ *ORDER ${status.toUpperCase()} — Signal Restored*
-━━━━━━━━━━━━━━━━━━━
-${sideEmoji} *${linkedSignal.side} ${linkedSignal.quantity}x ${linkedSignal.symbol}*
-Reason: _${reason}_
-
-Signal has been restored. You can try again:`;
-
-                  await bot.sendMessage(chatId, rollbackMsg, {
-                    parse_mode: 'Markdown',
-                    reply_markup: {
-                      inline_keyboard: [[
-                        { text: '🚀 Execute', callback_data: `sig_exec_${linkedSignal.id}` },
-                        { text: '⏰ Snooze 30m', callback_data: `sig_snooze_${linkedSignal.id}` },
-                        { text: '❌ Dismiss', callback_data: `sig_dismiss_${linkedSignal.id}` }
-                      ]]
+              if (linkedSignal) {
+                if (isEodExpiry) {
+                  // EOD expiry: expire signal cleanly — tomorrow's scan will produce fresh signals
+                  await prisma.tradeSignal.update({
+                    where: { id: linkedSignal.id },
+                    data: { status: 'EXPIRED', upstoxOrderId: null }
+                  });
+                  await prisma.signalAck.create({
+                    data: {
+                      signalId: linkedSignal.id,
+                      action: 'ROLLBACK',
+                      note: 'EOD expiry: LIMIT order never filled today'
                     }
                   });
+                  logger.info(`EOD EXPIRY: Signal ${linkedSignal.id} (${linkedSignal.symbol}) expired cleanly`);
+                } else {
+                  // Genuine rejection or manual cancel — restore signal with Execute button
+                  await prisma.tradeSignal.update({
+                    where: { id: linkedSignal.id },
+                    data: { status: 'PENDING', upstoxOrderId: null, lastNotifiedAt: null }
+                  });
+                  await prisma.signalAck.create({
+                    data: {
+                      signalId: linkedSignal.id,
+                      action: 'ROLLBACK',
+                      note: `Order ${status}: ${orderData.status_message || 'No reason provided'}`
+                    }
+                  });
+                  logger.info(`ROLLBACK: Signal ${linkedSignal.id} reset to PENDING after order ${status} (${orderData.status_message || ''})`);
+
+                  // Re-send signal with buttons
+                  try {
+                    const telegramUser = order?.integration?.user?.telegramUser;
+                    if (telegramUser) {
+                      const bot = getBot();
+                      if (bot) {
+                        const chatId = parseInt(telegramUser.telegramId);
+                        const reason = orderData.status_message || 'Unknown reason';
+                        const sideEmoji = linkedSignal.side === 'BUY' ? '🟢' : '🔴';
+                        const rollbackMsg = `⚠️ *ORDER ${status.toUpperCase()} — Signal Restored*\n━━━━━━━━━━━━━━━━━━━\n${sideEmoji} *${linkedSignal.side} ${linkedSignal.quantity}x ${linkedSignal.symbol}*\nReason: ${reason}\n\nSignal has been restored. You can try again:`;
+                        await bot.sendMessage(chatId, rollbackMsg, {
+                          parse_mode: 'Markdown',
+                          reply_markup: {
+                            inline_keyboard: [[
+                              { text: '🚀 Execute', callback_data: `sig_exec_${linkedSignal.id}` },
+                              { text: '⏰ Snooze 30m', callback_data: `sig_snooze_${linkedSignal.id}` },
+                              { text: '❌ Dismiss', callback_data: `sig_dismiss_${linkedSignal.id}` }
+                            ]]
+                          }
+                        });
+                      }
+                    }
+                  } catch (tgRollbackErr) {
+                    logger.warn(`Could not send rollback notification: ${tgRollbackErr?.message || String(tgRollbackErr)}`);
+                  }
                 }
               }
+            } catch (signalErr) {
+              logger.error(`Signal rollback failed for order ${orderId}: ${signalErr?.message || String(signalErr)}`);
             }
-          } catch (rollbackErr) {
-            logger.error(`Signal rollback failed for order ${orderId}:`, rollbackErr.message);
+          }
+
+          // Send order status notification
+          try {
+            const telegramUser = order?.integration?.user?.telegramUser;
+            if (telegramUser) {
+              const bot = getBot();
+              if (bot) {
+                let msg;
+                if (isEodExpiry) {
+                  msg = `🕐 *LIMIT Order Expired* (unfilled)\n${order.transactionType} ${order.quantity}x *${order.symbol}* — price never reached today`;
+                } else {
+                  const emoji = status === 'complete' ? '✅' : status === 'rejected' ? '❌' : '🚫';
+                  msg = `${emoji} *Order ${status.toUpperCase()}*\n${order.transactionType} ${order.quantity}x *${order.symbol}*${orderData.average_price ? '\nPrice: ₹' + orderData.average_price : ''}${orderData.status_message ? '\n' + orderData.status_message : ''}`;
+                }
+                await bot.sendMessage(parseInt(telegramUser.telegramId), msg, { parse_mode: 'Markdown' });
+              }
+            }
+          } catch (tgErr) {
+            logger.warn(`Could not send order status notification: ${tgErr?.message || String(tgErr)}`);
           }
         }
       }

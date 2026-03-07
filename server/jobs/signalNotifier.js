@@ -14,6 +14,7 @@ import { isTradingDay } from '../utils/marketHolidays.js';
 import { getSystemPauseState } from '../services/pauseState.js';
 import { getAVBudget } from '../services/marketData.js';
 import { fetchPreMarketNews } from '../services/marketNews.js';
+import { scanTradingUniverse } from '../services/opportunityScanner.js';
 import { runPriceGuard } from './priceGuard.js';
 import logger from '../services/logger.js';
 
@@ -343,6 +344,15 @@ async function generatePreMarketIntelligence() {
       newsContext = await fetchPreMarketNews(allHeldSymbols);
     } catch (e) {
       logger.warn(`[Pre-Market] News fetch failed: ${e.message}`);
+    }
+
+    // 5. Trading universe scan — warm cache so 9:30 AM signal gen is a free hit
+    //    (uses Upstox candles, no rate-limit sleep needed — runs in seconds)
+    try {
+      await scanTradingUniverse();
+      logger.info('[Pre-Market] Trading universe scan warmed');
+    } catch (e) {
+      logger.warn(`[Pre-Market] Trading universe scan failed: ${e.message}`);
     }
 
     // Pull in last night's watchlist if generated today

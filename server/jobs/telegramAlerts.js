@@ -95,7 +95,7 @@ function formatINR(amount) {
 
 async function saveAnalysis(userId, category, analysis, metadata = {}) {
   try {
-    await prisma.aiAnalysis.create({
+    await prisma.aIAnalysis.create({
       data: {
         userId,
         analysisType: category,

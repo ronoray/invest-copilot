@@ -226,24 +226,37 @@ async function checkScanHealthAndRecover() {
       continue;
     }
 
-    // DB guard: verify signals really are missing before alerting.
-    // Protects against heartbeat being wiped on restart after signals were already generated.
+    // DB guard: verify the scan really is missing before alerting.
+    // Protects against heartbeat being wiped on restart after scans already ran.
     {
       const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
-      const activePortfolios = await prisma.portfolio.findMany({
-        where: { isActive: true, isPaused: false },
-        select: { id: true }
-      });
-      const signalCounts = await Promise.all(
-        activePortfolios.map(p =>
-          prisma.tradeSignal.count({ where: { portfolioId: p.id, createdAt: { gte: startOfToday } } })
-        )
-      );
-      const hasSignalsToday = signalCounts.some(c => c > 0);
-      if (hasSignalsToday) {
-        scanHeartbeat.set(scan.name, { at: new Date(), signals: 0 });
-        logger.info(`[Watchdog] ${scan.name} — signals exist in DB, heartbeat synced (post-restart)`);
-        continue;
+
+      // For evening-playbook: check AIAnalysis records (not trade signals — may be zero on cash days)
+      if (scan.name === 'evening-playbook') {
+        const playbookSaved = await prisma.aIAnalysis.count({
+          where: { analysisType: 'EVENING_PLAYBOOK', createdAt: { gte: startOfToday } }
+        });
+        if (playbookSaved > 0) {
+          scanHeartbeat.set(scan.name, { at: new Date(), signals: 0 });
+          logger.info(`[Watchdog] ${scan.name} — AIAnalysis record found, heartbeat synced`);
+          continue;
+        }
+      } else {
+        const activePortfolios = await prisma.portfolio.findMany({
+          where: { isActive: true, isPaused: false },
+          select: { id: true }
+        });
+        const signalCounts = await Promise.all(
+          activePortfolios.map(p =>
+            prisma.tradeSignal.count({ where: { portfolioId: p.id, createdAt: { gte: startOfToday } } })
+          )
+        );
+        const hasSignalsToday = signalCounts.some(c => c > 0);
+        if (hasSignalsToday) {
+          scanHeartbeat.set(scan.name, { at: new Date(), signals: 0 });
+          logger.info(`[Watchdog] ${scan.name} — signals exist in DB, heartbeat synced (post-restart)`);
+          continue;
+        }
       }
     }
 

@@ -544,7 +544,7 @@ export async function buildHourlyPulseMessage(portfolioId, deviationResult) {
 ${targetStatus}${gap > 0 ? ` — Gap: ₹${gap.toFixed(0)}` : ''}
 ⏱ ${minutesLeft > 0 ? `${Math.floor(minutesLeft / 60)}h ${minutesLeft % 60}m to close` : 'Market closed'}
 
-${holdingLines.join('\n') || 'No price data available'}${signalLine}${thesisLine}
+${holdingLines.join('\n') || '💰 No open positions — 100% cash'}${signalLine}${thesisLine}
 ━━━━━━━━━━━━━━━━━━━`;
 
   return msg;

@@ -203,7 +203,7 @@ function pollOrderViaTelegram(botInstance, chatId, userId, signalId, signal, ord
       await botInstance.sendMessage(chatId, successMsg, { parse_mode: 'Markdown' });
     },
     onFailure: async ({ status, reason }) => {
-      const failureMsg = `🔴 *ORDER FAILED — THIS IS MY FAILURE*\n\n${signal.side} ${signal.symbol} @ ${formatPrice(signal.triggerPrice || signal.triggerLow || 0)} was *${status.toUpperCase()}*\nReason: _${reason}_\n\nI recommended a price the exchange rejected. I own this mistake.\nSignal reset — choose how to proceed:`;
+      const failureMsg = `🔴 *Order ${status.toUpperCase()}*\n\n${signal.side} ${signal.symbol} @ ${formatPrice(signal.triggerPrice || signal.triggerLow || 0)}\nReason: _${reason}_\n\nSignal reset — choose how to proceed:`;
 
       try {
         await botInstance.editMessageReplyMarkup(

@@ -1512,30 +1512,58 @@ async function pollPendingOrders() {
             );
           }
         } else {
-          // Failure — roll back signal
-          await prisma.tradeSignal.update({
-            where: { id: linkedSignal.id },
-            data: { status: 'PENDING', upstoxOrderId: null, lastNotifiedAt: null }
-          });
+          // Distinguish EOD expiry (price never reached) from genuine rejection
+          const statusMsg = (status.message || '').toLowerCase();
+          const istHour = parseInt(new Date().toLocaleString('en-IN', { hour: 'numeric', hour12: false, timeZone: 'Asia/Kolkata' }));
+          const isEodExpiry = orderStatus === 'cancelled' && (
+            statusMsg.includes('day') ||
+            statusMsg.includes('expir') ||
+            statusMsg.includes('validity') ||
+            statusMsg.includes('cancelled at') ||
+            istHour >= 15
+          );
 
-          if (bot && chatId && telegramUser.isActive) {
-            const reason = status.message || 'Unknown reason';
-            await bot.sendMessage(chatId,
-              `🔴 *ORDER FAILED — THIS IS MY FAILURE*\n\n${linkedSignal.side} ${linkedSignal.symbol} was *${orderStatus.toUpperCase()}*\nReason: _${reason}_\n\nSignal has been reset. It will re-appear in your next notification cycle.`,
-              {
-                parse_mode: 'Markdown',
-                reply_markup: {
-                  inline_keyboard: [[
-                    { text: '🔄 Retry as MARKET', callback_data: `sig_mkt_${linkedSignal.id}` },
-                    { text: '⏰ Snooze 1hr', callback_data: `sig_snooze_${linkedSignal.id}` },
-                    { text: '🚫 Dismiss', callback_data: `sig_dismiss_${linkedSignal.id}` }
-                  ]]
+          if (isEodExpiry) {
+            // LIMIT order expired at market close — price was never reached, not a failure
+            await prisma.tradeSignal.update({
+              where: { id: linkedSignal.id },
+              data: { status: 'EXPIRED', upstoxOrderId: null }
+            });
+
+            if (bot && chatId && telegramUser.isActive) {
+              await bot.sendMessage(chatId,
+                `🕐 *LIMIT Order Expired* \\(unfilled\\)\n${linkedSignal.side} ${linkedSignal.quantity}x *${linkedSignal.symbol}* — target price ₹${linkedSignal.triggerPrice || linkedSignal.triggerLow || '?'} was not reached today\\. Fresh signals will come tomorrow\\.`,
+                { parse_mode: 'MarkdownV2' }
+              );
+            }
+
+            logger.info(`EOD EXPIRY (cron): Signal #${linkedSignal.id} (${linkedSignal.symbol}) expired cleanly`);
+          } else {
+            // Genuine rejection or unexpected cancellation — roll back signal
+            await prisma.tradeSignal.update({
+              where: { id: linkedSignal.id },
+              data: { status: 'PENDING', upstoxOrderId: null, lastNotifiedAt: null }
+            });
+
+            if (bot && chatId && telegramUser.isActive) {
+              const reason = status.message || 'Unknown reason';
+              await bot.sendMessage(chatId,
+                `🔴 *Order ${orderStatus.toUpperCase()}*\n\n${linkedSignal.side} ${linkedSignal.quantity}x *${linkedSignal.symbol}*\nReason: _${reason}_\n\nSignal has been reset — choose how to proceed:`,
+                {
+                  parse_mode: 'Markdown',
+                  reply_markup: {
+                    inline_keyboard: [[
+                      { text: '🔄 Retry as MARKET', callback_data: `sig_mkt_${linkedSignal.id}` },
+                      { text: '⏰ Snooze 1hr', callback_data: `sig_snooze_${linkedSignal.id}` },
+                      { text: '🚫 Dismiss', callback_data: `sig_dismiss_${linkedSignal.id}` }
+                    ]]
+                  }
                 }
-              }
-            );
-          }
+              );
+            }
 
-          logger.warn(`Signal #${linkedSignal.id} rolled back via cron: order ${order.orderId} = ${orderStatus}`);
+            logger.warn(`Signal #${linkedSignal.id} rolled back via cron: order ${order.orderId} = ${orderStatus}`);
+          }
         }
 
         // Small delay between API calls

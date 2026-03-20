@@ -1682,15 +1682,24 @@ Use /mute to disable all alerts`;
         const totalPortfolioValue = availableCash + blockedInOpenOrders + totalHoldingValue;
 
         // /upstox sync: set startingCapital = current total portfolio value (baseline reset)
+        // Only allowed to INCREASE startingCapital (adding new funds). Never decreases it —
+        // that would erase loss history and make a losing portfolio look like it broke even.
         let capitalSynced = false;
         if (isSyncCmd) {
           const syncedAmount = Math.round(totalPortfolioValue);
-          await prisma.portfolio.updateMany({
-            where: { userId, broker: 'UPSTOX', isActive: true },
-            data: { startingCapital: syncedAmount }
-          });
-          startingCapital = syncedAmount;
-          capitalSynced = true;
+          if (syncedAmount <= startingCapital && startingCapital > 0) {
+            await botInstance.sendMessage(chatId,
+              `⚠️ *Sync blocked*\n\nPortfolio value ₹${syncedAmount.toLocaleString('en-IN')} is *below* current baseline ₹${startingCapital.toLocaleString('en-IN')}.\n\nSync only resets baseline when adding new funds. Use \`/upstox capital ${syncedAmount}\` only if you intentionally want to reset the loss baseline.`,
+              { parse_mode: 'Markdown' }
+            );
+          } else {
+            await prisma.portfolio.updateMany({
+              where: { userId, broker: 'UPSTOX', isActive: true },
+              data: { startingCapital: syncedAmount }
+            });
+            startingCapital = syncedAmount;
+            capitalSynced = true;
+          }
         }
 
         const overallPnL    = startingCapital > 0 ? totalPortfolioValue - startingCapital : null;

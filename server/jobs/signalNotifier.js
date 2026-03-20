@@ -429,10 +429,19 @@ ${holdingsSummary}
 === END PORTFOLIO ===
 
 ${isStressed ? `
-STRESS MODE — DEFENSIVE MORNING BRIEF:
-For each holding above: is it at risk today? What support level matters?
-Are any safe-haven plays (GOLDBEES, defensive FMCG, PHARMA) worth adding?
-Set expectations: capital preservation today, not growth.
+STRESSED MARKET — MORNING BATTLE PLAN:
+Step 1: Classify the fall — FEAR (war/geopolitical/panic) or STRUCTURAL (earnings/credit/cycle)? State your call explicitly.
+
+If FEAR FALL:
+- For each holding: HOLD or ADD at support? Name the specific price level that triggers an add.
+- From the NSE scan: identify 2 individual stocks (NOT ETFs) at strong support that recover fastest after this type of event. Name the company, the support level, and the entry price.
+- Available cash: ₹${availCash.toLocaleString('en-IN')} — plan how to deploy it via LIMIT orders today.
+- Output: specific stocks, specific prices, specific quantities. Tomorrow's recovery starts with today's LIMIT orders.
+
+If STRUCTURAL FALL:
+- For each holding: is the fundamental thesis still intact? If not, recommend exit.
+- Capital preservation: identify defensive positions only if R:R is compelling.
+- Output: verdicts per holding, any exits, cash preservation plan.
 ` : `
 PORTFOLIO-AWARE MORNING BRIEF:
 1. Market direction: where is institutional money flowing from yesterday's sector leadership?

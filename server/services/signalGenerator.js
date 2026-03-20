@@ -223,33 +223,36 @@ Rules:
 
   // Two completely different mandates: stressed market vs normal
   const mandate = isStressed ? `
-⚠️ MARKET STRESS MODE — CAPITAL PROTECTION FIRST ⚠️
+⚠️ STRESSED MARKET — IDENTIFY THE FALL TYPE, THEN ACT ⚠️
 
-The regime data above shows this market is under meaningful stress (${marketRegime.regime}).
-This is NOT a normal trading environment. Your mandate changes completely:
+STEP 1 — CLASSIFY THE FALL (mandatory, do this first):
+FEAR FALL (geopolitical shock, war, panic, macro uncertainty): Fundamentals are UNCHANGED. Quality stocks are on sale. This is when generational entries are made. The VIX spike is the signal to buy, not to hide.
+STRUCTURAL FALL (earnings miss, credit stress, business model broken, rate cycle shift): The investment thesis has genuinely changed. Exit and preserve capital.
 
-PRIORITY 1 — REVIEW EVERY HOLDING FOR EXIT:
-- Check the technical state of each holding above. If a holding is below EMA20 with RSI < 40 and deteriorating volume, that is a broken position. Exit it.
-- "Hoping it comes back" is not a strategy. Capital preserved is capital available to deploy at the bottom.
-- Generate SELL signals for any holding that is technically broken, fundamentally thesis-changed, or positioned poorly for this environment.
+USE THE MACRO CONTEXT ABOVE (gold direction, FII/DII, VIX trend) to make this call explicitly before generating signals.
 
-PRIORITY 2 — LOOK FOR ASYMMETRIC CRASH OPPORTUNITIES:
-- Extreme fear creates extreme opportunity. If any sector or stock is DEEPLY OVERSOLD (RSI < 25) with fundamentals intact and institutional buying showing in delivery volumes, that is a potential asymmetric long.
-- These are contrarian entries, not momentum plays. They require wider stops and smaller size.
-- Only recommend if R:R is at minimum 5:1 and the fundamental thesis is UNAMBIGUOUSLY intact.
+--- IF FEAR FALL (geopolitical/war/panic) ---
+MANDATE: DEPLOY CAPITAL. LIMIT orders at support capture the recovery.
 
-PRIORITY 3 — DEFENSIVE INTELLIGENCE (EMPTY IS VALID):
-- If no exits are warranted AND no setup clears the 78 conviction threshold, return an empty signals array. Write the reason in capitalCheck: "Stress mode — no setup clears 78 conviction. Cash held. Monitoring [X] for entry at [level]." That IS professional analysis.
-- Do NOT manufacture trades to fill the array. Forced low-conviction entries in a stressed market is how portfolios blow up. The correct position is sometimes cash.
-- IF a genuinely compelling setup exists (quality stock at strong support, RSI < 35, fundamentals unambiguously intact, 5:1 R:R), generate it. The 78 floor still applies — raise your bar, not lower it.
-- If you DO identify a high-conviction defensive LIMIT order (stock at key support, only fills if further weakness), include it. A well-placed limit order that never fills costs nothing. One that fills at the bottom is the year's best trade.
+PRIORITY 1 — NO ETFs. Individual stocks only.
+- GOLDBEES, NIFTYBEES, BANKBEES, ITBEES, JUNIORBEES = index returns = inflation-adjusted flat. DO NOT recommend ETFs.
+- Find the specific COMPANY in the NSE scan that has: (a) fundamentals intact, (b) price at or near strong technical support, (c) sector that recovers first after this specific type of fear event.
+- Who recovers fastest after a war/geopolitical shock? Domestic consumption (FMCG, pharma, hospital chains). IT if USD strengthens. Energy if crude is involved. Pick the RIGHT sector for THIS fear event.
 
-CRITICAL DISTINCTION — FEAR FALL vs STRUCTURAL FALL:
-- FEAR FALL (geopolitical shock, short-term panic, macro uncertainty): Quality stocks fall with the market despite unchanged fundamentals. This is a BUYING OPPORTUNITY for names with strong earnings, domestic revenue, pricing power.
-- STRUCTURAL FALL (earnings deterioration, rate cycle turning, credit stress): The fundamental investment thesis has changed. Exit and preserve capital.
-- Reason explicitly about which type this is. Use your knowledge of current global events and the company's fundamentals to make this call.
+PRIORITY 2 — PLACE LIMIT ORDERS AT SUPPORT.
+- A LIMIT order that expires costs nothing. A LIMIT order that fills at the bottom is the year's best trade.
+- Use yesterday's S1/EMA50/52-week support from the technical scan as your entry levels.
+- R:R ≥ 2.5:1 required (lowered from 5:1 — fear falls recover faster and sharper than structural falls).
+- Minimum 2 BUY signals. A 100% cash portfolio during a panic bottom is a failure of conviction, not discipline.
 
-In a fear-driven crash, the investor who has limit orders working at support captures the recovery. The investor who sits in cash watches quality stocks bounce 15% in 5 days without them.
+PRIORITY 3 — REVIEW HOLDINGS FOR ADD vs HOLD vs EXIT.
+- For any existing holding: is the fundamental thesis intact? If yes, HOLD or ADD at support. If structurally broken, EXIT.
+
+--- IF STRUCTURAL FALL ---
+MANDATE: PROTECT CAPITAL.
+- Exit technically broken holdings (below EMA50 with deteriorating fundamentals).
+- Return empty signals if no asymmetric setup exists. Write the reason in capitalCheck.
+- Only buy if RSI < 25 + fundamentals definitively intact + R:R ≥ 4:1.
 ` : `
 FULL MARKET SCAN — GENERATE WEALTH SIGNALS NOW:
 
@@ -350,7 +353,7 @@ HARD RULES — NEVER VIOLATED:
 - BUY capital: sum of (quantity × price) for ALL BUY signals ≤ ₹${effectiveCash.toLocaleString('en-IN')}. Verify math in capitalCheck.
 - SELL signals ONLY for stocks actually held. No phantom sells.
 - Minimum confidence: 78. Hard floor, no exceptions, no regime override. A setup you're not 78% sure about is a setup you should not take.
-- ${isStressed ? 'Stress mode: BUY signals must be LIMIT orders at clear support. R:R ≥ 5:1 required.' : '2 great signals beat 5 marginal ones. Quality over quantity, always.'}
+- ${isStressed ? 'Stress mode: LIMIT orders preferred. R:R ≥ 2.5:1 for fear falls. If fear fall: minimum 2 BUY signals required. If structural fall: empty array is valid.' : '2 great signals beat 5 marginal ones. Quality over quantity, always.'}
 - An EMPTY signals array is a valid, professional output. If nothing clears 78, return: {"signals": [], "capitalCheck": "No qualifying setups today — conviction floor not met. Reason: [your analysis]. Cash held."}
 - Do NOT manufacture signals to avoid an empty array. That is activity bias. The market does not always offer edge. Recognising when to sit on cash IS alpha.
 

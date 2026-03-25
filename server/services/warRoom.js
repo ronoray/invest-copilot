@@ -9,7 +9,7 @@ import { getUpstoxLTP } from './upstoxMarketData.js';
 import { ANALYST_IDENTITY, MARKET_DATA_INSTRUCTION, ELITE_TRADER_EDGE, buildAccountabilityScorecard } from './analystPrompts.js';
 import { buildProfileBrief } from './advancedScreener.js';
 import { getEffectiveCash } from './capitalGuard.js';
-import { getISTMidnight } from '../utils/marketHolidays.js';
+import { getISTMidnight, isMarketHoliday, isTradingDay } from '../utils/marketHolidays.js';
 import logger from './logger.js';
 
 const anthropic = new Anthropic({
@@ -653,6 +653,23 @@ ${portfolio.broker === 'UPSTOX' && portfolio.apiEnabled ? `- Tomorrow's plays be
 - ORDER TYPE: confidence ≥ 85 → MARKET (fills immediately). confidence < 85 → LIMIT within 0.5% of current price.
 - CNC delivery equity only — no intraday, no F&O.
 ` : ''}
+NEXT TRADING DAY CONTEXT:
+${(() => {
+  const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowHoliday = isMarketHoliday(tomorrow);
+  if (tomorrowHoliday.isHoliday) {
+    // Find the next actual trading day
+    const nextTrade = new Date(tomorrow);
+    for (let i = 1; i <= 7; i++) {
+      nextTrade.setDate(nextTrade.getDate() + 1);
+      if (isTradingDay(nextTrade)) break;
+    }
+    const nextTradeStr = nextTrade.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Asia/Kolkata' });
+    return `IMPORTANT: Tomorrow (${tomorrow.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })}) is a market holiday — ${tomorrowHoliday.name}. Markets reopen on ${nextTradeStr}. Generate tomorrowPlays for that next trading session, not tomorrow. Price levels and stop-losses should account for the extra gap day.`;
+  }
+  return 'Next trading day is tomorrow as normal.';
+})()}
+
 TASK: Generate the EVENING PLAYBOOK. This replaces both the evening review AND tomorrow's game plan.
 
 Respond with ONLY valid JSON (no markdown):

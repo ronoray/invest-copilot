@@ -71,4 +71,34 @@ function formatDateKey(date) {
   return `${y}-${m}-${d}`;
 }
 
-export default { isMarketHoliday, isTradingDay };
+/**
+ * Returns the UTC timestamp corresponding to IST midnight (00:00:00 IST) for the
+ * current IST calendar day.
+ *
+ * Why this matters: `new Date().setHours(0,0,0,0)` gives UTC midnight = 05:30 AM IST.
+ * Evening playbook signals are created at ~7:30 PM IST (= ~14:00 UTC on day D).
+ * If next-morning dedup uses UTC midnight of day D+1 as the boundary, those signals
+ * fall outside the window and the system treats the morning as signal-free — generating
+ * duplicates.
+ *
+ * IST is UTC+5:30. IST midnight = UTC 18:30 of the previous calendar day.
+ *
+ * @returns {Date} UTC Date representing IST 00:00:00 today
+ */
+export function getISTMidnight() {
+  const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000; // UTC+5:30
+  const nowUtc = Date.now();
+  // Shift current time into IST "virtual UTC"
+  const istNow = new Date(nowUtc + IST_OFFSET_MS);
+  // Midnight in IST virtual-UTC
+  const istMidnightVirtual = new Date(Date.UTC(
+    istNow.getUTCFullYear(),
+    istNow.getUTCMonth(),
+    istNow.getUTCDate(),
+    0, 0, 0, 0
+  ));
+  // Shift back to real UTC
+  return new Date(istMidnightVirtual.getTime() - IST_OFFSET_MS);
+}
+
+export default { isMarketHoliday, isTradingDay, getISTMidnight };

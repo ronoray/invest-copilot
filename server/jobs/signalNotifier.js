@@ -10,7 +10,7 @@ import { buildPreMarketContext } from '../services/marketIntelligence.js';
 import { ANALYST_IDENTITY } from '../services/analystPrompts.js';
 import { buildPortfolioTrajectory } from '../services/advancedScreener.js';
 import { getMarketRegime, buildHoldingsTechnicals } from '../services/technicalAnalysis.js';
-import { isTradingDay } from '../utils/marketHolidays.js';
+import { isTradingDay, getISTMidnight } from '../utils/marketHolidays.js';
 import { getSystemPauseState } from '../services/pauseState.js';
 import { getAVBudget } from '../services/marketData.js';
 import { fetchPreMarketNews } from '../services/marketNews.js';
@@ -998,13 +998,12 @@ async function syncAllUpstoxHoldingsAndExpireStaleSignals() {
  * call so Claude doesn't duplicate buys for stocks already ordered.
  */
 async function buildOpenOrdersContext(portfolioId) {
-  const today = new Date(); today.setHours(0, 0, 0, 0);
   const inFlight = await prisma.tradeSignal.findMany({
     where: {
       portfolioId,
       side: 'BUY',
       status: { in: ['PLACING', 'PENDING', 'ACKED', 'SNOOZED'] },
-      createdAt: { gte: today }
+      createdAt: { gte: getISTMidnight() }
     },
     select: { symbol: true, quantity: true, triggerPrice: true, triggerLow: true, status: true }
   });
@@ -1030,6 +1029,49 @@ async function buildOpenOrdersContext(portfolioId) {
   }
   lines.push('For any symbol above: skip unless market has moved significantly away from the entry level.');
   return lines.join('\n');
+}
+
+/**
+ * Build context string from today's War Room plan — specifically the openingPlays.
+ * Injected into 9:30 AM signal generation so Claude's signals align with the morning plan.
+ * Without this, the 9 AM war room plan and 9:30 AM signals are independent and may contradict.
+ */
+async function buildWarRoomContext(portfolioId) {
+  try {
+    const { getTodayWarRoomPlan } = await import('../services/warRoom.js');
+    const plan = await getTodayWarRoomPlan(portfolioId);
+    if (!plan) return '';
+
+    const plays = plan.openingPlays || [];
+    const holdingsActions = plan.holdingsActions || [];
+    const dailyTarget = plan.dailyTarget || '';
+
+    const lines = ['=== TODAY\'S WAR ROOM PLAN (generated at 9:00 AM) ==='];
+
+    if (dailyTarget) {
+      lines.push(`Daily Target: ${dailyTarget}`);
+    }
+
+    if (plays.length > 0) {
+      lines.push('Opening Plays (from morning war room):');
+      for (const p of plays) {
+        lines.push(`  ${p.action || 'BUY'} ${p.symbol}: ${p.rationale || ''} | Entry: ${p.entryRange || 'market'} | Target: ${p.target || '?'} | SL: ${p.stopLoss || '?'}`);
+      }
+    }
+
+    if (holdingsActions.length > 0) {
+      lines.push('Holdings Actions (from morning war room):');
+      for (const h of holdingsActions) {
+        lines.push(`  ${h.action} ${h.symbol}: ${h.rationale || ''}`);
+      }
+    }
+
+    lines.push('ALIGNMENT RULE: Your signals MUST align with this war room plan. If you generate a BUY for a symbol in openingPlays, use the same entry range and rationale. Do not generate signals that contradict today\'s plan unless you have new market data that invalidates it.');
+    return lines.join('\n');
+  } catch (e) {
+    logger.warn(`[buildWarRoomContext] Could not fetch war room plan for portfolio ${portfolioId}:`, e.message);
+    return '';
+  }
 }
 
 /**
@@ -1138,18 +1180,17 @@ async function generateSignalsForAllPortfolios() {
           }
         }
 
-        // Check if we already generated signals for this portfolio today
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
+        // Check if we already generated signals for this portfolio today (IST midnight boundary)
+        const istMidnight = getISTMidnight();
         const existingToday = await prisma.tradeSignal.count({
           where: {
             portfolioId: portfolio.id,
-            createdAt: { gte: today },
+            createdAt: { gte: istMidnight },
             status: { notIn: ['EXPIRED'] }
           }
         });
 
-        // Skip if already have 3+ active signals today for this portfolio
+        // Skip if already have 6+ active signals since IST midnight for this portfolio
         if (existingToday >= 6) {
           logger.info(`Portfolio ${portfolio.id} already has ${existingToday} signals today, skipping`);
           continue;
@@ -1218,9 +1259,10 @@ async function generateSignalsForAllPortfolios() {
         }
 
         // Include pre-market thesis and open orders context so Claude never duplicates
+        const warRoomCtx = await buildWarRoomContext(portfolio.id);
         const preMarketCtx = getTodayPreMarketThesis();
         const openOrdersCtx = await buildOpenOrdersContext(portfolio.id);
-        const fullContext = [extraContext, preMarketCtx, openOrdersCtx].filter(Boolean).join('\n\n');
+        const fullContext = [extraContext, warRoomCtx, preMarketCtx, openOrdersCtx].filter(Boolean).join('\n\n');
         const signals = await generateTradeSignals(portfolio.id, fullContext);
         totalSignals += signals.length;
         portfoliosScanned++;
@@ -1673,6 +1715,73 @@ async function pollPendingOrders() {
 }
 
 /**
+ * Detect signals stuck in PLACING status for >30 minutes.
+ * This means the Upstox order was submitted but polling timed out before confirmation.
+ * Action: reset to PENDING so the user can retry, and alert via Telegram.
+ *
+ * Why this happens: `pollOrderUntilSettled` polls 15×3s = 45s. If the exchange
+ * takes >45s (circuit breaker volatility, slow NSE response), the signal stays
+ * in PLACING forever — invisible and un-executable, silently blocking capital.
+ */
+async function resetStalePlacingSignals() {
+  if (!isTradingDay(new Date())) return;
+
+  try {
+    const thirtyMinsAgo = new Date(Date.now() - 30 * 60 * 1000);
+    const stale = await prisma.tradeSignal.findMany({
+      where: {
+        status: 'PLACING',
+        updatedAt: { lte: thirtyMinsAgo }
+      },
+      include: {
+        portfolio: {
+          include: { user: { include: { telegramUser: true } } }
+        }
+      }
+    });
+
+    if (stale.length === 0) return;
+
+    logger.warn(`[Stale PLACING] Found ${stale.length} signal(s) stuck in PLACING for >30 min — resetting to PENDING`);
+
+    const bot = getBot();
+    for (const sig of stale) {
+      await prisma.tradeSignal.update({
+        where: { id: sig.id },
+        data: { status: 'PENDING' }
+      });
+
+      logger.warn(`[Stale PLACING] Reset signal #${sig.id} (${sig.symbol} ${sig.side}) to PENDING — was stuck since ${sig.updatedAt.toISOString()}`);
+
+      const telegramUser = sig.portfolio?.user?.telegramUser;
+      if (bot && telegramUser) {
+        const chatId = parseInt(telegramUser.telegramId);
+        const price = sig.triggerPrice ? `₹${parseFloat(sig.triggerPrice).toFixed(2)}` : 'market';
+        await bot.sendMessage(chatId,
+          `⚠️ *Order Confirmation Timeout*\n\n` +
+          `Signal #${sig.id}: *${sig.symbol}* ${sig.side} ${sig.quantity}qty @ ${price}\n\n` +
+          `This order was submitted to Upstox but confirmation never arrived (>30 min). ` +
+          `It has been reset to *PENDING* so you can retry.\n\n` +
+          `📋 Please check your Upstox order book — the order may have filled, partially filled, or was rejected. ` +
+          `If it filled, tap Execute again to confirm. If not, you can re-execute or dismiss.`,
+          {
+            parse_mode: 'Markdown',
+            reply_markup: {
+              inline_keyboard: [[
+                { text: '⚡ Execute Again', callback_data: `sig_execute_${sig.id}` },
+                { text: '🚫 Dismiss', callback_data: `sig_dismiss_${sig.id}` }
+              ]]
+            }
+          }
+        ).catch(e => logger.error(`[Stale PLACING] Telegram alert failed for signal #${sig.id}:`, e.message));
+      }
+    }
+  } catch (error) {
+    logger.error('[Stale PLACING] Monitor error:', error.message);
+  }
+}
+
+/**
  * Conditional midday signal generation.
  * Only fires if: no active pending/snoozed signals today OR target >30% behind.
  * Saves 1 Claude call on good days.
@@ -1759,18 +1868,17 @@ async function generateSignalsForAllPortfoliosForOne(portfolio) {
     }
   }
 
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  const istMidnight = getISTMidnight();
   const existingToday = await prisma.tradeSignal.count({
     where: {
       portfolioId: portfolio.id,
-      createdAt: { gte: today },
+      createdAt: { gte: istMidnight },
       status: { notIn: ['EXPIRED'] }
     }
   });
 
   if (existingToday >= 3) {
-    logger.info(`Portfolio ${portfolio.id} already has ${existingToday} signals today, skipping`);
+    logger.info(`Portfolio ${portfolio.id} already has ${existingToday} signals today (IST), skipping`);
     return;
   }
 
@@ -1836,7 +1944,7 @@ async function generateSignalsAtPivot(timeLabel) {
   await syncAllUpstoxFunds();
   await syncAllUpstoxHoldingsAndExpireStaleSignals();
 
-  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const istMidnight = getISTMidnight();
   const nowMs = Date.now();
   const timeContext   = PIVOT_TIME_CONTEXTS[timeLabel] || '';
   const preMarketCtx  = getTodayPreMarketThesis();
@@ -1865,11 +1973,11 @@ async function generateSignalsAtPivot(timeLabel) {
         ? (nowMs - new Date(lastSignal.createdAt).getTime()) / 60000
         : 9999;
 
-      // Hard daily cap: if total non-expired signals ≥ 6, don't generate more (same as full scan)
+      // Hard daily cap: if total non-expired signals ≥ 6 since IST midnight, don't generate more
       const totalToday = await prisma.tradeSignal.count({
         where: {
           portfolioId: portfolio.id,
-          createdAt: { gte: today },
+          createdAt: { gte: istMidnight },
           status: { notIn: ['EXPIRED'] }
         }
       });
@@ -1882,7 +1990,7 @@ async function generateSignalsAtPivot(timeLabel) {
         where: {
           portfolioId: portfolio.id,
           status: { in: ['PENDING', 'SNOOZED', 'ACKED'] },
-          createdAt: { gte: today }
+          createdAt: { gte: istMidnight }
         }
       });
 
@@ -1988,9 +2096,10 @@ export function initSignalNotifier() {
     timezone: 'Asia/Kolkata'
   });
 
-  // Poll pending Upstox orders every 5 min during market hours
+  // Poll pending Upstox orders + reset stale PLACING signals every 5 min during market hours
   cron.schedule('*/5 9-16 * * 1-5', async () => {
     await pollPendingOrders();
+    await resetStalePlacingSignals().catch(e => logger.error('[StalePlacing cron] error:', e.message));
   }, {
     timezone: 'Asia/Kolkata'
   });
@@ -2041,7 +2150,7 @@ export function initSignalNotifier() {
   logger.info('  Upstox fund sync: 9:17 AM IST');
   logger.info('  Signal generation: 9:30 AM (full) | 11:00 AM (pivot) | 1:00 PM (full) | 2:30 PM (pivot) IST');
   logger.info('  Signal notifications: every 5 min, 9-3:30 PM IST');
-  logger.info('  Order status polling: every 5 min, 9 AM-4 PM IST');
+  logger.info('  Order status polling + stale PLACING reset: every 5 min, 9 AM-4 PM IST');
   logger.info('  Mid-day holdings sync (DDPI): every 30 min, 9-3:30 PM IST');
   logger.info('  EOD review: 3:45 PM IST');
   logger.info('  Watchdog (missed scan recovery): every 15 min, 8 AM–8:30 PM IST');

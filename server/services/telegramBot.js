@@ -236,6 +236,15 @@ function pollOrderViaTelegram(botInstance, chatId, userId, signalId, signal, ord
 // EXECUTE SIGNAL VIA UPSTOX
 // ============================================
 
+// Release atomic lock — reset PLACING → PENDING. Called before any early return inside
+// handleExecuteSignal / handleExecuteMarketFallback after the lock was taken.
+async function releaseLock(signalId) {
+  await prisma.tradeSignal.updateMany({
+    where: { id: signalId, status: 'PLACING' },
+    data: { status: 'PENDING', upstoxOrderId: null }
+  }).catch(e => logger.error(`releaseLock failed for signal #${signalId}:`, e.message));
+}
+
 async function handleExecuteSignal(botInstance, query, signalId) {
   const chatId = query.message.chat.id;
   const messageId = query.message.message_id;
@@ -361,6 +370,8 @@ async function handleExecuteSignal(botInstance, query, signalId) {
               `⚠️ *Stale Signal Price Corrected*\n\nAI signal price: ₹${price.toFixed(2)}\nLive price (Upstox): ₹${currentPrice.toFixed(2)}\nDeviation: ${(deviation * 100).toFixed(1)}%\n\n_The AI used outdated training data for this price. Tap above to execute a LIMIT order at the current live price (₹${liveLimit.toFixed(2)}). It will fill immediately at market or better._`,
               { parse_mode: 'Markdown' }
             );
+            // Release lock so sig_mkt_ can re-acquire it
+            await releaseLock(signalId);
             return;
           }
         }
@@ -593,6 +604,7 @@ async function handleExecuteMarketFallback(botInstance, query, signalId) {
       } catch (_) {}
     }
     if (!execPrice || execPrice <= 0) {
+      await releaseLock(signalId);
       await botInstance.sendMessage(chatId, `❌ Cannot determine live price for ${signal.symbol}. Please dismiss and re-generate signals.`, { parse_mode: 'Markdown' });
       return;
     }

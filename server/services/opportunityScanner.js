@@ -10,8 +10,8 @@
  * This module provides that real data so every recommendation is technically
  * grounded, not a training-data guess.
  *
- * API budget: 1 TIME_SERIES_DAILY call per symbol per day.
- * 12 symbols × 13s sleep = ~2.6 minutes at 8:30 AM. All cached for the day.
+ * API budget: 1 TIME_SERIES_DAILY call per symbol per day (AV fallback only).
+ * 50 symbols — Upstox candles is primary data source (no rate limit) — ~3 min at 8:30 AM.
  * 9:30 AM signal generation uses these cache hits — zero extra API calls.
  */
 
@@ -21,23 +21,76 @@ import logger from './logger.js';
 // ── Trading universe ──────────────────────────────────────────────────────────
 
 /**
- * 12 liquid NSE large-caps covering all major sectors.
- * These are the stocks Claude is most likely to recommend for CNC delivery.
+ * Full Nifty 50 universe — all 50 index constituents.
  * Selection criteria: Nifty 50 inclusion, high liquidity, CNC-tradeable, sector diversity.
+ * 50 symbols — Upstox candles has no per-symbol rate limit, so full scan runs in ~3 min.
  */
 export const TRADING_UNIVERSE = [
-  { symbol: 'HDFCBANK',   sector: 'Banking'  },
-  { symbol: 'ICICIBANK',  sector: 'Banking'  },
-  { symbol: 'SBIN',       sector: 'PSU Bank' },
-  { symbol: 'TCS',        sector: 'IT'       },
-  { symbol: 'INFY',       sector: 'IT'       },
-  { symbol: 'RELIANCE',   sector: 'Energy'   },
-  { symbol: 'NTPC',       sector: 'Power'    },
-  { symbol: 'TATAMOTORS', sector: 'Auto'     },
-  { symbol: 'TATASTEEL',  sector: 'Metals'   },
-  { symbol: 'ITC',        sector: 'FMCG'     },
-  { symbol: 'BAJFINANCE', sector: 'NBFC'     },
-  { symbol: 'SUNPHARMA',  sector: 'Pharma'   },
+  // Banking
+  { symbol: 'HDFCBANK',    sector: 'Banking'     },
+  { symbol: 'ICICIBANK',   sector: 'Banking'     },
+  { symbol: 'SBIN',        sector: 'PSU Bank'    },
+  { symbol: 'AXISBANK',    sector: 'Banking'     },
+  { symbol: 'KOTAKBANK',   sector: 'Banking'     },
+  { symbol: 'INDUSINDBK',  sector: 'Banking'     },
+  // Financial Services
+  { symbol: 'BAJFINANCE',  sector: 'NBFC'        },
+  { symbol: 'BAJAJFINSV',  sector: 'Fin Services'},
+  { symbol: 'SHRIRAMFIN',  sector: 'NBFC'        },
+  // Insurance
+  { symbol: 'HDFCLIFE',    sector: 'Insurance'   },
+  { symbol: 'SBILIFE',     sector: 'Insurance'   },
+  // IT
+  { symbol: 'TCS',         sector: 'IT'          },
+  { symbol: 'INFY',        sector: 'IT'          },
+  { symbol: 'HCLTECH',     sector: 'IT'          },
+  { symbol: 'WIPRO',       sector: 'IT'          },
+  { symbol: 'TECHM',       sector: 'IT'          },
+  // Energy & Oil
+  { symbol: 'RELIANCE',    sector: 'Energy'      },
+  { symbol: 'ONGC',        sector: 'Oil & Gas'   },
+  { symbol: 'BPCL',        sector: 'Oil & Gas'   },
+  // Power
+  { symbol: 'NTPC',        sector: 'Power'       },
+  { symbol: 'POWERGRID',   sector: 'Power'       },
+  // Auto
+  { symbol: 'TATAMOTORS',  sector: 'Auto'        },
+  { symbol: 'MARUTI',      sector: 'Auto'        },
+  { symbol: 'M&M',         sector: 'Auto'        },
+  { symbol: 'BAJAJ-AUTO',  sector: 'Auto'        },
+  { symbol: 'HEROMOTOCO',  sector: 'Auto'        },
+  { symbol: 'EICHERMOT',   sector: 'Auto'        },
+  // Metals
+  { symbol: 'TATASTEEL',   sector: 'Metals'      },
+  { symbol: 'JSWSTEEL',    sector: 'Metals'      },
+  { symbol: 'HINDALCO',    sector: 'Metals'      },
+  { symbol: 'COALINDIA',   sector: 'Mining'      },
+  // FMCG
+  { symbol: 'ITC',         sector: 'FMCG'        },
+  { symbol: 'HINDUNILVR',  sector: 'FMCG'        },
+  { symbol: 'BRITANNIA',   sector: 'FMCG'        },
+  { symbol: 'NESTLEIND',   sector: 'FMCG'        },
+  // Pharma & Healthcare
+  { symbol: 'SUNPHARMA',   sector: 'Pharma'      },
+  { symbol: 'CIPLA',       sector: 'Pharma'      },
+  { symbol: 'DRREDDY',     sector: 'Pharma'      },
+  { symbol: 'DIVISLAB',    sector: 'Pharma'      },
+  { symbol: 'APOLLOHOSP',  sector: 'Healthcare'  },
+  // Infrastructure & Cement
+  { symbol: 'LT',          sector: 'Infra'       },
+  { symbol: 'ULTRACEMCO',  sector: 'Cement'      },
+  { symbol: 'GRASIM',      sector: 'Diversified' },
+  // Telecom
+  { symbol: 'BHARTIARTL',  sector: 'Telecom'     },
+  // Consumer & Retail
+  { symbol: 'TITAN',       sector: 'Consumer'    },
+  { symbol: 'TRENT',       sector: 'Retail'      },
+  { symbol: 'ASIANPAINT',  sector: 'Paints'      },
+  // Conglomerate
+  { symbol: 'ADANIENT',    sector: 'Diversified' },
+  { symbol: 'ADANIPORTS',  sector: 'Ports'       },
+  // New-age
+  { symbol: 'ZOMATO',      sector: 'Food Tech'   },
 ];
 
 // ── Per-day cache ─────────────────────────────────────────────────────────────

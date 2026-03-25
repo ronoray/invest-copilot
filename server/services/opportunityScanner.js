@@ -21,11 +21,13 @@ import logger from './logger.js';
 // ── Trading universe ──────────────────────────────────────────────────────────
 
 /**
- * Full Nifty 50 universe — all 50 index constituents.
- * Selection criteria: Nifty 50 inclusion, high liquidity, CNC-tradeable, sector diversity.
- * 50 symbols — Upstox candles has no per-symbol rate limit, so full scan runs in ~3 min.
+ * Expanded universe — Nifty 50 + Nifty Next 50 + key Nifty Midcap 100 picks.
+ * ~120 liquid NSE stocks covering all sectors and market-cap bands.
+ * Concurrent scan (batches of 10) completes in ~2 min at 8:30 AM.
+ * Only the top-ranked setups are injected into Claude's context — full breadth, focused output.
  */
 export const TRADING_UNIVERSE = [
+  // ── NIFTY 50 ───────────────────────────────────────────────────────────────
   // Banking
   { symbol: 'HDFCBANK',    sector: 'Banking'     },
   { symbol: 'ICICIBANK',   sector: 'Banking'     },
@@ -40,7 +42,7 @@ export const TRADING_UNIVERSE = [
   // Insurance
   { symbol: 'HDFCLIFE',    sector: 'Insurance'   },
   { symbol: 'SBILIFE',     sector: 'Insurance'   },
-  // IT
+  // IT — Nifty 50
   { symbol: 'TCS',         sector: 'IT'          },
   { symbol: 'INFY',        sector: 'IT'          },
   { symbol: 'HCLTECH',     sector: 'IT'          },
@@ -53,36 +55,36 @@ export const TRADING_UNIVERSE = [
   // Power
   { symbol: 'NTPC',        sector: 'Power'       },
   { symbol: 'POWERGRID',   sector: 'Power'       },
-  // Auto
+  // Auto — Nifty 50
   { symbol: 'TATAMOTORS',  sector: 'Auto'        },
   { symbol: 'MARUTI',      sector: 'Auto'        },
   { symbol: 'M&M',         sector: 'Auto'        },
   { symbol: 'BAJAJ-AUTO',  sector: 'Auto'        },
   { symbol: 'HEROMOTOCO',  sector: 'Auto'        },
   { symbol: 'EICHERMOT',   sector: 'Auto'        },
-  // Metals
+  // Metals — Nifty 50
   { symbol: 'TATASTEEL',   sector: 'Metals'      },
   { symbol: 'JSWSTEEL',    sector: 'Metals'      },
   { symbol: 'HINDALCO',    sector: 'Metals'      },
   { symbol: 'COALINDIA',   sector: 'Mining'      },
-  // FMCG
+  // FMCG — Nifty 50
   { symbol: 'ITC',         sector: 'FMCG'        },
   { symbol: 'HINDUNILVR',  sector: 'FMCG'        },
   { symbol: 'BRITANNIA',   sector: 'FMCG'        },
   { symbol: 'NESTLEIND',   sector: 'FMCG'        },
-  // Pharma & Healthcare
+  // Pharma & Healthcare — Nifty 50
   { symbol: 'SUNPHARMA',   sector: 'Pharma'      },
   { symbol: 'CIPLA',       sector: 'Pharma'      },
   { symbol: 'DRREDDY',     sector: 'Pharma'      },
   { symbol: 'DIVISLAB',    sector: 'Pharma'      },
   { symbol: 'APOLLOHOSP',  sector: 'Healthcare'  },
-  // Infrastructure & Cement
+  // Infrastructure & Cement — Nifty 50
   { symbol: 'LT',          sector: 'Infra'       },
   { symbol: 'ULTRACEMCO',  sector: 'Cement'      },
   { symbol: 'GRASIM',      sector: 'Diversified' },
   // Telecom
   { symbol: 'BHARTIARTL',  sector: 'Telecom'     },
-  // Consumer & Retail
+  // Consumer & Retail — Nifty 50
   { symbol: 'TITAN',       sector: 'Consumer'    },
   { symbol: 'TRENT',       sector: 'Retail'      },
   { symbol: 'ASIANPAINT',  sector: 'Paints'      },
@@ -91,6 +93,81 @@ export const TRADING_UNIVERSE = [
   { symbol: 'ADANIPORTS',  sector: 'Ports'       },
   // New-age
   { symbol: 'ZOMATO',      sector: 'Food Tech'   },
+
+  // ── NIFTY NEXT 50 ──────────────────────────────────────────────────────────
+  // Banking / Finance
+  { symbol: 'BANKBARODA',  sector: 'PSU Bank'    },
+  { symbol: 'CANBK',       sector: 'PSU Bank'    },
+  { symbol: 'FEDERALBNK',  sector: 'Banking'     },
+  { symbol: 'SBICARD',     sector: 'Fin Services'},
+  { symbol: 'CHOLAFIN',    sector: 'NBFC'        },
+  { symbol: 'MUTHOOTFIN',  sector: 'NBFC'        },
+  { symbol: 'LICHSGFIN',   sector: 'Housing Fin' },
+  { symbol: 'PFC',         sector: 'Fin Services'},
+  { symbol: 'RECLTD',      sector: 'Fin Services'},
+  { symbol: 'ICICIPRULI',  sector: 'Insurance'   },
+  // IT — Next 50
+  { symbol: 'OFSS',        sector: 'IT'          },
+  { symbol: 'MPHASIS',     sector: 'IT'          },
+  { symbol: 'LTTS',        sector: 'IT'          },
+  { symbol: 'COFORGE',     sector: 'IT'          },
+  { symbol: 'PERSISTENT',  sector: 'IT'          },
+  // Energy / Power — Next 50
+  { symbol: 'GAIL',        sector: 'Gas'         },
+  { symbol: 'PETRONET',    sector: 'Gas'         },
+  { symbol: 'TATAPOWER',   sector: 'Power'       },
+  { symbol: 'TORNTPOWER',  sector: 'Power'       },
+  { symbol: 'ADANIGREEN',  sector: 'Renewables'  },
+  // Auto & Ancillary — Next 50
+  { symbol: 'TVSMOTOR',    sector: 'Auto'        },
+  { symbol: 'BOSCHLTD',    sector: 'Auto Anc'   },
+  // Metals & Chemicals — Next 50
+  { symbol: 'VEDL',        sector: 'Metals'      },
+  { symbol: 'SAIL',        sector: 'Steel'       },
+  { symbol: 'PIDILITIND',  sector: 'Chemicals'   },
+  { symbol: 'SRF',         sector: 'Chemicals'   },
+  { symbol: 'UPL',         sector: 'Agrochem'    },
+  // FMCG — Next 50
+  { symbol: 'GODREJCP',    sector: 'FMCG'        },
+  { symbol: 'DABUR',       sector: 'FMCG'        },
+  { symbol: 'MARICO',      sector: 'FMCG'        },
+  { symbol: 'COLPAL',      sector: 'FMCG'        },
+  // Pharma — Next 50
+  { symbol: 'TORNTPHARM',  sector: 'Pharma'      },
+  { symbol: 'LUPIN',       sector: 'Pharma'      },
+  { symbol: 'AUROPHARMA',  sector: 'Pharma'      },
+  { symbol: 'ZYDUSLIFE',   sector: 'Pharma'      },
+  // Infra & Cement — Next 50
+  { symbol: 'HAVELLS',     sector: 'Electricals' },
+  { symbol: 'SIEMENS',     sector: 'Capital Gds' },
+  { symbol: 'AMBUJACEM',   sector: 'Cement'      },
+  { symbol: 'ACC',         sector: 'Cement'      },
+  // Real Estate
+  { symbol: 'DLF',         sector: 'Real Estate' },
+  { symbol: 'GODREJPROP',  sector: 'Real Estate' },
+  // Consumer
+  { symbol: 'BERGERPAINT', sector: 'Paints'      },
+  { symbol: 'VOLTAS',      sector: 'Engineering' },
+  { symbol: 'NAUKRI',      sector: 'Internet'    },
+  { symbol: 'INDIGO',      sector: 'Aviation'    },
+  { symbol: 'IRCTC',       sector: 'Travel'      },
+
+  // ── KEY NIFTY MIDCAP ───────────────────────────────────────────────────────
+  { symbol: 'DIXON',       sector: 'Electronics' },
+  { symbol: 'POLYCAB',     sector: 'Electricals' },
+  { symbol: 'JUBLFOOD',    sector: 'QSR'         },
+  { symbol: 'PAGEIND',     sector: 'Consumer'    },
+  { symbol: 'ASTRAL',      sector: 'Pipes'       },
+  { symbol: 'TATACOMM',    sector: 'Telecom'     },
+  { symbol: 'LALPATHLAB',  sector: 'Diagnostics' },
+  { symbol: 'TATACHEM',    sector: 'Chemicals'   },
+  { symbol: 'TATAELXSI',   sector: 'IT'          },
+  { symbol: 'PVRINOX',     sector: 'Entertainment'},
+  { symbol: 'PIIND',       sector: 'Chemicals'   },
+  { symbol: 'CONCOR',      sector: 'Logistics'   },
+  { symbol: 'IEX',         sector: 'Power Exch'  },
+  { symbol: 'CAMS',        sector: 'Fin Services'},
+  { symbol: 'AUBANK',      sector: 'Banking'     },
 ];
 
 // ── Per-day cache ─────────────────────────────────────────────────────────────
@@ -114,17 +191,23 @@ export async function scanTradingUniverse() {
     return cachedScanText;
   }
 
-  logger.info('[OpportunityScanner] Scanning trading universe...');
+  logger.info(`[OpportunityScanner] Scanning ${TRADING_UNIVERSE.length} stocks in concurrent batches...`);
   const results = [];
+  const BATCH_SIZE = 10;
 
-  for (const stock of TRADING_UNIVERSE) {
-    try {
-      const tech = await getSymbolTechnicals(stock.symbol, 'NSE');
-      if (tech) results.push({ ...stock, ...tech });
-    } catch (e) {
-      logger.warn(`[OpportunityScanner] ${stock.symbol}: ${e.message}`);
+  for (let i = 0; i < TRADING_UNIVERSE.length; i += BATCH_SIZE) {
+    const batch = TRADING_UNIVERSE.slice(i, i + BATCH_SIZE);
+    const settled = await Promise.allSettled(
+      batch.map(stock => getSymbolTechnicals(stock.symbol, 'NSE').then(tech => ({ stock, tech })))
+    );
+    for (const res of settled) {
+      if (res.status === 'fulfilled' && res.value.tech) {
+        results.push({ ...res.value.stock, ...res.value.tech });
+      } else if (res.status === 'rejected') {
+        logger.warn(`[OpportunityScanner] batch error: ${res.reason?.message}`);
+      }
     }
-    // No sleep needed — Upstox candles is primary data source (no rate limit)
+    logger.info(`[OpportunityScanner] Scanned ${Math.min(i + BATCH_SIZE, TRADING_UNIVERSE.length)}/${TRADING_UNIVERSE.length}`);
   }
 
   logger.info(`[OpportunityScanner] ${results.length}/${TRADING_UNIVERSE.length} symbols analyzed`);
@@ -155,11 +238,12 @@ function formatResults(results) {
 
   const ranked = withSetup.sort((a, b) => scoreSetup(b) - scoreSetup(a));
 
-  const lines = ['=== NSE OPPORTUNITY SCAN — TRADING UNIVERSE ==='];
+  const lines = [`=== NSE OPPORTUNITY SCAN — ${results.length} STOCKS ANALYZED ===`];
 
   if (ranked.length > 0) {
-    lines.push('ACTIVE SETUPS (ranked by quality — these are your candidates):');
-    for (const r of ranked) {
+    const top = ranked.slice(0, 20); // Top 20 setups — keep prompt concise
+    lines.push(`ACTIVE SETUPS — top ${top.length} of ${ranked.length} (ranked by quality):`);
+    for (const r of top) {
       lines.push(r.summary);
     }
   } else {

@@ -3,7 +3,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import prisma from '../services/prisma.js';
 import { getBot } from '../services/telegramBot.js';
 import { generateTradeSignals, expireOldSignals } from '../services/signalGenerator.js';
-import { isTokenValid, getAuthorizationUrl, getHoldings, getOrderStatus } from '../services/upstoxService.js';
+import { isTokenValid, getAuthorizationUrl, getHoldings, getOrderStatus, cancelOrder } from '../services/upstoxService.js';
 import { syncUpstoxFunds, syncUpstoxHoldings, getEffectiveCash, updateCashOnExecution, upsertHoldingOnExecution } from '../services/capitalGuard.js';
 import { getUpstoxLTP } from '../services/upstoxMarketData.js';
 import { buildPreMarketContext } from '../services/marketIntelligence.js';
@@ -1889,28 +1889,88 @@ async function resetStalePlacingSignals() {
 
     if (stale.length === 0) return;
 
-    logger.warn(`[Stale PLACING] Found ${stale.length} signal(s) stuck in PLACING for >30 min — resetting to PENDING`);
+    logger.warn(`[Stale PLACING] Found ${stale.length} signal(s) stuck in PLACING for >30 min`);
 
     const bot = getBot();
     for (const sig of stale) {
+      const userId = sig.portfolio?.user?.id;
+      const telegramUser = sig.portfolio?.user?.telegramUser;
+      const chatId = telegramUser ? parseInt(telegramUser.telegramId) : null;
+      const price = sig.triggerPrice ? `₹${parseFloat(sig.triggerPrice).toFixed(2)}` : 'market';
+
+      // Step 1: check actual Upstox order status if we have an order ID
+      let upstoxStatus = null;
+      if (sig.upstoxOrderId && userId) {
+        try {
+          const statusResult = await getOrderStatus(userId, sig.upstoxOrderId);
+          upstoxStatus = statusResult.status; // COMPLETE, OPEN, PENDING, REJECTED, CANCELLED
+          logger.info(`[Stale PLACING] Signal #${sig.id} Upstox order ${sig.upstoxOrderId} status: ${upstoxStatus}`);
+        } catch (e) {
+          logger.warn(`[Stale PLACING] Could not fetch Upstox status for signal #${sig.id}: ${e.message}`);
+        }
+      }
+
+      // Step 2: act based on actual status
+      if (upstoxStatus === 'COMPLETE') {
+        // Order filled — mark EXECUTED, don't reset to PENDING
+        await prisma.tradeSignal.update({
+          where: { id: sig.id },
+          data: { status: 'EXECUTED' }
+        });
+        logger.info(`[Stale PLACING] Signal #${sig.id} (${sig.symbol}) marked EXECUTED — order filled on exchange`);
+        if (bot && chatId) {
+          await bot.sendMessage(chatId,
+            `✅ *Order Confirmed (Late)*\n\n` +
+            `Signal #${sig.id}: *${sig.symbol}* ${sig.side} ${sig.quantity}qty @ ${price}\n\n` +
+            `Upstox confirms this order *filled*. Marked as EXECUTED.`,
+            { parse_mode: 'Markdown' }
+          ).catch(e => logger.error(`[Stale PLACING] Telegram alert failed for signal #${sig.id}:`, e.message));
+        }
+        continue;
+      }
+
+      if (upstoxStatus === 'OPEN' || upstoxStatus === 'PENDING') {
+        // Order is still live on exchange — MUST cancel before resetting to PENDING.
+        // If we don't cancel: Upstox already deducted this capital from available_margin,
+        // AND getEffectiveCash will also reserve it for the PENDING signal → double-count → capital check fails.
+        try {
+          await cancelOrder(userId, sig.upstoxOrderId);
+          logger.info(`[Stale PLACING] Cancelled live Upstox order ${sig.upstoxOrderId} for signal #${sig.id} (${sig.symbol})`);
+        } catch (e) {
+          logger.error(`[Stale PLACING] Failed to cancel Upstox order ${sig.upstoxOrderId}: ${e.message} — skipping reset to avoid capital double-count`);
+          // Don't reset to PENDING if cancel failed — leave in PLACING so it gets retried next cycle
+          if (bot && chatId) {
+            await bot.sendMessage(chatId,
+              `⚠️ *Order Cancel Failed*\n\n` +
+              `Signal #${sig.id}: *${sig.symbol}* has a live order on Upstox that couldn't be cancelled automatically.\n\n` +
+              `Please cancel it manually in Upstox app, then tap Dismiss here.`,
+              {
+                parse_mode: 'Markdown',
+                reply_markup: { inline_keyboard: [[{ text: '🚫 Dismiss', callback_data: `sig_dismiss_${sig.id}` }]] }
+              }
+            ).catch(() => {});
+          }
+          continue;
+        }
+      }
+
+      // At this point: order is REJECTED, CANCELLED, not found, or we successfully cancelled it above
+      // Safe to reset to PENDING — no live capital is blocked on Upstox
       await prisma.tradeSignal.update({
         where: { id: sig.id },
-        data: { status: 'PENDING' }
+        data: { status: 'PENDING', upstoxOrderId: null }
       });
 
-      logger.warn(`[Stale PLACING] Reset signal #${sig.id} (${sig.symbol} ${sig.side}) to PENDING — was stuck since ${sig.updatedAt.toISOString()}`);
+      logger.warn(`[Stale PLACING] Reset signal #${sig.id} (${sig.symbol} ${sig.side}) to PENDING — Upstox status was: ${upstoxStatus || 'unknown'}`);
 
-      const telegramUser = sig.portfolio?.user?.telegramUser;
-      if (bot && telegramUser) {
-        const chatId = parseInt(telegramUser.telegramId);
-        const price = sig.triggerPrice ? `₹${parseFloat(sig.triggerPrice).toFixed(2)}` : 'market';
+      if (bot && chatId) {
+        const wasOpen = upstoxStatus === 'OPEN' || upstoxStatus === 'PENDING';
         await bot.sendMessage(chatId,
-          `⚠️ *Order Confirmation Timeout*\n\n` +
+          `⚠️ *Order Timeout — Reset*\n\n` +
           `Signal #${sig.id}: *${sig.symbol}* ${sig.side} ${sig.quantity}qty @ ${price}\n\n` +
-          `This order was submitted to Upstox but confirmation never arrived (>30 min). ` +
-          `It has been reset to *PENDING* so you can retry.\n\n` +
-          `📋 Please check your Upstox order book — the order may have filled, partially filled, or was rejected. ` +
-          `If it filled, tap Execute again to confirm. If not, you can re-execute or dismiss.`,
+          (wasOpen
+            ? `The Upstox order was still open after 30 min and has been *cancelled*. Signal reset to PENDING — re-execute when ready.`
+            : `Order was not confirmed within 30 min (status: ${upstoxStatus || 'unknown'}). Reset to PENDING — re-execute or dismiss.`),
           {
             parse_mode: 'Markdown',
             reply_markup: {

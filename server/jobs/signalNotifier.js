@@ -1482,12 +1482,13 @@ async function notifyPendingSignals() {
           } else if (unitPrice > 0) {
             const maxAffordableQty = Math.floor(effectiveCash / unitPrice);
             if (maxAffordableQty < effectiveQty) {
-              // Can afford fewer shares than signalled — reduce and warn
+              // Can afford fewer shares than signalled — adjust display only, NOT the DB record.
+              // The actual qty reduction happens at execution time via validateSignals.
+              // Persisting here would permanently reduce the signal even if capital recovers.
               const originalQty = effectiveQty;
               effectiveQty = maxAffordableQty;
-              await prisma.tradeSignal.update({ where: { id: signal.id }, data: { quantity: maxAffordableQty } });
               capitalWarning = `⚠️ Qty reduced ${originalQty}→${maxAffordableQty} (₹${effectiveCash.toFixed(0)} available)`;
-              logger.info(`[Notify] Signal #${signal.id} ${signal.symbol}: qty reduced ${originalQty}→${maxAffordableQty} (effective=₹${effectiveCash.toFixed(0)})`);
+              logger.info(`[Notify] Signal #${signal.id} ${signal.symbol}: display qty reduced ${originalQty}→${maxAffordableQty} (effective=₹${effectiveCash.toFixed(0)})`);
             }
           }
         } catch (e) {

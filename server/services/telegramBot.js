@@ -266,7 +266,6 @@ async function handleExecuteSignal(botInstance, query, signalId) {
     }
     if (signal.status === 'PLACING') {
       await botInstance.answerCallbackQuery(query.id, { text: 'Order already placed — waiting to fill' }).catch(() => {});
-      // Send a real chat message so the user understands what's happening
       const orderRef = signal.upstoxOrderId ? ` (Upstox order #${signal.upstoxOrderId})` : '';
       const limitNote = signal.triggerPrice
         ? `\n\nThis is a *LIMIT order at ₹${signal.triggerPrice}*. It will fill automatically when the market price drops to that level. No action needed — Upstox is watching it.\n\nTo cancel: dismiss this signal, then cancel the order in your Upstox app.`
@@ -291,8 +290,21 @@ async function handleExecuteSignal(botInstance, query, signalId) {
       return;
     }
 
-    // Show processing state — catch stale callback errors (Telegram expires queries after ~30s)
-    await botInstance.answerCallbackQuery(query.id, { text: 'Placing order...' }).catch(() => {});
+    // ATOMIC LOCK: set status to PLACING only if still in an actionable state.
+    // This prevents race conditions from double-taps or concurrent callbacks placing two orders.
+    // If count === 0, another request already locked it — abort.
+    const locked = await prisma.tradeSignal.updateMany({
+      where: { id: signalId, status: { in: ['PENDING', 'ACKED', 'SNOOZED'] } },
+      data: { status: 'PLACING' }
+    });
+    if (locked.count === 0) {
+      await botInstance.answerCallbackQuery(query.id, { text: 'Already processing — please wait' }).catch(() => {});
+      return;
+    }
+
+    // From this point we own the signal exclusively. Any error must reset it to PENDING.
+    // Show processing state
+    await botInstance.answerCallbackQuery(query.id, { text: 'Placing order...' }).catch(() => {})
     await botInstance.editMessageReplyMarkup(
       { inline_keyboard: [[{ text: '⏳ Placing order...', callback_data: 'noop' }]] },
       { chat_id: chatId, message_id: messageId }
@@ -439,13 +451,10 @@ async function handleExecuteSignal(botInstance, query, signalId) {
 
     const result = await placeOrder(userId, orderParams);
 
-    // Mark as PLACING (not EXECUTED yet — wait for exchange confirmation)
+    // Record the Upstox order ID (already PLACING from the atomic lock above)
     await prisma.tradeSignal.update({
       where: { id: signalId },
-      data: {
-        status: 'PLACING',
-        upstoxOrderId: result.dbOrderId
-      }
+      data: { upstoxOrderId: result.dbOrderId }
     });
 
     // Create ack record
@@ -480,6 +489,12 @@ async function handleExecuteSignal(botInstance, query, signalId) {
       .catch(err => logger.error(`Polling failed for signal #${signalId}:`, err));
   } catch (error) {
     logger.error(`Failed to execute signal #${signalId}:`, error);
+
+    // We took ownership via atomic lock — must reset to PENDING so the user can retry
+    await prisma.tradeSignal.updateMany({
+      where: { id: signalId, status: 'PLACING' },
+      data: { status: 'PENDING', upstoxOrderId: null }
+    }).catch(e => logger.error(`Could not reset signal #${signalId} after failure:`, e.message));
 
     // Show error on the button
     try {
@@ -528,6 +543,16 @@ async function handleExecuteMarketFallback(botInstance, query, signalId) {
 
     if (!upstox || !upstox.isConnected || !upstox.accessToken) {
       await botInstance.answerCallbackQuery(query.id, { text: 'Upstox not connected' }).catch(() => {});
+      return;
+    }
+
+    // ATOMIC LOCK — same as handleExecuteSignal to prevent double-tap race conditions
+    const locked = await prisma.tradeSignal.updateMany({
+      where: { id: signalId, status: { in: ['PENDING', 'ACKED', 'SNOOZED'] } },
+      data: { status: 'PLACING' }
+    });
+    if (locked.count === 0) {
+      await botInstance.answerCallbackQuery(query.id, { text: 'Already processing — please wait' }).catch(() => {});
       return;
     }
 
@@ -594,10 +619,10 @@ async function handleExecuteMarketFallback(botInstance, query, signalId) {
 
     const result = await placeOrder(userId, orderParams);
 
-    // Mark as PLACING (not EXECUTED yet)
+    // Record order ID (already PLACING from atomic lock above)
     await prisma.tradeSignal.update({
       where: { id: signalId },
-      data: { status: 'PLACING', upstoxOrderId: result.dbOrderId }
+      data: { upstoxOrderId: result.dbOrderId }
     });
 
     await prisma.signalAck.create({
@@ -628,6 +653,13 @@ async function handleExecuteMarketFallback(botInstance, query, signalId) {
       .catch(err => logger.error(`Polling failed for live-price signal #${signalId}:`, err));
   } catch (error) {
     logger.error(`Failed to execute live-price order for signal #${signalId}:`, error);
+
+    // We took ownership via atomic lock — must reset to PENDING so the user can retry
+    await prisma.tradeSignal.updateMany({
+      where: { id: signalId, status: 'PLACING' },
+      data: { status: 'PENDING', upstoxOrderId: null }
+    }).catch(e => logger.error(`Could not reset signal #${signalId} after failure:`, e.message));
+
     const errorMsg = error.message || 'Unknown error';
     await botInstance.sendMessage(chatId, `❌ *Order Failed*\nSignal #${signalId}: ${errorMsg}`, { parse_mode: 'Markdown' });
   }

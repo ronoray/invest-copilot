@@ -35,11 +35,13 @@ export async function getEffectiveCash(portfolioId, excludeSignalId = null) {
       status: { in: ['PENDING', 'ACKED', 'SNOOZED'] },
       ...(excludeSignalId ? { id: { not: excludeSignalId } } : {})
     },
-    select: { quantity: true, triggerPrice: true, triggerLow: true }
+    select: { quantity: true, triggerPrice: true, triggerLow: true, price: true, triggerType: true }
   });
 
   const reservedCash = activeSignals.reduce((sum, sig) => {
-    const price = parseFloat(sig.triggerPrice || sig.triggerLow || 0);
+    // For LIMIT/ZONE: use trigger price. For MARKET: use the stored price field (set at generation time).
+    // Never use 0 — a MARKET signal reserving ₹0 allows over-committing capital to other signals.
+    const price = parseFloat(sig.triggerPrice || sig.triggerLow || sig.price || 0);
     return sum + (sig.quantity * price);
   }, 0);
 

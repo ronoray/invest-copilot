@@ -1466,6 +1466,36 @@ async function notifyPendingSignals() {
       // Live LTP for this symbol
       const ltp = ltpMap.get(signal.symbol)?.price || null;
 
+      // ─── Live capital check for BUY signals ──────────────────────────────────
+      // Before sending an Execute button, verify there is actually capital available.
+      // If not, adjust qty downward or block execution entirely.
+      // This prevents the user from tapping Execute and getting "capital check failed".
+      let capitalWarning = null;
+      if (signal.side === 'BUY') {
+        try {
+          const { effectiveCash } = await getEffectiveCash(signal.portfolioId, signal.id);
+          const unitPrice = parseFloat(signal.triggerPrice || signal.triggerLow || ltp || 0);
+          if (unitPrice > 0 && effectiveCash < unitPrice) {
+            // Can't afford even 1 share — block Execute
+            capitalWarning = `⚠️ Insufficient capital (₹${effectiveCash.toFixed(0)} available, ₹${unitPrice.toFixed(0)} needed for 1 share)`;
+            logger.warn(`[Notify] Signal #${signal.id} ${signal.symbol}: no capital (effective=₹${effectiveCash.toFixed(0)}, unitPrice=₹${unitPrice.toFixed(0)}) — Execute blocked`);
+          } else if (unitPrice > 0) {
+            const maxAffordableQty = Math.floor(effectiveCash / unitPrice);
+            if (maxAffordableQty < effectiveQty) {
+              // Can afford fewer shares than signalled — reduce and warn
+              const originalQty = effectiveQty;
+              effectiveQty = maxAffordableQty;
+              await prisma.tradeSignal.update({ where: { id: signal.id }, data: { quantity: maxAffordableQty } });
+              capitalWarning = `⚠️ Qty reduced ${originalQty}→${maxAffordableQty} (₹${effectiveCash.toFixed(0)} available)`;
+              logger.info(`[Notify] Signal #${signal.id} ${signal.symbol}: qty reduced ${originalQty}→${maxAffordableQty} (effective=₹${effectiveCash.toFixed(0)})`);
+            }
+          }
+        } catch (e) {
+          logger.warn(`[Notify] Capital check failed for signal #${signal.id}: ${e.message}`);
+        }
+      }
+      // ─────────────────────────────────────────────────────────────────────────
+
       // Auto-expire LIMIT BUY if price has run more than 5% above the limit price —
       // the order will never fill today and the signal is no longer actionable.
       if (signal.side === 'BUY' && signal.triggerType === 'LIMIT' && ltp && signal.triggerPrice) {
@@ -1618,11 +1648,12 @@ async function notifyPendingSignals() {
           }
         }
 
+        const capitalLine = capitalWarning ? `\n${capitalWarning}` : '';
         const msgText = `${sideEmoji} *${signal.side}: ${signal.symbol}* (${signal.exchange})
 ━━━━━━━━━━━━━━━━━━━
 Qty: *${effectiveQty} shares* | ${priceInfo}
 ${ltpLine}
-${actionGuide}
+${actionGuide}${capitalLine}
 ━━━━━━━━━━━━━━━━━━━
 📁 *${portfolioName}* — ${brokerName}${riskProfile ? ' (' + riskProfile + ')' : ''}
 Confidence: ${confidenceBar} ${signal.confidence}%
@@ -1633,10 +1664,19 @@ _${signal.rationale || ''}_${repeatNote}`;
         const upstoxIntegration = signal.portfolio?.user?.upstoxIntegration;
         const hasUpstox = isUpstoxBroker && upstoxIntegration?.isConnected && upstoxIntegration?.accessToken;
 
-        const buttons = hasUpstox
+        // If capital is fully insufficient, block Execute button — show only Dismiss
+        const canExecute = hasUpstox && !capitalWarning?.includes('Insufficient capital');
+
+        const insufficientCapital = capitalWarning?.includes('Insufficient capital');
+        const buttons = canExecute
           ? [
               { text: '🚀 Execute', callback_data: `sig_exec_${signal.id}` },
               { text: '⏰ Snooze 30m', callback_data: `sig_snooze_${signal.id}` },
+              { text: '❌ Dismiss', callback_data: `sig_dismiss_${signal.id}` }
+            ]
+          : insufficientCapital
+          ? [
+              // No Execute — capital unavailable. Only Dismiss.
               { text: '❌ Dismiss', callback_data: `sig_dismiss_${signal.id}` }
             ]
           : [

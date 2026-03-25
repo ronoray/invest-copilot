@@ -179,8 +179,9 @@ You MUST respond with ONLY valid JSON (no markdown, no extra text) in this exact
 ${portfolio.broker === 'UPSTOX' && portfolio.apiEnabled ? `UPSTOX LIVE TRADING CONTEXT:
 - All opening plays will be sent to Telegram with a 1-tap Execute button. Orders go live on Upstox immediately.
 - Product: CNC delivery equity ONLY. No intraday, no F&O. Stocks are held T+1 or longer.
-- "openingPlays" BUY orders: LIMIT preferred. Price = the level to buy at, not the current price.
-- Size each opening play: 10-20% of available cash ₹${effectiveCash.toFixed(0)} per position max.
+- ORDER TYPE: confidence ≥ 85 → MARKET (executes at open price). confidence 78-84 → LIMIT within 0.5% of yesterday's close.
+  DO NOT set limit prices 2-5% below current market price — those orders never fill and generate zero returns.
+- Size each opening play: 15-20% of available cash ₹${effectiveCash.toFixed(0)} per position. Number of positions = however many fit.
 - holdings actions (ADD/EXIT/TRIM) will also be sent as executable signals — be precise with price levels.
 ` : ''}CAPITAL RULES:
 - Opening plays BUY total must NOT exceed effective cash ₹${effectiveCash.toFixed(0)}
@@ -630,13 +631,14 @@ ${holdingsBreakdown || 'No holdings'}
 
 CAPITAL RULES FOR tomorrowPlays:
 - AVAILABLE CASH (verified from Upstox): ₹${effectiveCash.toFixed(0)}
-- Maximum 2 BUY signals. 2 focused positions > 5 spread ones. Concentrate capital on highest conviction.
+- Number of BUY signals = however many fit at 15-20% per position (at ₹${effectiveCash.toFixed(0)} that is ${Math.floor(effectiveCash / (effectiveCash * 0.15))} positions max — scale naturally with capital)
 - Total BUY cost (sum of quantity × price) MUST NOT exceed ₹${effectiveCash.toFixed(0)}
-- Per-position size: 15–25% of cash (₹${Math.round(effectiveCash * 0.15)} – ₹${Math.round(effectiveCash * 0.25)} per trade)
-- Show math for each BUY: e.g. "10 × ₹1,500 = ₹15,000 (27% of cash)"
+- Per-position size: 15–20% of cash (₹${Math.round(effectiveCash * 0.15)} – ₹${Math.round(effectiveCash * 0.20)} per trade)
+- Show math for each BUY: e.g. "10 × ₹1,500 = ₹15,000 (27% of ₹${effectiveCash.toFixed(0)})"
 - SELL only stocks listed in CURRENT HOLDINGS above. No phantom sells.
 - If no high-conviction setup fits within this capital, return an empty tomorrowPlays array. That is the correct call.
-${portfolio.broker === 'UPSTOX' && portfolio.apiEnabled ? `- LIMIT orders only. Tomorrow's plays become executable Telegram signals at tomorrow's open.
+${portfolio.broker === 'UPSTOX' && portfolio.apiEnabled ? `- Tomorrow's plays become executable Telegram signals at tomorrow's open.
+- ORDER TYPE: confidence ≥ 85 → MARKET (fills immediately). confidence < 85 → LIMIT within 0.5% of current price.
 - CNC delivery equity only — no intraday, no F&O.
 ` : ''}
 TASK: Generate the EVENING PLAYBOOK. This replaces both the evening review AND tomorrow's game plan.
@@ -680,15 +682,15 @@ Respond with ONLY valid JSON (no markdown):
     const jsonStr = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
     const playbook = JSON.parse(jsonStr);
 
-    // Cap tomorrowPlays BUY signals at 2 (post-generation guard)
+    // Cap tomorrowPlays BUY signals to what actually fits in available cash (capital-based, not fixed)
     const buys = (playbook.tomorrowPlays || []).filter(p => p.action === 'BUY');
     const sells = (playbook.tomorrowPlays || []).filter(p => p.action === 'SELL');
-    if (buys.length > 2) {
-      // Keep highest-priced buys (typically highest conviction) — trim the rest
+    const maxPositions = Math.max(1, Math.floor(effectiveCash / (effectiveCash * 0.15))); // positions that fit at 15% each
+    if (buys.length > maxPositions) {
       buys.sort((a, b) => (b.price || 0) - (a.price || 0));
-      logger.info(`[EveningPlaybook] Trimmed ${buys.length - 2} excess BUY signals (cap = 2)`);
+      logger.info(`[EveningPlaybook] Trimmed ${buys.length - maxPositions} excess BUY signals (capital cap: ${maxPositions} positions)`);
     }
-    playbook.tomorrowPlays = [...buys.slice(0, 2), ...sells];
+    playbook.tomorrowPlays = [...buys.slice(0, maxPositions), ...sells];
 
     // Attach metadata for callers
     playbook._effectiveCash = effectiveCash;

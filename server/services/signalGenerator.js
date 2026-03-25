@@ -342,8 +342,11 @@ CRITICAL RULES:
 
 ${portfolio.broker === 'UPSTOX' && portfolio.apiEnabled ? `UPSTOX LIVE TRADING — ONE TAP EXECUTION:
 - ONLY NSE_EQ CNC delivery. No intraday, no F&O.
-- LIMIT orders strongly preferred — realistic entry levels that will actually fill.
-- Capital: ₹${effectiveCash.toLocaleString('en-IN')}. 2–3 focused positions > 5 spread positions. Concentrate on highest conviction.
+- Capital: ₹${effectiveCash.toLocaleString('en-IN')}. Number of signals = however many fit at 15-20% per position.
+- ORDER TYPE RULE — THIS IS CRITICAL:
+  * confidence ≥ 85: use MARKET order. High conviction = execute now at market price. Don't let it slip away waiting for a limit fill.
+  * confidence 78-84: use LIMIT at current market price ±0.5% (set triggerPrice = price you want to buy at, within 0.5% of today's close). This fills at open or shortly after.
+  * DO NOT set limit prices at "support levels" 2-5% below current price. Those orders sit unfilled for days and generate zero returns. The whole point of a signal is PARTICIPATION.
 ` : ''}
 ${profitTakingBlock}${mandate}
 
@@ -379,8 +382,8 @@ Respond in this EXACT JSON format (no markdown, no extra text):
 
 Notes:
 - Maximum 5 signals
-- triggerType: MARKET, LIMIT (preferred), or ZONE
-- EVERY signal needs "price" field for capital validation
+- triggerType: MARKET (confidence ≥ 85) or LIMIT (confidence 78-84, price within 0.5% of current market price)
+- EVERY signal needs "price" field for capital validation (use current market price for MARKET orders)
 - confidence: 0-100 (min ${minConviction})
 - CRITICAL: Total BUY cost must not exceed ₹${effectiveCash.toLocaleString('en-IN')}. Show math.`;
 

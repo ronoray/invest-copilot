@@ -675,7 +675,7 @@ const SETTLED_FAILURE = ['rejected', 'cancelled'];
  * @returns {Promise<{ settled: boolean, status: string }>}
  */
 export async function pollOrderUntilSettled({ userId, orderId, dbOrderId, signalId, signal, onSuccess, onFailure, onTimeout }) {
-  const maxAttempts = 5;
+  const maxAttempts = 15;   // 15 × 3s = 45s total — handles slow Upstox confirmations
   const intervalMs = 3000;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {

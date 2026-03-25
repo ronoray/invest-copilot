@@ -300,6 +300,7 @@ export async function runPriceGuard() {
           const stopSrc = holding.stopLoss ? 'trailing' : 'default';
           logger.warn(`[PriceGuard] STOP-LOSS (${stopSrc}): ${holding.symbol} ₹${ltp.toFixed(2)} ≤ stop ₹${stopLevel.toFixed(2)} (${(pnlPct * 100).toFixed(1)}%)`);
 
+          // Stop-loss: MARKET order — exit immediately, price doesn't matter
           await createSellSignal({
             portfolioId: portfolio.id,
             symbol: holding.symbol,
@@ -308,7 +309,7 @@ export async function runPriceGuard() {
             triggerType: 'MARKET',
             triggerPrice: null,
             confidence: 95,
-            rationale: `Stop-loss triggered (${stopSrc} stop). ${holding.symbol} has fallen to ₹${ltp.toFixed(2)}, breaching the stop at ₹${stopLevel.toFixed(2)} — a ${Math.abs(pnlPct * 100).toFixed(1)}% move from your avg ₹${avgPrice.toFixed(2)}. Exit at market immediately. Capital protection comes before everything. Every rupee saved now is a rupee available for the next setup.`
+            rationale: `Stop-loss triggered (${stopSrc} stop). ${holding.symbol} at ₹${ltp.toFixed(2)}, breached stop ₹${stopLevel.toFixed(2)} (${Math.abs(pnlPct * 100).toFixed(1)}% from avg ₹${avgPrice.toFixed(2)}). MARKET exit — price is irrelevant, capital protection is everything. Every rupee saved now compounds into the next setup.`
           });
 
           await sendAlert(chatId, { symbol: holding.symbol, holding, ltp, type: 'STOP_LOSS', pnlPct, pnlAmt, stopLevel, targetLevel: avgPrice * (1 + profitTargetPct) });
@@ -323,15 +324,17 @@ export async function runPriceGuard() {
         if (ltp >= profitTarget) {
           logger.info(`[PriceGuard] PROFIT TARGET: ${holding.symbol} ₹${ltp.toFixed(2)} ≥ ₹${profitTarget.toFixed(2)} (+${(pnlPct * 100).toFixed(1)}%)`);
 
+          // Profit target: LIMIT at current price (not target) — locks in what's available now
+          const sellPrice = parseFloat((ltp * 0.998).toFixed(2)); // 0.2% below LTP for quick fill
           await createSellSignal({
             portfolioId: portfolio.id,
             symbol: holding.symbol,
             exchange: holding.exchange,
             quantity: holding.quantity,
             triggerType: 'LIMIT',
-            triggerPrice: parseFloat((ltp * 0.998).toFixed(2)),
+            triggerPrice: sellPrice,
             confidence: 90,
-            rationale: `Profit target reached. ${holding.symbol} is up ${(pnlPct * 100).toFixed(1)}% — ₹${pnlAmt.toFixed(0)} gain on ${holding.quantity} shares. Your ${(profitTargetPct * 100).toFixed(0)}% target has been hit. Book it. A realised profit compounds; an unrealised one can evaporate on the next macro shock. Redeploy into the next setup.`
+            rationale: `Profit target hit. ${holding.symbol} at ₹${ltp.toFixed(2)} (+${(pnlPct * 100).toFixed(1)}%, ₹${pnlAmt.toFixed(0)} gain). LIMIT sell at ₹${sellPrice.toFixed(2)} — locks in today's price, not a stale number. Execute now. A realised ₹${pnlAmt.toFixed(0)} compounds. An unrealised gain evaporates on the next shock.`
           });
 
           await sendAlert(chatId, { symbol: holding.symbol, holding, ltp, type: 'PROFIT_TARGET', pnlPct, pnlAmt, stopLevel, targetLevel: profitTarget });

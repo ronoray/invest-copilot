@@ -564,6 +564,15 @@ export async function generateEveningPlaybook(portfolioId) {
 
   if (!portfolio) throw new Error(`Portfolio ${portfolioId} not found`);
 
+  // Fetch live effective cash — signals must be sized to what we actually have
+  let effectiveCash = parseFloat(portfolio.availableCash || 0);
+  try {
+    const cashResult = await getEffectiveCash(portfolioId);
+    effectiveCash = cashResult.effectiveCash;
+  } catch (e) {
+    logger.warn(`Could not get effective cash for evening playbook (portfolio ${portfolioId}):`, e.message);
+  }
+
   const profileBrief = buildProfileBrief(portfolio);
 
   // Get today's target for actual results
@@ -619,11 +628,18 @@ Target: ₹${targetAmount.toFixed(0)} | Earned: ${earnedActual >= 0 ? '+' : ''}�
 CURRENT HOLDINGS:
 ${holdingsBreakdown || 'No holdings'}
 
-${portfolio.broker === 'UPSTOX' && portfolio.apiEnabled ? `UPSTOX LIVE TRADING:
-- "tomorrowPlays" orders will be delivered to Telegram as executable signals. LIMIT orders only.
-- CNC delivery equity only — no intraday, no F&O. Hold period T+1 or longer.
-- Size each tomorrow play to 10-20% of available cash. Do not over-leverage.
-` : ''}TASK: Generate the EVENING PLAYBOOK. This replaces both the evening review AND tomorrow's game plan.
+CAPITAL RULES FOR tomorrowPlays:
+- AVAILABLE CASH (verified from Upstox): ₹${effectiveCash.toFixed(0)}
+- Maximum 2 BUY signals. 2 focused positions > 5 spread ones. Concentrate capital on highest conviction.
+- Total BUY cost (sum of quantity × price) MUST NOT exceed ₹${effectiveCash.toFixed(0)}
+- Per-position size: 15–25% of cash (₹${Math.round(effectiveCash * 0.15)} – ₹${Math.round(effectiveCash * 0.25)} per trade)
+- Show math for each BUY: e.g. "10 × ₹1,500 = ₹15,000 (27% of cash)"
+- SELL only stocks listed in CURRENT HOLDINGS above. No phantom sells.
+- If no high-conviction setup fits within this capital, return an empty tomorrowPlays array. That is the correct call.
+${portfolio.broker === 'UPSTOX' && portfolio.apiEnabled ? `- LIMIT orders only. Tomorrow's plays become executable Telegram signals at tomorrow's open.
+- CNC delivery equity only — no intraday, no F&O.
+` : ''}
+TASK: Generate the EVENING PLAYBOOK. This replaces both the evening review AND tomorrow's game plan.
 
 Respond with ONLY valid JSON (no markdown):
 {
@@ -641,25 +657,43 @@ Respond with ONLY valid JSON (no markdown):
   "tomorrowPlays": [{
     "action": "BUY|SELL",
     "symbol": "SYM",
+    "exchange": "NSE",
     "quantity": 0,
     "price": 0,
     "orderType": "LIMIT|MARKET",
-    "rationale": "..."
+    "rationale": "...",
+    "capitalUsed": "e.g. 10 × ₹1500 = ₹15,000 (27% of ₹${effectiveCash.toFixed(0)})"
   }],
+  "capitalCheck": "Total BUY cost: ₹X / ₹${effectiveCash.toFixed(0)} available — OK|OVER",
   "macroThesis": "overnight thesis for tomorrow",
   "weeklyProgress": "progress assessment + acceleration plan if behind"
 }`;
 
   try {
     const message = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 2000,
+      model: 'claude-sonnet-4-6',
+      max_tokens: 2500,
       messages: [{ role: 'user', content: prompt }],
     });
 
     const text = message.content[0].text.trim();
     const jsonStr = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-    return JSON.parse(jsonStr);
+    const playbook = JSON.parse(jsonStr);
+
+    // Cap tomorrowPlays BUY signals at 2 (post-generation guard)
+    const buys = (playbook.tomorrowPlays || []).filter(p => p.action === 'BUY');
+    const sells = (playbook.tomorrowPlays || []).filter(p => p.action === 'SELL');
+    if (buys.length > 2) {
+      // Keep highest-priced buys (typically highest conviction) — trim the rest
+      buys.sort((a, b) => (b.price || 0) - (a.price || 0));
+      logger.info(`[EveningPlaybook] Trimmed ${buys.length - 2} excess BUY signals (cap = 2)`);
+    }
+    playbook.tomorrowPlays = [...buys.slice(0, 2), ...sells];
+
+    // Attach metadata for callers
+    playbook._effectiveCash = effectiveCash;
+
+    return playbook;
   } catch (error) {
     logger.error(`Evening playbook generation failed for portfolio ${portfolioId}: ${error?.message || String(error)}`);
     throw error;

@@ -3,6 +3,7 @@ import prisma from '../services/prisma.js';
 import { getCurrentPrice } from '../services/marketData.js';
 import { getBot } from '../services/telegramBot.js';
 import { generateWarRoomPlan, checkDeviations, triggerRecalibration, buildHourlyPulseMessage, generateEveningPlaybook } from '../services/warRoom.js';
+import { validateSignals } from '../services/capitalGuard.js';
 import logger from '../services/logger.js';
 import { isTradingDay, isMarketHoliday } from '../utils/marketHolidays.js';
 
@@ -483,9 +484,93 @@ async function runEveningPlaybook() {
               `${v.verdict} ${v.symbol} — ${v.reason}`
             ).join('\n');
 
-            const plays = (playbook.tomorrowPlays || []).map(p =>
-              `${p.action} ${p.quantity}x ${p.symbol} @ ₹${p.price} (${p.orderType}) — ${p.rationale}`
-            ).join('\n');
+            // Create executable signals from tomorrowPlays for UPSTOX portfolios
+            let signalCount = 0;
+            if (portfolio.broker === 'UPSTOX' && portfolio.apiEnabled && (playbook.tomorrowPlays || []).length > 0) {
+              try {
+                // Expiry: next day 3:30 PM IST = 10:00 UTC
+                const expiresAt = new Date();
+                expiresAt.setDate(expiresAt.getDate() + 1);
+                expiresAt.setUTCHours(10, 0, 0, 0);
+
+                // Build signal objects for validation
+                const rawSignals = (playbook.tomorrowPlays || [])
+                  .filter(p => p.symbol && p.action && p.quantity > 0 && p.price > 0)
+                  .map(p => ({
+                    symbol: p.symbol,
+                    exchange: p.exchange || 'NSE',
+                    side: p.action === 'BUY' ? 'BUY' : 'SELL',
+                    quantity: parseInt(p.quantity) || 1,
+                    price: parseFloat(p.price),
+                    triggerType: p.orderType === 'MARKET' ? 'MARKET' : 'LIMIT',
+                    triggerPrice: p.orderType !== 'MARKET' ? parseFloat(p.price) : null,
+                    triggerLow: null,
+                    triggerHigh: null,
+                    confidence: 80,
+                    rationale: p.rationale || null,
+                  }));
+
+                // Validate against capital (trims over-budget buys)
+                const validated = rawSignals.length > 0
+                  ? await validateSignals(rawSignals, portfolio.id)
+                  : [];
+
+                // Dedup: skip symbols already covered by active signals today
+                const today = new Date(); today.setHours(0, 0, 0, 0);
+                const activeSignals = await prisma.tradeSignal.findMany({
+                  where: {
+                    portfolioId: portfolio.id,
+                    status: { in: ['PENDING', 'ACKED', 'SNOOZED', 'PLACING'] },
+                    createdAt: { gte: today }
+                  },
+                  select: { symbol: true, side: true }
+                });
+                const coveredKeys = new Set(activeSignals.map(s => `${s.symbol}:${s.side}`));
+
+                for (const sig of validated) {
+                  const key = `${sig.symbol}:${sig.side}`;
+                  if (coveredKeys.has(key)) continue;
+                  try {
+                    await prisma.tradeSignal.create({
+                      data: {
+                        portfolioId: portfolio.id,
+                        symbol: sig.symbol,
+                        exchange: sig.exchange || 'NSE',
+                        side: sig.side,
+                        quantity: Math.max(1, parseInt(sig.quantity) || 1),
+                        triggerType: sig.triggerType || 'LIMIT',
+                        triggerPrice: sig.triggerPrice ? parseFloat(sig.triggerPrice) : null,
+                        triggerLow: null,
+                        triggerHigh: null,
+                        confidence: sig.confidence || 80,
+                        rationale: sig.rationale || null,
+                        status: 'PENDING',
+                        expiresAt,
+                      }
+                    });
+                    signalCount++;
+                    coveredKeys.add(key);
+                  } catch (sigErr) {
+                    logger.error(`Evening playbook: failed to create signal for ${sig.symbol}:`, sigErr.message);
+                  }
+                }
+                if (signalCount > 0) {
+                  logger.info(`Evening playbook: created ${signalCount} signal(s) for portfolio ${portfolio.id}`);
+                }
+              } catch (sigCreateErr) {
+                logger.error(`Evening playbook: signal creation failed for portfolio ${portfolio.id}:`, sigCreateErr.message);
+              }
+            }
+
+            const plays = (playbook.tomorrowPlays || []).map(p => {
+              const capitalLine = p.capitalUsed ? ` _(${p.capitalUsed})_` : '';
+              return `${p.action} ${p.quantity}×${p.symbol} @ ₹${p.price} (${p.orderType}) — ${p.rationale}${capitalLine}`;
+            }).join('\n');
+
+            const capitalCheckLine = playbook.capitalCheck ? `\n_Capital: ${playbook.capitalCheck}_` : '';
+            const executeNote = signalCount > 0
+              ? `\n⚡ *${signalCount} signal(s) queued — Execute buttons ready*`
+              : '';
 
             // Build compact section: forward-looking first, brief accountability last
             const reviewLine = review
@@ -498,7 +583,7 @@ async function runEveningPlaybook() {
 
 ${verdicts ? `*Positions:*\n${verdicts}` : ''}
 
-${plays ? `*Tomorrow's trades:*\n${plays}` : '*No trades queued for tomorrow*'}
+${plays ? `*Tomorrow's trades:*\n${plays}${capitalCheckLine}${executeNote}` : '*No trades queued for tomorrow*'}
 
 📈 ${playbook.weeklyProgress || 'N/A'}
 ${reviewLine ? `\n${reviewLine}` : ''}`;

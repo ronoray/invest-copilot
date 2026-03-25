@@ -1802,7 +1802,7 @@ async function resetStalePlacingSignals() {
             parse_mode: 'Markdown',
             reply_markup: {
               inline_keyboard: [[
-                { text: '⚡ Execute Again', callback_data: `sig_execute_${sig.id}` },
+                { text: '⚡ Execute Again', callback_data: `sig_exec_${sig.id}` },
                 { text: '🚫 Dismiss', callback_data: `sig_dismiss_${sig.id}` }
               ]]
             }

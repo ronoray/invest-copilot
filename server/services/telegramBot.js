@@ -420,18 +420,30 @@ async function handleExecuteSignal(botInstance, query, signalId) {
       if (estimatedPrice > 0) {
         const capitalCheck = await preOrderCapitalCheck(signal.portfolioId, 'BUY', signal.quantity, estimatedPrice, signalId);
         if (!capitalCheck.allowed) {
-          logger.warn(`Signal #${signalId} capital check failed: ${capitalCheck.reason}`);
-          await botInstance.editMessageReplyMarkup(
-            { inline_keyboard: [
-              [{ text: '🚫 Dismiss', callback_data: `sig_dismiss_${signalId}` }]
-            ] },
-            { chat_id: chatId, message_id: messageId }
-          ).catch(() => {});
-          await botInstance.sendMessage(chatId,
-            `💰 *Capital Check Failed*\n\nOrder cost: ₹${capitalCheck.orderCost.toLocaleString('en-IN')}\nAvailable cash: ₹${capitalCheck.effectiveCash.toLocaleString('en-IN')}\n\n_${capitalCheck.reason}_`,
-            { parse_mode: 'Markdown' }
-          );
-          return;
+          // Try to reduce quantity to what we can actually afford
+          const affordableQty = estimatedPrice > 0 ? Math.floor(capitalCheck.effectiveCash / estimatedPrice) : 0;
+          if (affordableQty >= 1) {
+            logger.info(`Signal #${signalId} qty reduced at execution: ${signal.quantity}→${affordableQty} (effective=₹${capitalCheck.effectiveCash.toFixed(0)}, price=₹${estimatedPrice.toFixed(0)})`);
+            signal.quantity = affordableQty;
+            // Persist so future checks and the order use the same qty
+            await prisma.tradeSignal.update({ where: { id: signalId }, data: { quantity: affordableQty } });
+          } else {
+            // Can't afford even 1 share — reset lock and block
+            await prisma.tradeSignal.updateMany({
+              where: { id: signalId, status: 'PLACING' },
+              data: { status: 'PENDING', upstoxOrderId: null }
+            }).catch(() => {});
+            logger.warn(`Signal #${signalId} blocked — cannot afford even 1 share at ₹${estimatedPrice.toFixed(0)} with ₹${capitalCheck.effectiveCash.toFixed(0)} available`);
+            await botInstance.editMessageReplyMarkup(
+              { inline_keyboard: [[{ text: '🚫 Dismiss', callback_data: `sig_dismiss_${signalId}` }]] },
+              { chat_id: chatId, message_id: messageId }
+            ).catch(() => {});
+            await botInstance.sendMessage(chatId,
+              `💰 *Insufficient Capital*\n\n${signal.symbol} @ ₹${estimatedPrice.toFixed(0)}/share\nAvailable: ₹${capitalCheck.effectiveCash.toLocaleString('en-IN')}\n\n_Not enough capital to buy even 1 share. Free up capital by dismissing other pending signals._`,
+              { parse_mode: 'Markdown' }
+            );
+            return;
+          }
         }
       }
     }
@@ -589,18 +601,27 @@ async function handleExecuteMarketFallback(botInstance, query, signalId) {
     if (signal.side === 'BUY') {
       const capitalCheck = await preOrderCapitalCheck(signal.portfolioId, 'BUY', signal.quantity, execPrice, signalId);
       if (!capitalCheck.allowed) {
-        logger.warn(`Signal #${signalId} live-price capital check failed: ${capitalCheck.reason}`);
-        await botInstance.editMessageReplyMarkup(
-          { inline_keyboard: [
-            [{ text: '🚫 Dismiss', callback_data: `sig_dismiss_${signalId}` }]
-          ] },
-          { chat_id: chatId, message_id: messageId }
-        ).catch(() => {});
-        await botInstance.sendMessage(chatId,
-          `💰 *Capital Check Failed*\n\nOrder cost: ₹${capitalCheck.orderCost.toLocaleString('en-IN')}\nAvailable cash: ₹${capitalCheck.effectiveCash.toLocaleString('en-IN')}\n\n_${capitalCheck.reason}_`,
-          { parse_mode: 'Markdown' }
-        );
-        return;
+        const affordableQty = execPrice > 0 ? Math.floor(capitalCheck.effectiveCash / execPrice) : 0;
+        if (affordableQty >= 1) {
+          logger.info(`Signal #${signalId} qty reduced at execution (market fallback): ${signal.quantity}→${affordableQty}`);
+          signal.quantity = affordableQty;
+          await prisma.tradeSignal.update({ where: { id: signalId }, data: { quantity: affordableQty } });
+        } else {
+          await prisma.tradeSignal.updateMany({
+            where: { id: signalId, status: 'PLACING' },
+            data: { status: 'PENDING', upstoxOrderId: null }
+          }).catch(() => {});
+          logger.warn(`Signal #${signalId} blocked (market fallback) — cannot afford 1 share at ₹${execPrice.toFixed(0)}`);
+          await botInstance.editMessageReplyMarkup(
+            { inline_keyboard: [[{ text: '🚫 Dismiss', callback_data: `sig_dismiss_${signalId}` }]] },
+            { chat_id: chatId, message_id: messageId }
+          ).catch(() => {});
+          await botInstance.sendMessage(chatId,
+            `💰 *Insufficient Capital*\n\n${signal.symbol} @ ₹${execPrice.toFixed(0)}/share\nAvailable: ₹${capitalCheck.effectiveCash.toLocaleString('en-IN')}\n\n_Not enough for even 1 share._`,
+            { parse_mode: 'Markdown' }
+          );
+          return;
+        }
       }
     }
 

@@ -1497,6 +1497,32 @@ async function notifyPendingSignals() {
       }
       // ─────────────────────────────────────────────────────────────────────────
 
+      // ─── Skip Execute if a live Upstox order already exists for this symbol ──
+      // Prevents spamming Execute alerts when the bot already placed an order
+      // (e.g. from a duplicate caused by container restart) but the signal is PENDING.
+      if (signal.side === 'BUY') {
+        const liveOrderStatuses = ['open', 'OPEN', 'pending', 'PENDING', 'trigger pending', 'TRIGGER_PENDING', 'AMO REQ RECEIVED', 'PUT ORDER REQ RECEIVED'];
+        const existingOpenOrder = await prisma.upstoxOrder.findFirst({
+          where: {
+            portfolioId: signal.portfolioId,
+            symbol: signal.symbol,
+            transactionType: 'BUY',
+            status: { in: liveOrderStatuses }
+          },
+          select: { orderId: true, quantity: true, price: true, status: true }
+        });
+        if (existingOpenOrder) {
+          // Silently suppress — update lastNotifiedAt so it doesn't re-trigger next cycle
+          await prisma.tradeSignal.update({
+            where: { id: signal.id },
+            data: { lastNotifiedAt: now }
+          });
+          logger.info(`[Notify] Signal #${signal.id} ${signal.symbol}: live Upstox order ${existingOpenOrder.orderId} already open — suppressing Execute notification`);
+          continue;
+        }
+      }
+      // ─────────────────────────────────────────────────────────────────────────
+
       // Auto-expire LIMIT BUY if price has run more than 5% above the limit price —
       // the order will never fill today and the signal is no longer actionable.
       if (signal.side === 'BUY' && signal.triggerType === 'LIMIT' && ltp && signal.triggerPrice) {

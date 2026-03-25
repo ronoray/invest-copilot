@@ -119,6 +119,46 @@ async function runStartupRecovery() {
   const inMarketHours  = totalMin >= MARKET_OPEN  && totalMin <= MARKET_CLOSE;
   const inEveningHours = totalMin >= EVENING_START && totalMin <= EVENING_END;
 
+  // ── Restore in-memory intelligence from DB (survives restarts) ───────────
+  const todayStr     = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const yesterdayStr = new Date(Date.now() - 86400000).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+
+  // Restore today's pre-market thesis
+  if (!todayPreMarketThesis) {
+    try {
+      const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
+      const saved = await prisma.aIAnalysis.findFirst({
+        where: { analysisType: 'PRE_MARKET_THESIS', createdAt: { gte: startOfToday } },
+        orderBy: { createdAt: 'desc' }
+      });
+      if (saved?.analysis) {
+        todayPreMarketThesis = saved.analysis;
+        preMarketThesisDate = todayStr;
+        logger.info('[Startup Recovery] Pre-market thesis restored from DB');
+      }
+    } catch (e) {
+      logger.warn('[Startup Recovery] Could not restore pre-market thesis:', e.message);
+    }
+  }
+
+  // Restore overnight watchlist (today's EOD or yesterday's if today not yet generated)
+  if (!tomorrowWatchlist) {
+    try {
+      const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 1); cutoff.setHours(0, 0, 0, 0);
+      const saved = await prisma.aIAnalysis.findFirst({
+        where: { analysisType: 'OVERNIGHT_WATCHLIST', createdAt: { gte: cutoff } },
+        orderBy: { createdAt: 'desc' }
+      });
+      if (saved?.analysis) {
+        tomorrowWatchlist = saved.analysis;
+        tomorrowWatchlistDate = todayStr;
+        logger.info('[Startup Recovery] Overnight watchlist restored from DB');
+      }
+    } catch (e) {
+      logger.warn('[Startup Recovery] Could not restore overnight watchlist:', e.message);
+    }
+  }
+
   // Handle evening playbook recovery (deploy happened around 7:30 PM)
   if (inEveningHours && !scanHeartbeat.get('evening-playbook')) {
     logger.warn('[Startup Recovery] Evening Playbook not sent yet — running now');
@@ -168,6 +208,28 @@ async function runStartupRecovery() {
         logger.info(`[Startup Recovery] Heartbeat seeded for ${scan.name} (already ran)`);
       }
     }
+
+    // ── War Room message recovery ──────────────────────────────────────────
+    // Signals exist, but was the 9 AM war room MESSAGE actually sent to Telegram?
+    // Check AIAnalysis for today. If missing, the container restarted after 9 AM
+    // and the message was never delivered — send it now from the stored plan.
+    if (totalMin >= 9 * 60) {
+      try {
+        const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
+        const warRoomSent = await prisma.aIAnalysis.count({
+          where: { analysisType: 'WAR_ROOM', createdAt: { gte: startOfToday } }
+        });
+        if (warRoomSent === 0) {
+          logger.warn('[Startup Recovery] War Room message not sent today — sending now');
+          const { runMorningWarRoom } = await import('./telegramAlerts.js');
+          await runMorningWarRoom();
+          logger.info('[Startup Recovery] War Room message delivered');
+        }
+      } catch (e) {
+        logger.warn('[Startup Recovery] War Room message recovery failed:', e.message);
+      }
+    }
+
     return;
   }
 
@@ -543,6 +605,24 @@ Respond in JSON only:
 
     todayPreMarketThesis = firstPortfolioThesis || '';
     preMarketThesisDate = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+
+    // Persist to DB so restarts don't lose today's thesis
+    if (todayPreMarketThesis) {
+      try {
+        await prisma.aIAnalysis.create({
+          data: {
+            userId: eligible[0].userId,
+            analysisType: 'PRE_MARKET_THESIS',
+            category: 'PRE_MARKET_THESIS',
+            analysis: todayPreMarketThesis,
+            metadata: { date: preMarketThesisDate }
+          }
+        });
+      } catch (e) {
+        logger.warn('[Pre-Market] Could not persist thesis to DB:', e.message);
+      }
+    }
+
     recordScanRun('pre-market');
   } catch (err) {
     logger.error('[Pre-Market] Failed:', err.message);
@@ -726,6 +806,21 @@ Minimum 5 setups in tomorrowSetups. Maximum 10. Cast the net wide — this is th
       ].filter(Boolean).join('\n');
 
       tomorrowWatchlistDate = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+
+      // Persist overnight watchlist so tomorrow's 8:30 AM brief survives restarts
+      try {
+        await prisma.aIAnalysis.create({
+          data: {
+            userId: portfolio.userId,
+            analysisType: 'OVERNIGHT_WATCHLIST',
+            category: 'OVERNIGHT_WATCHLIST',
+            analysis: tomorrowWatchlist,
+            metadata: { date: tomorrowWatchlistDate }
+          }
+        });
+      } catch (e) {
+        logger.warn('[EOD Review] Could not persist overnight watchlist:', e.message);
+      }
 
       // Send to Telegram — split into two messages to stay under 4096 char limit
       if (bot) {

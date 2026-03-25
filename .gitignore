@@ -23,6 +23,8 @@ build/
 *.db
 *.db-journal
 *.sql
+# Prisma migrations must be tracked — whitelist them
+!server/prisma/migrations/**/migration.sql
 
 # IDE
 .vscode/

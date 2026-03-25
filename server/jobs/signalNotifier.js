@@ -126,7 +126,7 @@ async function runStartupRecovery() {
   // Restore today's pre-market thesis
   if (!todayPreMarketThesis) {
     try {
-      const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
+      const startOfToday = getISTMidnight();
       const saved = await prisma.aIAnalysis.findFirst({
         where: { analysisType: 'PRE_MARKET_THESIS', createdAt: { gte: startOfToday } },
         orderBy: { createdAt: 'desc' }
@@ -144,7 +144,7 @@ async function runStartupRecovery() {
   // Restore overnight watchlist (today's EOD or yesterday's if today not yet generated)
   if (!tomorrowWatchlist) {
     try {
-      const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 1); cutoff.setHours(0, 0, 0, 0);
+      const cutoff = new Date(getISTMidnight().getTime() - 24 * 60 * 60 * 1000); // yesterday IST midnight
       const saved = await prisma.aIAnalysis.findFirst({
         where: { analysisType: 'OVERNIGHT_WATCHLIST', createdAt: { gte: cutoff } },
         orderBy: { createdAt: 'desc' }
@@ -184,7 +184,7 @@ async function runStartupRecovery() {
   }
 
   // Find active portfolios missing today's signals
-  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const today = getISTMidnight();
   const portfolios = await prisma.portfolio.findMany({
     where: { isActive: true, isPaused: false }
   });
@@ -215,7 +215,7 @@ async function runStartupRecovery() {
     // and the message was never delivered — send it now from the stored plan.
     if (totalMin >= 9 * 60) {
       try {
-        const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
+        const startOfToday = getISTMidnight();
         const warRoomSent = await prisma.aIAnalysis.count({
           where: { analysisType: 'WAR_ROOM', createdAt: { gte: startOfToday } }
         });
@@ -271,7 +271,7 @@ async function checkScanHealthAndRecover() {
 
   // ── Missed scan detection (25-min grace after each scheduled time) ────────
   const GRACE_MIN = 25;
-  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const today = getISTMidnight();
 
   for (const scan of SCAN_SCHEDULE_DEF) {
     const scanMin = scan.hour * 60 + scan.minute;
@@ -291,7 +291,7 @@ async function checkScanHealthAndRecover() {
     // DB guard: verify the scan really is missing before alerting.
     // Protects against heartbeat being wiped on restart after scans already ran.
     {
-      const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
+      const startOfToday = getISTMidnight();
 
       // For evening-playbook: check AIAnalysis records (not trade signals — may be zero on cash days)
       if (scan.name === 'evening-playbook') {
@@ -684,11 +684,8 @@ async function eodReview() {
     if (!telegramUser?.isActive || telegramUser?.isMuted) continue;
 
     try {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-
       const signals = await prisma.tradeSignal.findMany({
-        where: { portfolioId: portfolio.id, createdAt: { gte: today } },
+        where: { portfolioId: portfolio.id, createdAt: { gte: getISTMidnight() } },
         orderBy: { createdAt: 'asc' }
       });
 
@@ -949,14 +946,71 @@ async function syncAllUpstoxHoldingsAndExpireStaleSignals() {
       where: { isConnected: true }
     });
 
+    const allSoldHoldings = [];
+
     for (const integration of integrations) {
       const valid = await isTokenValid(integration.userId);
       if (!valid) continue;
 
       try {
-        await syncUpstoxHoldings(integration.userId);
+        const result = await syncUpstoxHoldings(integration.userId);
+        if (result.soldHoldings?.length > 0) {
+          allSoldHoldings.push(...result.soldHoldings);
+        }
       } catch (err) {
         logger.error(`Holdings sync failed for user ${integration.userId}:`, err.message);
+      }
+    }
+
+    // P&L tracking for external Upstox sells (done via Upstox app, not through the bot)
+    if (allSoldHoldings.length > 0) {
+      const bot = getBot();
+      for (const sold of allSoldHoldings) {
+        try {
+          if (!sold.sellPrice || sold.sellPrice <= 0) continue;
+
+          // Find the most recent executed BUY signal for this symbol/portfolio
+          const matchingBuy = await prisma.tradeSignal.findFirst({
+            where: {
+              portfolioId: sold.portfolioId,
+              symbol: sold.symbol,
+              side: 'BUY',
+              status: 'EXECUTED',
+              executedPrice: { not: null }
+            },
+            orderBy: { createdAt: 'desc' },
+            include: { portfolio: { include: { user: { include: { telegramUser: true } } } } }
+          });
+
+          if (matchingBuy?.executedPrice) {
+            const pnl = (sold.sellPrice - matchingBuy.executedPrice) * sold.quantity;
+            const outcome = pnl > 1 ? 'PROFIT' : pnl < -1 ? 'LOSS' : 'BREAKEVEN';
+            const pnlSign = pnl >= 0 ? '+' : '';
+
+            await prisma.tradeSignal.update({
+              where: { id: matchingBuy.id },
+              data: { exitPrice: sold.sellPrice, realizedPnl: pnl, outcome }
+            });
+
+            logger.info(`[External P&L] ${sold.symbol}: buy=₹${matchingBuy.executedPrice.toFixed(2)} → sell=₹${sold.sellPrice.toFixed(2)}, P&L=${pnlSign}₹${pnl.toFixed(2)} (${outcome})`);
+
+            const telegramUser = matchingBuy.portfolio?.user?.telegramUser;
+            if (bot && telegramUser?.isActive) {
+              const emoji = outcome === 'PROFIT' ? '🟢' : outcome === 'LOSS' ? '🔴' : '⚪';
+              await bot.sendMessage(
+                parseInt(telegramUser.telegramId),
+                `${emoji} *External Sell Detected — P&L Captured*\n\n` +
+                `*${sold.symbol}* — ${sold.quantity} shares\n` +
+                `Buy: ₹${matchingBuy.executedPrice.toFixed(2)} → Sell: ₹${sold.sellPrice.toFixed(2)}\n` +
+                `Realized P&L: *${pnlSign}₹${Math.abs(pnl).toFixed(2)}* (${outcome})\n\n` +
+                `_This sell was done via Upstox app (not through the bot). P&L has been recorded._`,
+                { parse_mode: 'Markdown' }
+              ).catch(e => logger.warn(`P&L alert failed for ${sold.symbol}:`, e.message));
+            }
+          }
+        } catch (pnlErr) {
+          logger.warn(`[External P&L] tracking failed for ${sold.symbol}:`, pnlErr.message);
+        }
       }
     }
 
@@ -1132,8 +1186,7 @@ async function generateSignalsForAllPortfolios() {
             const telegramUser = portfolio.user?.telegramUser;
             if (telegramUser) {
               // Check if we already sent a reminder today for this portfolio
-              const todayStart = new Date();
-              todayStart.setHours(0, 0, 0, 0);
+              const todayStart = getISTMidnight();
               const alreadySent = await prisma.alertHistory.count({
                 where: {
                   telegramUserId: telegramUser.id,
@@ -1424,6 +1477,66 @@ async function notifyPendingSignals() {
           continue;
         }
       }
+
+      // ─── LIMIT order escalation ──────────────────────────────────────────────
+      // A LIMIT BUY that has been pending for 2+ hours (notifyCount >= 3 ≈ 1.5h) and
+      // whose limit price is MORE than 0.5% below the current LTP needs intervention.
+      // The stock is trading ABOVE the limit — it won't fill passively.
+      // Send ONE escalation message (when notifyCount === 3) offering to switch to MARKET.
+      if (
+        signal.side === 'BUY' &&
+        signal.triggerType === 'LIMIT' &&
+        signal.notifyCount === 3 &&  // ~1.5-2h in, send escalation once
+        ltp && signal.triggerPrice
+      ) {
+        const limitPx = parseFloat(signal.triggerPrice);
+        const abovePct = ((ltp - limitPx) / limitPx) * 100;
+        if (abovePct > 0.5) {
+          // Stock is above limit — LIMIT won't fill. Offer MARKET escalation.
+          const chatId = parseInt(telegramUser.telegramId);
+          const ageMin = Math.floor((now - new Date(signal.createdAt).getTime()) / 60000);
+          const ageStr = ageMin >= 60 ? `${Math.floor(ageMin/60)}h ${ageMin%60}m` : `${ageMin}m`;
+
+          await withRetry(
+            () => bot.sendMessage(chatId,
+              `⏰ *LIMIT Order Not Filling — ${signal.symbol}*\n\n` +
+              `Your LIMIT BUY at ₹${limitPx.toFixed(2)} has been waiting *${ageStr}*.\n` +
+              `Stock is now at *₹${ltp.toFixed(2)}* — that's *${abovePct.toFixed(1)}% above* your limit.\n\n` +
+              `The price has moved away. Your order won't fill unless it drops back to ₹${limitPx.toFixed(2)}.\n\n` +
+              `*Options:*\n` +
+              `• *Switch to MARKET* — buy now at ₹${ltp.toFixed(2)} (current price). Executes immediately.\n` +
+              `• *Keep LIMIT* — wait for a pullback to ₹${limitPx.toFixed(2)}. Might not happen today.\n` +
+              `• *Dismiss* — cancel this signal entirely.`,
+              {
+                parse_mode: 'Markdown',
+                reply_markup: {
+                  inline_keyboard: [
+                    [
+                      { text: `⚡ Switch to MARKET @ ₹${ltp.toFixed(2)}`, callback_data: `sig_mkt_${signal.id}` },
+                    ],
+                    [
+                      { text: '⏳ Keep LIMIT — wait for pullback', callback_data: `sig_snooze_${signal.id}` },
+                      { text: '❌ Dismiss', callback_data: `sig_dismiss_${signal.id}` }
+                    ]
+                  ]
+                }
+              }
+            ),
+            `LIMIT escalation #${signal.id} to ${chatId}`
+          );
+
+          // Mark notified — increment so escalation only fires once
+          await prisma.tradeSignal.update({
+            where: { id: signal.id },
+            data: { lastNotifiedAt: now, notifyCount: { increment: 1 } }
+          });
+
+          logger.info(`[LIMIT Escalation] Signal #${signal.id} ${signal.symbol}: limit=₹${limitPx.toFixed(2)}, LTP=₹${ltp.toFixed(2)}, above by ${abovePct.toFixed(1)}%`);
+          sentCount++;
+          continue; // Skip the regular reminder for this signal
+        }
+      }
+      // ─────────────────────────────────────────────────────────────────────────
 
       try {
         const chatId = parseInt(telegramUser.telegramId);
@@ -1842,13 +1955,12 @@ async function generateSignalsConditional() {
       p.user?.telegramUser?.isActive && !p.user?.telegramUser?.isMuted
     );
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const today = getISTMidnight();
 
     let generated = 0;
     for (const portfolio of eligible) {
       try {
-        // Check if there are active signals today
+        // Check if there are active signals today (IST)
         const activeSignals = await prisma.tradeSignal.count({
           where: {
             portfolioId: portfolio.id,

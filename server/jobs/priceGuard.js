@@ -20,7 +20,7 @@
 
 import prisma from '../services/prisma.js';
 import { getUpstoxLTP } from '../services/upstoxMarketData.js';
-import { isTradingDay } from '../utils/marketHolidays.js';
+import { isTradingDay, getISTMidnight } from '../utils/marketHolidays.js';
 import logger from '../services/logger.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -136,7 +136,7 @@ async function sendAlert(chatId, { symbol, holding, ltp, type, pnlPct, pnlAmt, s
  */
 async function sendTrailMilestoneAlert(chatId, tgUserId, { symbol, avgPrice, newStop, ltp, pnlPct, milestone }) {
   try {
-    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const today = getISTMidnight();
     const alreadySent = await prisma.alertHistory.count({
       where: { telegramUserId: tgUserId, alertType: milestone, symbol, createdAt: { gte: today } }
     });
@@ -224,7 +224,7 @@ export async function runPriceGuard() {
       return;
     }
 
-    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const today = getISTMidnight();
 
     for (const portfolio of eligible) {
       const profitTargetPct = parseFloat(portfolio.profitTargetPct || 10) / 100;

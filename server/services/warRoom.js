@@ -9,6 +9,7 @@ import { getUpstoxLTP } from './upstoxMarketData.js';
 import { ANALYST_IDENTITY, MARKET_DATA_INSTRUCTION, ELITE_TRADER_EDGE, buildAccountabilityScorecard } from './analystPrompts.js';
 import { buildProfileBrief } from './advancedScreener.js';
 import { getEffectiveCash } from './capitalGuard.js';
+import { getISTMidnight } from '../utils/marketHolidays.js';
 import logger from './logger.js';
 
 const anthropic = new Anthropic({
@@ -20,12 +21,18 @@ const anthropic = new Anthropic({
 // ============================================
 
 export async function getTodayWarRoomPlan(portfolioId) {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  const istMidnight = getISTMidnight();
 
-  const target = await prisma.dailyTarget.findUnique({
-    where: { portfolioId_date: { portfolioId, date: today } }
+  // Try IST midnight first (current standard), then UTC midnight (legacy records from before IST fix)
+  let target = await prisma.dailyTarget.findUnique({
+    where: { portfolioId_date: { portfolioId, date: istMidnight } }
   });
+  if (!target || !target.warRoomPlan) {
+    const utcMidnight = new Date(); utcMidnight.setUTCHours(0, 0, 0, 0);
+    target = await prisma.dailyTarget.findUnique({
+      where: { portfolioId_date: { portfolioId, date: utcMidnight } }
+    });
+  }
 
   if (!target || !target.warRoomPlan) return null;
 
@@ -205,9 +212,8 @@ ${portfolio.broker === 'UPSTOX' && portfolio.apiEnabled ? `UPSTOX LIVE TRADING C
     plan.generatedAt = new Date().toISOString();
     plan.version = 1;
 
-    // Store in DailyTarget
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    // Store in DailyTarget using IST midnight as the date key
+    const today = getISTMidnight();
 
     await prisma.dailyTarget.upsert({
       where: { portfolioId_date: { portfolioId, date: today } },
@@ -338,13 +344,11 @@ export async function checkDeviations(portfolioId) {
     const behindPct = thresholds.targetBehindPctAtNoon || 50;
     if (targetAmount > 0 && intradayPL < targetAmount * (1 - behindPct / 100)) {
       // Check if there are pending signals that might close the gap
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
       const pendingSignals = await prisma.tradeSignal.count({
         where: {
           portfolioId,
           status: { in: ['PENDING', 'SNOOZED'] },
-          createdAt: { gte: today }
+          createdAt: { gte: getISTMidnight() }
         }
       });
       if (pendingSignals === 0) {
@@ -366,12 +370,17 @@ export async function checkDeviations(portfolioId) {
 // ============================================
 
 export async function triggerRecalibration(portfolioId, reason) {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  const istMidnight = getISTMidnight();
+  const utcMidnight = new Date(); utcMidnight.setUTCHours(0, 0, 0, 0);
 
-  const target = await prisma.dailyTarget.findUnique({
-    where: { portfolioId_date: { portfolioId, date: today } }
+  let target = await prisma.dailyTarget.findUnique({
+    where: { portfolioId_date: { portfolioId, date: istMidnight } }
   });
+  if (!target) {
+    target = await prisma.dailyTarget.findUnique({
+      where: { portfolioId_date: { portfolioId, date: utcMidnight } }
+    });
+  }
 
   if (!target || !target.warRoomPlan) {
     logger.warn(`No war room plan to recalibrate for portfolio ${portfolioId}`);
@@ -510,13 +519,11 @@ export async function buildHourlyPulseMessage(portfolioId, deviationResult) {
   }
 
   // Check for pending signals
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
   const pendingSignals = await prisma.tradeSignal.findMany({
     where: {
       portfolioId,
       status: { in: ['PENDING', 'SNOOZED'] },
-      createdAt: { gte: today }
+      createdAt: { gte: getISTMidnight() }
     }
   });
 
@@ -576,12 +583,17 @@ export async function generateEveningPlaybook(portfolioId) {
 
   const profileBrief = buildProfileBrief(portfolio);
 
-  // Get today's target for actual results
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const todayTarget = await prisma.dailyTarget.findUnique({
-    where: { portfolioId_date: { portfolioId, date: today } }
+  // Get today's target for actual results (try IST midnight, fall back to UTC for legacy records)
+  const _istMidnight = getISTMidnight();
+  const _utcMidnight = new Date(); _utcMidnight.setUTCHours(0, 0, 0, 0);
+  let todayTarget = await prisma.dailyTarget.findUnique({
+    where: { portfolioId_date: { portfolioId, date: _istMidnight } }
   });
+  if (!todayTarget) {
+    todayTarget = await prisma.dailyTarget.findUnique({
+      where: { portfolioId_date: { portfolioId, date: _utcMidnight } }
+    });
+  }
 
   const earnedActual = parseFloat(todayTarget?.earnedActual || 0);
   const targetAmount = parseFloat(todayTarget?.aiTarget || todayTarget?.userTarget || 0);

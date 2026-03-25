@@ -531,7 +531,9 @@ export async function syncUpstoxHoldings(userId) {
       positionAdjustments.set(key, {
         sellQty: pos.day_sell_quantity || 0,
         buyQty: pos.day_buy_quantity || 0,
-        lastPrice: parseFloat(pos.last_price || 0)
+        lastPrice: parseFloat(pos.last_price || 0),
+        // sell_price = average price of today's sells (Upstox field)
+        sellPrice: parseFloat(pos.sell_price || pos.average_sell_price || pos.last_price || 0)
       });
     }
 
@@ -587,6 +589,7 @@ export async function syncUpstoxHoldings(userId) {
     });
 
     let synced = 0, created = 0, removed = 0;
+    const soldHoldings = []; // populated when a holding disappears — for P&L tracking
 
     for (const portfolio of portfolios) {
       const existingMap = new Map();
@@ -629,12 +632,23 @@ export async function syncUpstoxHoldings(userId) {
         }
       }
 
-      // Remove holdings that no longer exist (fully sold)
+      // Remove holdings that no longer exist (fully sold — including external Upstox app sells)
       for (const [key, holding] of existingMap) {
         if (!seenKeys.has(key)) {
           await prisma.holding.delete({ where: { id: holding.id } });
           removed++;
           logger.info(`[Capital Guard] Upstox holding removed (sold): ${holding.symbol} (portfolio ${portfolio.id})`);
+          // Capture sell price from today's positions for P&L tracking
+          const posAdj = positionAdjustments.get(key);
+          const sellPrice = posAdj?.sellQty > 0 ? posAdj.sellPrice : (posAdj?.lastPrice || 0);
+          soldHoldings.push({
+            symbol: holding.symbol,
+            exchange: holding.exchange,
+            portfolioId: portfolio.id,
+            quantity: holding.quantity,
+            avgPrice: parseFloat(holding.avgPrice),
+            sellPrice
+          });
         }
       }
     }
@@ -648,10 +662,10 @@ export async function syncUpstoxHoldings(userId) {
     }
 
     logger.info(`[Capital Guard] syncUpstoxHoldings: synced=${synced}, created=${created}, removed=${removed} for user ${userId}`);
-    return { synced, created, removed };
+    return { synced, created, removed, soldHoldings };
   } catch (error) {
     logger.error(`[Capital Guard] syncUpstoxHoldings failed for user ${userId}:`, error.message);
-    return { synced: 0, created: 0, removed: 0 };
+    return { synced: 0, created: 0, removed: 0, soldHoldings: [] };
   }
 }
 

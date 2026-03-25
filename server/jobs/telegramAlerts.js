@@ -5,7 +5,7 @@ import { getBot } from '../services/telegramBot.js';
 import { generateWarRoomPlan, checkDeviations, triggerRecalibration, buildHourlyPulseMessage, generateEveningPlaybook } from '../services/warRoom.js';
 import { validateSignals } from '../services/capitalGuard.js';
 import logger from '../services/logger.js';
-import { isTradingDay, isMarketHoliday } from '../utils/marketHolidays.js';
+import { isTradingDay, isMarketHoliday, getISTMidnight } from '../utils/marketHolidays.js';
 
 // ============================================
 // HELPER: Get User Portfolios with Holdings
@@ -269,13 +269,13 @@ async function runHourlySmartPulse() {
               await sendTelegramMessage(chatId, pulseMsg, { parse_mode: 'Markdown' });
             }
 
-            // Update earnedActual
+            // Update earnedActual (range covers both UTC and IST midnight stored records)
             if (deviationResult.intradayPL !== undefined) {
-              const today = new Date();
-              today.setHours(0, 0, 0, 0);
+              const istStart = getISTMidnight();
+              const istEnd = new Date(istStart.getTime() + 24 * 60 * 60 * 1000);
               try {
                 await prisma.dailyTarget.updateMany({
-                  where: { portfolioId: portfolio.id, date: today },
+                  where: { portfolioId: portfolio.id, date: { gte: istStart, lt: istEnd } },
                   data: {
                     earnedActual: deviationResult.intradayPL,
                     earnedUpdatedAt: new Date()
@@ -312,11 +312,12 @@ async function runEndOfDaySnapshot() {
   try {
     logger.info('Running End-of-Day Snapshot...');
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    // Range covers both UTC midnight and IST midnight records for today's IST calendar day
+    const _istStart = getISTMidnight();
+    const _istEnd = new Date(_istStart.getTime() + 24 * 60 * 60 * 1000);
 
     const targets = await prisma.dailyTarget.findMany({
-      where: { date: today },
+      where: { date: { gte: _istStart, lt: _istEnd } },
       include: {
         portfolio: {
           include: {
@@ -515,13 +516,12 @@ async function runEveningPlaybook() {
                   ? await validateSignals(rawSignals, portfolio.id)
                   : [];
 
-                // Dedup: skip symbols already covered by active signals today
-                const today = new Date(); today.setHours(0, 0, 0, 0);
+                // Dedup: skip symbols already covered by active signals today (IST boundary)
                 const activeSignals = await prisma.tradeSignal.findMany({
                   where: {
                     portfolioId: portfolio.id,
                     status: { in: ['PENDING', 'ACKED', 'SNOOZED', 'PLACING'] },
-                    createdAt: { gte: today }
+                    createdAt: { gte: getISTMidnight() }
                   },
                   select: { symbol: true, side: true }
                 });

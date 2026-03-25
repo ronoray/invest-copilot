@@ -8,6 +8,7 @@ import { buildHoldingsTechnicals, getMarketRegime } from './technicalAnalysis.js
 import { fetchPreMarketNews, fetchRecentIPOContext } from './marketNews.js';
 import { getUpstoxLTP } from './upstoxMarketData.js';
 import { scanTradingUniverse } from './opportunityScanner.js';
+import { getISTMidnight } from '../utils/marketHolidays.js';
 import logger from './logger.js';
 
 const anthropic = new Anthropic({
@@ -63,13 +64,12 @@ export async function generateTradeSignals(portfolioId, extraContext = '') {
 
   // Also fetch active DB signals (PENDING/ACKED/SNOOZED/PLACING) — these are not on Upstox yet
   // but represent the user's current intent. We must not regenerate signals for the same symbol:side.
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  // Use IST midnight so evening playbook signals (created at 7:30 PM IST = 2 PM UTC) are included.
   const activeDbSignals = await prisma.tradeSignal.findMany({
     where: {
       portfolioId,
       status: { in: ['PENDING', 'ACKED', 'SNOOZED', 'PLACING'] },
-      createdAt: { gte: today }
+      createdAt: { gte: getISTMidnight() }
     },
     select: { symbol: true, side: true }
   });

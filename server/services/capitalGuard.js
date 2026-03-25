@@ -688,17 +688,18 @@ export async function pollOrderUntilSettled({ userId, orderId, dbOrderId, signal
       logger.info(`Poll attempt ${attempt}/${maxAttempts} for order ${orderId}: ${orderStatus}`);
 
       if (SETTLED_SUCCESS.includes(orderStatus)) {
-        // Order confirmed — mark signal EXECUTED
+        // Order confirmed — mark signal EXECUTED and capture fill price
+        const fillPrice = parseFloat(status.averagePrice || status.average_price || 0) || null;
         await prisma.tradeSignal.update({
           where: { id: signalId },
-          data: { status: 'EXECUTED' }
+          data: { status: 'EXECUTED', executedPrice: fillPrice }
         });
 
         // Sync portfolio cash and holdings
         await updateCashOnExecution(dbOrderId);
         await upsertHoldingOnExecution(dbOrderId);
 
-        logger.info(`Signal #${signalId} confirmed: order ${orderId} = ${orderStatus}`);
+        logger.info(`Signal #${signalId} confirmed: order ${orderId} = ${orderStatus}, fill=₹${fillPrice || '?'}`);
 
         // DDPI: After SELL confirmed, expire any duplicate SELL signals for same stock
         if (signal?.side === 'SELL' && signal?.portfolioId && signal?.symbol) {

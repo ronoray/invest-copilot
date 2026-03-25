@@ -629,7 +629,7 @@ model TradeSignal {
   confidence      Int      @default(50) // 0-100
   rationale       String?  @db.Text
 
-  status          String   @default("PENDING") // PENDING, ACKED, SNOOZED, DISMISSED, EXPIRED, EXECUTED
+  status          String   @default("PENDING") // PENDING, ACKED, SNOOZED, DISMISSED, EXPIRED, EXECUTED, PLACING
 
   // Telegram notification tracking
   lastNotifiedAt  DateTime?
@@ -639,6 +639,12 @@ model TradeSignal {
   upstoxOrderId   Int?     // Links to UpstoxOrder when executed via Telegram
 
   expiresAt       DateTime? // End of trading day
+
+  // Outcome tracking — filled in when the order settles
+  executedPrice   Float?    // Actual fill price from Upstox (avg_price from order)
+  exitPrice       Float?    // Price at which this position was later closed (for BUY signals)
+  realizedPnl     Float?    // Net P&L: (exitPrice - executedPrice) * quantity for BUY; triggerPrice - executedPrice for SELL
+  outcome         String?   // PROFIT | LOSS | BREAKEVEN — set when position is closed
 
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt

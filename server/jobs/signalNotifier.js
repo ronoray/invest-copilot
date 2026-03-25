@@ -1628,9 +1628,13 @@ async function pollPendingOrders() {
         if (['complete', 'traded'].includes(orderStatus)) {
           // Success — confirm signal, update cash and holdings immediately
           if (linkedSignal.status !== 'EXECUTED') {
+            const fillPrice = parseFloat(status.averagePrice || status.average_price || 0) || null;
             await prisma.tradeSignal.update({
               where: { id: linkedSignal.id },
-              data: { status: 'EXECUTED' }
+              data: {
+                status: 'EXECUTED',
+                executedPrice: fillPrice
+              }
             });
             // Sync cash and holdings so the DB reflects the fill without waiting for the next scan
             await updateCashOnExecution(order.id).catch(e =>
@@ -1639,6 +1643,36 @@ async function pollPendingOrders() {
             await upsertHoldingOnExecution(order.id).catch(e =>
               logger.warn(`pollPendingOrders: upsertHolding failed for order ${order.id}: ${e.message}`)
             );
+          }
+
+          // For SELL fills: close out the matching BUY signal with P&L data
+          const sellFillPrice = parseFloat(status.averagePrice || status.average_price || 0) || null;
+          if (linkedSignal.side === 'SELL' && sellFillPrice) {
+            try {
+              // Find the most recent EXECUTED BUY signal for this symbol/portfolio
+              const matchingBuy = await prisma.tradeSignal.findFirst({
+                where: {
+                  portfolioId: linkedSignal.portfolioId,
+                  symbol: linkedSignal.symbol,
+                  side: 'BUY',
+                  status: 'EXECUTED',
+                  executedPrice: { not: null }
+                },
+                orderBy: { createdAt: 'desc' }
+              });
+
+              if (matchingBuy?.executedPrice) {
+                const pnl = (sellFillPrice - matchingBuy.executedPrice) * linkedSignal.quantity;
+                const outcome = pnl > 1 ? 'PROFIT' : pnl < -1 ? 'LOSS' : 'BREAKEVEN';
+                await prisma.tradeSignal.update({
+                  where: { id: matchingBuy.id },
+                  data: { exitPrice: sellFillPrice, realizedPnl: pnl, outcome }
+                });
+                logger.info(`[P&L] Signal #${matchingBuy.id} ${matchingBuy.symbol}: buy=₹${matchingBuy.executedPrice.toFixed(2)} → sell=₹${sellFillPrice.toFixed(2)}, P&L=₹${pnl.toFixed(2)} (${outcome})`);
+              }
+            } catch (pnlErr) {
+              logger.warn(`P&L tracking failed for signal #${linkedSignal.id}:`, pnlErr.message);
+            }
           }
 
           if (bot && chatId && telegramUser.isActive) {

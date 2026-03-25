@@ -1835,19 +1835,44 @@ Use /mute to disable all alerts`;
 
         // Open LIMIT orders — sitting on the exchange, waiting to fill
         if (openOrders.length > 0) {
+          // Batch-fetch LTP for all open order symbols so we can show the gap
+          const openSymbols = [...new Set(openOrders.map(o =>
+            (o.trading_symbol || o.tradingsymbol || '').replace(/-EQ$/, '').trim()).filter(Boolean))];
+          let openLTPMap = new Map();
+          try {
+            if (openSymbols.length > 0) openLTPMap = await getUpstoxLTP(openSymbols);
+          } catch (_) {}
+
           out += `━━━━━━━━━━━━━━━━━━━\n`;
           out += `*⏳ Open Orders — waiting to fill (${openOrders.length}):*\n`;
-          out += `_These orders are live on Upstox. No action needed — they fill automatically when the price hits the target._\n`;
           for (const o of openOrders) {
             const side = (o.transaction_type || '').toUpperCase();
             const sideEmoji = side === 'BUY' ? '🟢' : '🔴';
-            const price = o.price > 0 ? `₹${o.price}` : 'market';
+            const limitPrice = parseFloat(o.price || 0);
             const pending = o.pending_quantity || o.quantity || 0;
             const sym = (o.trading_symbol || o.tradingsymbol || '').replace(/-EQ$/, '');
-            const action = side === 'BUY'
-              ? `fills when ${sym} drops to ${price}`
-              : `fills when ${sym} rises to ${price}`;
-            out += `${sideEmoji} ${side} ${pending}× *${sym}* @ ${price}  _← ${action}_\n`;
+            const ltp = openLTPMap.get(sym)?.price || 0;
+
+            let gapStr = '';
+            if (ltp > 0 && limitPrice > 0) {
+              const gapPct = ((ltp - limitPrice) / limitPrice * 100);
+              const gapRs = (ltp - limitPrice).toFixed(2);
+              const sign = gapPct >= 0 ? '+' : '';
+              if (side === 'BUY') {
+                // For BUY: LTP above limit = price hasn't dropped yet (gap to fill)
+                gapStr = gapPct > 0
+                  ? `  _Now ₹${ltp.toFixed(2)} — ${sign}${gapPct.toFixed(1)}% above limit, waiting for dip_`
+                  : `  _Now ₹${ltp.toFixed(2)} — AT/BELOW limit, should fill soon!_`;
+              } else {
+                // For SELL: LTP below limit = price hasn't risen yet
+                gapStr = gapPct < 0
+                  ? `  _Now ₹${ltp.toFixed(2)} — ${Math.abs(gapPct).toFixed(1)}% below target, waiting for rise_`
+                  : `  _Now ₹${ltp.toFixed(2)} — AT/ABOVE target, should fill soon!_`;
+              }
+            }
+
+            const priceStr = limitPrice > 0 ? `₹${limitPrice.toFixed(2)}` : 'market';
+            out += `${sideEmoji} ${side} ${pending}× *${sym}* @ ${priceStr}${gapStr}\n`;
           }
         }
 

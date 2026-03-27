@@ -594,6 +594,10 @@ ${reviewLine ? `\n${reviewLine}` : ''}`;
           } catch (playbookErr) {
             logger.error(`Evening playbook failed for portfolio ${portfolio.id}: ${playbookErr?.message || String(playbookErr)}`);
             sections.push(`📁 *${portfolioLabel(portfolio)}*\n⚠️ Playbook generation failed.`);
+            // Save sentinel so watchdog doesn't treat this as a missed scan and spam recovery alerts
+            try {
+              await saveAnalysis(telegramUser.user.id, 'EVENING_PLAYBOOK', JSON.stringify({ failed: true, error: playbookErr?.message }), { time: 'evening', portfolioId: portfolio.id });
+            } catch (_) { /* ignore */ }
           }
         }
 

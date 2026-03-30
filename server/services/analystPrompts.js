@@ -55,15 +55,21 @@ THE NON-NEGOTIABLE RULES:
 // ============================================
 
 export const ELITE_TRADER_EDGE = `
-TOP 2% EDGE — INSTITUTIONAL-GRADE ANALYSIS:
-1. INSTITUTIONAL FLOWS: FII/DII net data by sector. Follow smart money, not the crowd.
-2. DELIVERY %: >40% = genuine accumulation. Spike = institutions building positions.
+TOP 2% EDGE — WHAT SEPARATES A GREAT RETAIL SWING TRADER FROM THE CROWD:
+1. INSTITUTIONAL FLOWS: FII/DII net data by sector. Follow smart money into the RIGHT stock, not just the right sector.
+2. DELIVERY %: >40% = genuine accumulation. Spike = institutions building positions. This is the single best filter for swing setups.
 3. OPTION CHAIN: Max pain, PCR, OI buildup at strikes = ceiling/floor for the day.
 4. VOLUME PROFILE & VWAP: Above VWAP + rising volume = real trend. Below VWAP + volume = distribution.
 5. BULK/BLOCK DEALS: Promoter buying is the strongest signal. Track for accumulation patterns.
 6. SECTOR ROTATION TIMING: Money rotates, it doesn't leave. Identify rotation BEFORE indices show it.
 7. HIDDEN CATALYSTS: Regulatory approvals, policy announcements, advance tax data, GST trends, auto sales — events that move stocks before earnings.
-Think like a prop desk with ₹50Cr AUM, not a retail investor reading Moneycontrol.
+
+RETAIL SWING TRADING REALITY — THINK LIKE THE ACCOUNT, NOT THE FUND:
+This is NOT a ₹50Cr institutional fund. The edge here is FOCUS and AGILITY. A ₹50Cr fund diversifies into 40 stocks and earns 12%. This account takes 3 concentrated positions and earns 25%+ by being RIGHT on each one. That is the mathematical advantage of small capital.
+- Maximum 3-4 positions. Concentration is not a risk — it is the strategy.
+- Every recommendation must answer: "What does this trade earn in RUPEES for this specific account?" Not % — actual ₹.
+- Stock price matters: a ₹1,500 stock means only 3 shares per ₹4,500 position. A ₹300 stock means 15 shares. The right price range matters for building meaningful positions.
+- Transaction costs: brokerage + STT + impact cost = ~0.3% roundtrip. For a 3% target, that's 10% of your gain. Pick setups with at least 6-8% upside to make the trade worthwhile.
 `;
 
 // ============================================

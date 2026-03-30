@@ -641,18 +641,30 @@ Target: ₹${targetAmount.toFixed(0)} | Earned: ${earnedActual >= 0 ? '+' : ''}�
 CURRENT HOLDINGS:
 ${holdingsBreakdown || 'No holdings'}
 
-CAPITAL RULES FOR tomorrowPlays:
-- AVAILABLE CASH (verified from Upstox): ₹${effectiveCash.toFixed(0)}
-- Number of BUY signals = however many fit at 15-20% per position (at ₹${effectiveCash.toFixed(0)} that is ${Math.floor(effectiveCash / (effectiveCash * 0.15))} positions max — scale naturally with capital)
-- Total BUY cost (sum of quantity × price) MUST NOT exceed ₹${effectiveCash.toFixed(0)}
-- Per-position size: 15–20% of cash (₹${Math.round(effectiveCash * 0.15)} – ₹${Math.round(effectiveCash * 0.20)} per trade)
-- Show math for each BUY: e.g. "10 × ₹1,500 = ₹15,000 (27% of ₹${effectiveCash.toFixed(0)})"
-- SELL only stocks listed in CURRENT HOLDINGS above. No phantom sells.
-- If no high-conviction setup fits within this capital, return an empty tomorrowPlays array. That is the correct call.
-${portfolio.broker === 'UPSTOX' && portfolio.apiEnabled ? `- Tomorrow's plays become executable Telegram signals at tomorrow's open.
-- ORDER TYPE: confidence ≥ 85 → MARKET (fills immediately). confidence < 85 → LIMIT within 0.5% of current price.
-- CNC delivery equity only — no intraday, no F&O.
-` : ''}
+${(() => {
+  const maxPos = Math.min(4, Math.max(2, Math.floor(effectiveCash / 3000)));
+  const perPos = Math.floor(effectiveCash / maxPos / 100) * 100;
+  const perPosTarget = Math.round(perPos * 0.10);
+  const maxPrice = Math.floor(perPos / 10);
+  return `CAPITAL RULES FOR tomorrowPlays — THIS IS NON-NEGOTIABLE:
+AVAILABLE CASH: ₹${effectiveCash.toFixed(0)} (verified live from Upstox)
+MAX POSITIONS: ${maxPos} (concentrated swing trading — NOT diversification)
+PER-POSITION BUDGET: ₹${perPos.toLocaleString('en-IN')} (₹${effectiveCash.toFixed(0)} ÷ ${maxPos} positions)
+TARGET PER POSITION: ₹${perPosTarget.toLocaleString('en-IN')} gain (10% return on ₹${perPos.toLocaleString('en-IN')} = achievable 3-10 day swing)
+STOCK PRICE CAP: ≤ ₹${maxPrice}/share (to get 10+ shares at ₹${perPos.toLocaleString('en-IN')} budget — meaningful position)
+
+For EVERY BUY in tomorrowPlays, you MUST fill:
+- quantity: exact shares (= floor(₹${perPos.toLocaleString('en-IN')} ÷ price))
+- price: specific entry price (LIMIT) or current market price (MARKET)
+- rationale: state in rupees — "X shares × ₹Y = ₹${perPos.toLocaleString('en-IN')} invested, target ₹Z gain in N days, stop at ₹W (R:R = N:1)"
+- capitalUsed: exact math (e.g. "15 × ₹280 = ₹4,200 (${Math.round(perPos/effectiveCash*100)}% of ₹${effectiveCash.toFixed(0)})")
+
+HARD RULES:
+- Total BUY cost MUST NOT exceed ₹${effectiveCash.toFixed(0)}
+- SELL only stocks in CURRENT HOLDINGS above. No phantom sells.
+- NO ETFs (NIFTYBEES, BANKBEES, GOLDBEES, etc.) — these are index returns, not alpha
+- Every recommendation must be SPECIFIC to this account: name the stock, name the rupee gain, name the risk. Generic "good setup" language is REJECTED.${portfolio.broker === 'UPSTOX' && portfolio.apiEnabled ? `\n- Tomorrow's plays become executable Telegram signals. ORDER TYPE: confidence ≥ 85 → MARKET. confidence 78-84 → LIMIT within 0.5% of current price. CNC delivery equity only.` : ''}`;
+})()}
 NEXT TRADING DAY CONTEXT:
 ${(() => {
   const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
@@ -714,7 +726,7 @@ Respond with ONLY valid JSON (no markdown):
     // Cap tomorrowPlays BUY signals to what actually fits in available cash (capital-based, not fixed)
     const buys = (playbook.tomorrowPlays || []).filter(p => p.action === 'BUY');
     const sells = (playbook.tomorrowPlays || []).filter(p => p.action === 'SELL');
-    const maxPositions = Math.max(1, Math.floor(effectiveCash / (effectiveCash * 0.15))); // positions that fit at 15% each
+    const maxPositions = Math.min(4, Math.max(2, Math.floor(effectiveCash / 3000))); // realistic positions for this capital
     if (buys.length > maxPositions) {
       buys.sort((a, b) => (b.price || 0) - (a.price || 0));
       logger.info(`[EveningPlaybook] Trimmed ${buys.length - maxPositions} excess BUY signals (capital cap: ${maxPositions} positions)`);

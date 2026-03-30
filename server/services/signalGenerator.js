@@ -81,7 +81,7 @@ export async function generateTradeSignals(portfolioId, extraContext = '') {
   // Build portfolio audit, trajectory, and growth directive
   const portfolioAudit  = buildPortfolioAudit(portfolio, effectiveCash, reservedCash);
   const trajectory      = buildPortfolioTrajectory(portfolio);
-  const growthDirective = buildGrowthDirective(portfolio);
+  const growthDirective = buildGrowthDirective(portfolio, effectiveCash);
 
   // Get today's target for context
   const today = getISTMidnight();

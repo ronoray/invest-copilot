@@ -271,28 +271,68 @@ export function buildPortfolioTrajectory(portfolio) {
 }
 
 /**
- * Build growth directive text based on portfolio risk profile.
- * This frames the AI's approach to signal generation.
+ * Build growth directive — capital-aware and trajectory-aware.
+ * Computes actual rupee targets based on the portfolio's specific state.
+ * This is what makes recommendations personal, not generic.
  *
- * @param {object} portfolio - Portfolio object
+ * @param {object} portfolio - Portfolio object with holdings
+ * @param {number} [effectiveCash] - Available cash (optional, uses portfolio.availableCash if not passed)
  * @returns {string} Growth directive text
  */
-export function buildGrowthDirective(portfolio) {
-  const riskProfile = portfolio?.riskProfile || 'BALANCED';
+export function buildGrowthDirective(portfolio, effectiveCash) {
+  if (!portfolio) return '';
 
-  if (riskProfile === 'AGGRESSIVE') {
-    return `GROWTH DIRECTIVE (AGGRESSIVE):
-Deploy ALL idle cash aggressively. Target 25%+ annual returns. Accept higher volatility. Prefer high-growth small/mid caps with momentum. If a holding is underperforming (P&L < -10% with no catalyst), EXIT and redeploy capital to better opportunities. Every idle rupee is a missed opportunity.`;
+  const startingCapital = parseFloat(portfolio.startingCapital || 0);
+  const availableCash   = effectiveCash ?? parseFloat(portfolio.availableCash || 0);
+  const holdings        = portfolio.holdings || [];
+  const totalWithdrawn  = parseFloat(portfolio.totalWithdrawn || 0);
+
+  const totalCurrent    = holdings.reduce((s, h) => s + h.quantity * parseFloat(h.currentPrice || h.avgPrice), 0);
+  const totalValue      = totalCurrent + availableCash;
+  const totalWealth     = totalValue + totalWithdrawn;
+  const totalPnL        = totalWealth - startingCapital;
+  const totalPnLPct     = startingCapital > 0 ? (totalPnL / startingCapital) * 100 : 0;
+
+  // Actual position sizing for this account
+  const maxPositions      = Math.min(4, Math.max(2, Math.floor(availableCash / 3000)));
+  const perPositionBudget = maxPositions > 0 ? Math.floor(availableCash / maxPositions / 100) * 100 : availableCash;
+  const perPositionTarget = Math.round(perPositionBudget * 0.10); // 10% gain per position = realistic swing target
+  const totalTargetGain   = perPositionTarget * maxPositions;
+
+  // What stock price range makes sense? Need 10+ shares per position
+  const maxStockPrice = Math.floor(perPositionBudget / 10);
+
+  // Recovery state
+  const inDrawdown      = totalPnLPct < -2;
+  const recoveryNeeded  = inDrawdown ? Math.abs(totalPnL) : 0;
+  const monthlyTargetPct = parseFloat(portfolio.profitTargetPct || 5);
+  const monthlyTargetAmt = startingCapital * monthlyTargetPct / 100;
+
+  let directive = `=== GROWTH DIRECTIVE — THIS ACCOUNT, THIS CAPITAL ===\n`;
+
+  directive += `Available capital: ₹${availableCash.toLocaleString('en-IN')} | Total portfolio value: ₹${totalValue.toLocaleString('en-IN')}\n`;
+  directive += `P&L since inception: ${totalPnL >= 0 ? '+' : ''}₹${totalPnL.toFixed(0)} (${totalPnLPct >= 0 ? '+' : ''}${totalPnLPct.toFixed(1)}% on ₹${startingCapital.toLocaleString('en-IN')} starting capital)\n`;
+
+  if (inDrawdown) {
+    directive += `\n🔴 IN DRAWDOWN — ₹${recoveryNeeded.toFixed(0)} below starting capital.\n`;
+    directive += `Recovery target first, then growth. The monthly target of ${monthlyTargetPct}% (₹${monthlyTargetAmt.toFixed(0)}) is secondary to getting back above ₹${startingCapital.toLocaleString('en-IN')}.\n`;
   }
 
-  if (riskProfile === 'CONSERVATIVE') {
-    return `GROWTH DIRECTIVE (CONSERVATIVE):
-Maintain 20% cash reserve. Target 12-15% annual returns. Prefer large caps with dividends and strong fundamentals. Only exit positions below -20% or with fundamentally broken thesis. Prioritize capital preservation over aggressive growth.`;
-  }
+  directive += `\nPOSITION SIZING FOR THIS ACCOUNT:\n`;
+  directive += `- Max ${maxPositions} positions (concentrated, not diversified — this is swing trading)\n`;
+  directive += `- Budget per position: ₹${perPositionBudget.toLocaleString('en-IN')} (deploy all available cash across ${maxPositions} trades)\n`;
+  directive += `- Target gain per position: ₹${perPositionTarget.toLocaleString('en-IN')} (10% return on ₹${perPositionBudget.toLocaleString('en-IN')}) — achievable in 3-10 trading days on a good setup\n`;
+  directive += `- Portfolio-level gain target: ₹${totalTargetGain.toLocaleString('en-IN')} if all ${maxPositions} positions hit target\n`;
+  directive += `- Stock price sweet spot: ≤ ₹${maxStockPrice} per share (gets 10+ shares at ₹${perPositionBudget.toLocaleString('en-IN')} budget — meaningful exposure)\n`;
 
-  // BALANCED / MODERATE / default
-  return `GROWTH DIRECTIVE (BALANCED):
-Deploy idle cash above 10% of capital. Target 15-20% annual returns. Balance growth and stability with a mix of large and mid caps. Trim underperformers below -15% that show no recovery signs. Maintain diversification across sectors.`;
+  directive += `\nWHAT MAKES A RECOMMENDATION SPECIFIC (NOT GENERIC):\n`;
+  directive += `- It names the exact stock, exact entry price, exact target, exact stop. No vague "buy near support".\n`;
+  directive += `- It states: "At ₹${perPositionBudget.toLocaleString('en-IN')}, this buys X shares. Target ₹Y gain. Stop at ₹Z loss. R:R = N:1."\n`;
+  directive += `- It explains WHY this specific stock beats its sector peers for this setup RIGHT NOW.\n`;
+  directive += `- It is NOT a recommendation that belongs in a generic monthly newsletter. It belongs to THIS account TODAY.\n`;
+  directive += `=== END GROWTH DIRECTIVE ===`;
+
+  return directive;
 }
 
 /**

@@ -655,6 +655,10 @@ export function initTelegramAlerts() {
   // Evening Playbook at 7:30 PM (1 AI call per portfolio)
   cron.schedule('30 19 * * 1-5', async () => {
     await runEveningPlaybook();
+    try {
+      const { recordScanRun } = await import('./signalNotifier.js');
+      recordScanRun('evening-playbook');
+    } catch (_) {}
   }, {
     timezone: 'Asia/Kolkata'
   });

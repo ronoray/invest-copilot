@@ -81,7 +81,7 @@ const SCAN_SCHEDULE_DEF = [
   { name: 'evening-playbook',hour: 19, minute: 30, recoveryDeadline: 20 * 60 + 30 }, // still protected until 8:30 PM
 ];
 
-function recordScanRun(name, signals = 0) {
+export function recordScanRun(name, signals = 0) {
   scanHeartbeat.set(name, { at: new Date(), signals });
   logger.info(`[Heartbeat] ${name} completed — ${signals} signal(s)`);
 }
@@ -1329,7 +1329,7 @@ async function generateSignalsForAllPortfolios() {
         // Small delay between portfolios to avoid API rate limits
         await new Promise(resolve => setTimeout(resolve, 2000));
       } catch (error) {
-        logger.error(`Signal generation failed for portfolio ${portfolio.id}:`, error.message);
+        logger.error(`Signal generation failed for portfolio ${portfolio.id}: ${error?.message || String(error)}`);
       }
     }
 

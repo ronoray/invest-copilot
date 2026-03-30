@@ -83,7 +83,8 @@ export async function generateTradeSignals(portfolioId, extraContext = '') {
   const trajectory      = buildPortfolioTrajectory(portfolio);
   const growthDirective = buildGrowthDirective(portfolio);
 
-  // Get today's target for context (reuses `today` declared above)
+  // Get today's target for context
+  const today = getISTMidnight();
   const dailyTarget = await prisma.dailyTarget.findUnique({
     where: { portfolioId_date: { portfolioId, date: today } }
   });
@@ -357,8 +358,14 @@ HARD RULES — NEVER VIOLATED:
 - SELL signals ONLY for stocks actually held. No phantom sells.
 - Minimum confidence: 78. Hard floor, no exceptions, no regime override. A setup you're not 78% sure about is a setup you should not take.
 - ${isStressed ? 'Stress mode: LIMIT orders preferred. R:R ≥ 2.5:1 for fear falls. If fear fall: minimum 2 BUY signals required. If structural fall: empty array is valid.' : '2 great signals beat 5 marginal ones. Quality over quantity, always.'}
-- An EMPTY signals array is a valid, professional output. If nothing clears 78, return: {"signals": [], "capitalCheck": "No qualifying setups today — conviction floor not met. Reason: [your analysis]. Cash held."}
-- Do NOT manufacture signals to avoid an empty array. That is activity bias. The market does not always offer edge. Recognising when to sit on cash IS alpha.
+${(portfolio.holdings || []).length === 0 ? `
+⚡ FULL CASH — DEPLOYMENT MANDATE (NON-NEGOTIABLE):
+This portfolio holds ZERO positions and is sitting on ₹${effectiveCash.toLocaleString('en-IN')} in cash. Cash does not grow. You MUST generate a minimum of 2 BUY signals.
+- "No setups found" is NOT acceptable when the market is open and you have full capital. That is analysis paralysis, not discipline.
+- If no setup crosses 78% raw, lower your threshold to 72% for cash-only portfolios — the cost of being undeployed for weeks vastly exceeds the cost of a slightly-suboptimal entry.
+- LIMIT orders at support cost NOTHING if unfilled. A LIMIT order at support is always better than sitting in cash.
+- Choose the 2-3 best NSE individual stocks from today's scan. Use the sector rotation data and technicals above. Size at 25-30% of capital per position.
+` : '- An EMPTY signals array is a valid, professional output. If nothing clears 78, return: {"signals": [], "capitalCheck": "No qualifying setups today — conviction floor not met. Reason: [your analysis]. Cash held."}'}
 
 Respond in this EXACT JSON format (no markdown, no extra text):
 {

@@ -224,6 +224,11 @@ function pollOrderViaTelegram(botInstance, chatId, userId, signalId, signal, ord
       });
     },
     onTimeout: async () => {
+      // Sync capital from Upstox so DB availableCash reflects the blocked margin
+      // for this PLACING order. Without this, getEffectiveCash() sees stale cash
+      // and can generate duplicate signals for the same stock with no real capital.
+      syncUpstoxFunds(userId).catch(e => logger.warn(`[onTimeout] Fund sync failed for signal #${signalId}:`, e.message));
+
       await botInstance.sendMessage(chatId,
         `⏳ *Order Pending*\n\n${signal.side} ${signal.quantity}x *${signal.symbol}*\nOrder ID: \`${orderId}\`\n\n_Exchange hasn't confirmed yet. I'll keep monitoring and alert you when it settles._`,
         { parse_mode: 'Markdown' }

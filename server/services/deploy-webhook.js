@@ -9,8 +9,8 @@ const TRIGGER_FILE = '/host-tmp/invest-deploy-trigger.json';
 
 function verifySignature(rawBody, signature) {
   if (!WEBHOOK_SECRET) {
-    logger.warn('No webhook secret configured (GITHUB_WEBHOOK_SECRET), skipping signature verification');
-    return true;
+    logger.error('GITHUB_WEBHOOK_SECRET not configured — rejecting webhook. Set it in .env to enable auto-deploy.');
+    return false;
   }
 
   // GitHub signs the raw request body bytes — not re-serialized JSON

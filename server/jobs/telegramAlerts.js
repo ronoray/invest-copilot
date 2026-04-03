@@ -3,7 +3,7 @@ import prisma from '../services/prisma.js';
 import { getCurrentPrice } from '../services/marketData.js';
 import { getBot } from '../services/telegramBot.js';
 import { generateWarRoomPlan, checkDeviations, triggerRecalibration, buildHourlyPulseMessage, generateEveningPlaybook } from '../services/warRoom.js';
-import { validateSignals } from '../services/capitalGuard.js';
+import { validateSignals, getEffectiveCash } from '../services/capitalGuard.js';
 import logger from '../services/logger.js';
 import { isTradingDay, isMarketHoliday, getISTMidnight } from '../utils/marketHolidays.js';
 
@@ -372,6 +372,29 @@ async function runEndOfDaySnapshot() {
           data: { earnedActual: finalPL, earnedUpdatedAt: new Date() }
         });
 
+        // Fetch available cash for tomorrow context
+        let cashAvailable = parseFloat(portfolio.availableCash || 0);
+        let rawCash = cashAvailable;
+        let reservedCash = 0;
+        try {
+          const cashResult = await getEffectiveCash(portfolio.id);
+          cashAvailable = cashResult.effectiveCash;
+          rawCash = cashResult.rawCash ?? cashAvailable;
+          reservedCash = cashResult.reservedCash ?? 0;
+        } catch (e) {
+          logger.warn(`EOD: could not fetch effective cash for portfolio ${portfolio.id}: ${e.message}`);
+        }
+
+        // Total portfolio value = sum of current holding values + raw cash
+        const totalHoldingsValue = (portfolio.holdings || []).reduce((sum, h) => {
+          const liveResult = holdingResults.find(r => r.symbol === h.symbol);
+          const price = liveResult
+            ? parseFloat(h.currentPrice || h.avgPrice) + (liveResult.pl / Math.max(1, h.quantity))
+            : parseFloat(h.currentPrice || h.avgPrice);
+          return sum + h.quantity * price;
+        }, 0);
+        const totalPortfolioValue = totalHoldingsValue + rawCash;
+
         const effectiveTarget = parseFloat(target.userTarget || target.aiTarget || 0);
         const gap = effectiveTarget - finalPL;
         const chatId = parseInt(portfolio.user.telegramUser.telegramId);
@@ -413,6 +436,10 @@ async function runEndOfDaySnapshot() {
           ? `TARGET ACHIEVED${Math.abs(gap) > 0 ? ` (+₹${Math.abs(gap).toFixed(0)} surplus)` : ''}`
           : `MISSED by ₹${gap.toFixed(0)}`;
 
+        const cashLine = cashAvailable > 0
+          ? `\n💰 *Cash for tomorrow:* ${formatINR(cashAvailable)} deployable${reservedCash > 0 ? ` (${formatINR(rawCash)} − ${formatINR(reservedCash)} reserved)` : ''} | Portfolio: ${formatINR(totalPortfolioValue)}`
+          : '';
+
         const msg = `${achievedEmoji} *END OF DAY*
 ━━━━━━━━━━━━━━━━━━━
 📁 *${pName}*
@@ -426,7 +453,7 @@ ${winnersText}
 *Losers:*
 ${losersText}
 ${planComparison}
-
+${cashLine}
 Recalibrations today: ${recalibrations}
 ${gap <= 0 ? 'I delivered today. Tomorrow\'s war room will build on this momentum.' : `I own this miss. The ₹${gap.toFixed(0)} deficit carries into tomorrow's recovery plan.`}
 ━━━━━━━━━━━━━━━━━━━`;
@@ -577,7 +604,11 @@ async function runEveningPlaybook() {
               ? `_${review.accountability || ''}_${review.whatWorked ? ` ✅ ${review.whatWorked}` : ''}`
               : '';
 
-            const section = `📁 *${portfolioLabel(portfolio)}*
+            const cashDisplay = playbook._effectiveCash > 0
+              ? `\n💰 *Cash available:* ${formatINR(playbook._effectiveCash)}`
+              : '';
+
+            const section = `📁 *${portfolioLabel(portfolio)}*${cashDisplay}
 
 🌍 *Macro:* ${playbook.macroThesis || 'N/A'}
 

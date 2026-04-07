@@ -16,12 +16,20 @@ const prisma = new PrismaClient();
 // Create bot instance ONLY ONCE
 let bot = null;
 let _pollingRestartTimer = null;
+let _pollingStabilityTimer = null;
 let _pollingWatchdog = null;
 let _pollingRestartDelay = 5000; // start at 5s, backs off to 60s max
+let _consecutivePollingErrors = 0;
+let _lastPollActivityAt = null; // updated on any incoming message or callback
+
+function _markPollActivity() {
+  _lastPollActivityAt = Date.now();
+}
 
 function _startPolling(delayMs = 0) {
   if (!bot) return;
   clearTimeout(_pollingRestartTimer);
+  clearTimeout(_pollingStabilityTimer);
   _pollingRestartTimer = setTimeout(async () => {
     try {
       if (bot.isPolling()) {
@@ -39,10 +47,16 @@ function _startPolling(delayMs = 0) {
         params: { timeout: 10, allowed_updates: ['message', 'callback_query'] }
       });
       logger.info('Telegram bot polling started');
-      _pollingRestartDelay = 5000; // reset backoff on success
+      _lastPollActivityAt = Date.now();
+      // Only reset backoff after 30s of stable polling — not on the start() call itself
+      _pollingStabilityTimer = setTimeout(() => {
+        _pollingRestartDelay = 5000;
+        _consecutivePollingErrors = 0;
+        logger.info('[Telegram] Polling stable — backoff reset');
+      }, 30000);
     } catch (e) {
       logger.error('Failed to start Telegram polling:', e.message);
-      // retry with backoff
+      _consecutivePollingErrors++;
       _pollingRestartDelay = Math.min(_pollingRestartDelay * 2, 60000);
       _startPolling(_pollingRestartDelay);
     }
@@ -51,14 +65,27 @@ function _startPolling(delayMs = 0) {
 
 function _startPollingWatchdog() {
   clearInterval(_pollingWatchdog);
-  _pollingWatchdog = setInterval(() => {
+  _pollingWatchdog = setInterval(async () => {
     if (!bot) return;
     if (!bot.isPolling()) {
       logger.warn('[Telegram] Polling watchdog: polling stopped — restarting');
       _pollingRestartDelay = 5000;
+      _consecutivePollingErrors = 0;
+      _startPolling(1000);
+      return;
+    }
+    // Active health check: getMe() proves the bot can reach Telegram API
+    // If this fails while isPolling() is true, polling has silently died
+    try {
+      await bot.getMe();
+      _markPollActivity();
+    } catch (e) {
+      logger.warn(`[Telegram] Polling watchdog: getMe() failed (${e.message}) — restarting`);
+      _pollingRestartDelay = 5000;
+      _consecutivePollingErrors = 0;
       _startPolling(1000);
     }
-  }, 5 * 60 * 1000); // check every 5 minutes
+  }, 2 * 60 * 1000); // check every 2 minutes
 }
 
 function getBot() {
@@ -72,7 +99,14 @@ function getBot() {
         const msg = error?.message || String(error) || 'unknown';
         // 409 = previous instance still polling; resolves automatically
         if (msg.includes('409')) return;
-        logger.error('Telegram polling error — will restart:', msg);
+        _consecutivePollingErrors++;
+        logger.error(`Telegram polling error #${_consecutivePollingErrors} — will restart:`, msg);
+        // If we've failed 15+ times in a row, exit and let Docker restart clean
+        if (_consecutivePollingErrors >= 15) {
+          logger.error('[Telegram] Too many consecutive polling errors — exiting for clean Docker restart');
+          process.exit(1);
+        }
+        clearTimeout(_pollingStabilityTimer);
         _pollingRestartDelay = Math.min(_pollingRestartDelay * 2, 60000);
         _startPolling(_pollingRestartDelay);
       });
@@ -811,6 +845,10 @@ export function initTelegramBot() {
     // Remove all previous listeners
     botInstance.removeAllListeners('message');
     botInstance.removeAllListeners('text');
+
+    // Track polling liveness — any incoming update proves polling is alive
+    botInstance.on('message', () => _markPollActivity());
+    botInstance.on('callback_query', () => _markPollActivity());
 
     // /start
     botInstance.onText(/^\/start$/, async (msg) => {

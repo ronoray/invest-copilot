@@ -1370,6 +1370,11 @@ async function generateSignalsForAllPortfolios() {
 async function notifyPendingSignals() {
   if (!isTradingDay(new Date())) return;
 
+  // Don't notify before market open (9:15 AM IST)
+  const nowIST = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+  const minutesIST = nowIST.getHours() * 60 + nowIST.getMinutes();
+  if (minutesIST < 9 * 60 + 15) return;
+
   const pauseState = await getSystemPauseState();
   if (pauseState) {
     logger.info(`[Signal Notifier] Paused (${pauseState.reason}) — skipping notifications`);

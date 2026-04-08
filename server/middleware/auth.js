@@ -12,6 +12,17 @@ import logger from '../services/logger.js';
 
 export async function authenticate(req, res, next) {
   try {
+    // MCP service bypass — internal service calls only
+    const mcpSecret = req.headers['x-mcp-secret'];
+    if (mcpSecret) {
+      if (mcpSecret !== process.env.MCP_SERVICE_SECRET) {
+        return res.status(401).json({ error: 'Invalid MCP service secret' });
+      }
+      req.user = { userId: 1, id: 1, role: 'admin' };
+      req.session = { user: { isActive: true } };
+      return next();
+    }
+
     // Get token from header
     const authHeader = req.headers.authorization;
     

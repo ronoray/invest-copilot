@@ -33,17 +33,29 @@ JSON only: {"shouldRegen": true/false, "reason": "one sentence"}`;
 
     const response = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 80,
+      max_tokens: 150,
       messages: [{ role: 'user', content: prompt }],
     });
 
-    const text = response.content[0].text.trim();
-    const json = JSON.parse(text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim());
+    const raw = response.content[0]?.text?.trim();
+    if (!raw) {
+      logger.warn('[Signal Triage] Empty response from Haiku — skipping regen');
+      return { shouldRegen: false, reason: 'empty response' };
+    }
+
+    let json;
+    try {
+      json = JSON.parse(raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim());
+    } catch (parseErr) {
+      logger.warn(`[Signal Triage] JSON parse failed — raw: ${raw.slice(0, 100)}`);
+      return { shouldRegen: false, reason: 'parse error' };
+    }
 
     logger.info(`[Signal Triage] shouldRegen=${json.shouldRegen} — ${json.reason}`);
     return { shouldRegen: !!json.shouldRegen, reason: json.reason || '' };
   } catch (err) {
-    logger.error('[Signal Triage] Haiku triage failed:', err.message);
+    const detail = err?.message || err?.status || JSON.stringify(err) || 'unknown';
+    logger.error(`[Signal Triage] Haiku triage failed: ${detail}`);
     return { shouldRegen: false, reason: 'triage error' };
   }
 }

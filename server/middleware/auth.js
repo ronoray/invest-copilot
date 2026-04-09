@@ -139,35 +139,9 @@ export async function optionalAuth(req, res, next) {
   }
 }
 
-// ============================================
-// CLOUDFLARE ACCESS VALIDATION (Optional)
-// ============================================
-
-export async function validateCloudflareAccess(req, res, next) {
-  try {
-    // Only validate if enabled
-    if (process.env.CLOUDFLARE_ACCESS_ENABLED !== 'true') {
-      return next();
-    }
-
-    // Get JWT from Cloudflare Access header
-    const cfJWT = req.headers['cf-access-jwt-assertion'];
-    
-    if (!cfJWT) {
-      return res.status(401).json({ error: 'Cloudflare Access required' });
-    }
-
-    // Verify JWT against Cloudflare's public key
-    // (Implementation depends on your Cloudflare setup)
-    // For now, just check if header exists
-    
-    logger.info('Cloudflare Access validated');
-    next();
-  } catch (error) {
-    logger.error('Cloudflare Access validation error:', error);
-    return res.status(401).json({ error: 'Access validation failed' });
-  }
-}
+// validateCloudflareAccess removed — was a stub that only checked header presence
+// without verifying the JWT signature. CF Access protection is enforced at the
+// network/Cloudflare layer before requests reach this server.
 
 // ============================================
 // RATE LIMITING MIDDLEWARE
@@ -231,7 +205,12 @@ export async function auditLog(action, entity = null) {
               metadata: {
                 method: req.method,
                 path: req.path,
-                body: req.body
+                body: (() => {
+                  const SENSITIVE = ['password', 'newPassword', 'currentPassword', 'confirmPassword', 'otp', 'code', 'token', 'refreshToken'];
+                  const safe = { ...req.body };
+                  for (const f of SENSITIVE) if (f in safe) safe[f] = '[REDACTED]';
+                  return safe;
+                })()
               }
             }
           }).catch(err => logger.error('Audit log error:', err));
@@ -253,7 +232,6 @@ export default {
   requireAdmin,
   requireEmailVerified,
   optionalAuth,
-  validateCloudflareAccess,
   rateLimitLogin,
   auditLog
 };

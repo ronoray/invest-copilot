@@ -6,6 +6,24 @@ import prisma from '../services/prisma.js';
 import logger from '../services/logger.js';
 const router = express.Router();
 
+// Guard: Upstox webhook secret — must match UPSTOX_WEBHOOK_SECRET env var
+// Register webhook URLs in Upstox portal with ?secret=<value> query param
+function verifyUpstoxWebhook(req, res) {
+  const expectedSecret = process.env.UPSTOX_WEBHOOK_SECRET;
+  if (!expectedSecret) {
+    logger.error('UPSTOX_WEBHOOK_SECRET not set — refusing all Upstox webhook requests');
+    res.status(403).json({ error: 'Webhook not configured' });
+    return false;
+  }
+  const provided = req.query.secret || req.headers['x-webhook-secret'];
+  if (!provided || provided !== expectedSecret) {
+    logger.warn('Upstox webhook: invalid or missing secret from ' + req.ip);
+    res.status(403).json({ error: 'Unauthorized' });
+    return false;
+  }
+  return true;
+}
+
 /**
  * GET /auth/upstox/callback
  * Upstox OAuth callback — exchanges code for token.
@@ -70,6 +88,7 @@ router.get('/auth/upstox/callback', async (req, res) => {
  * This enables automatic daily token refresh without user clicking a login link.
  */
 router.post('/webhook/upstox/token', async (req, res) => {
+  if (!verifyUpstoxWebhook(req, res)) return;
   try {
     logger.info('Upstox token webhook received:', JSON.stringify(req.body));
 
@@ -145,6 +164,7 @@ router.post('/webhook/upstox/token', async (req, res) => {
  * Upstox order postback — receives order status updates.
  */
 router.post('/webhook/upstox/orders', async (req, res) => {
+  if (!verifyUpstoxWebhook(req, res)) return;
   try {
     logger.info('Upstox order webhook received:', JSON.stringify(req.body));
 

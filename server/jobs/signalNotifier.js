@@ -564,36 +564,36 @@ Respond in JSON only:
           const aggrEmoji  = { high: '⚡', medium: '📊', low: '🛡️' }[json.aggression] || '📊';
           const regimeEmoji = { BULL: '🚀', PULLBACK: '📈', BEAR: '🐻', HIGH_VOL_BEAR: '🚨', NEUTRAL: '➡️' }[regime.regime] || '➡️';
 
+          // HTML is far more robust than MarkdownV2 — only &, <, > need escaping in text
+          const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
           // Holdings verdicts section
           const holdingsLines = (json.holdingsView || [])
             .map(h => {
               const v = h.verdict || 'HOLD';
               const e = { HOLD: '⚪', ADD: '🟢', TRIM: '🟡', EXIT: '🔴' }[v] || '⚪';
-              return `${e} *${h.symbol}*: ${v} — ${h.note || ''}`;
+              return `${e} <b>${esc(h.symbol)}</b>: ${v} — ${esc(h.note || '')}`;
             }).join('\n');
 
           const lines = [
-            `${isStressed ? '🚨' : moodEmoji} *Pre\\-Market Brief — ${dateStr}*`,
-            `${regimeEmoji} ${regime.regime}${isStressed ? ' — STRESS MODE' : ''}`,
+            `${isStressed ? '🚨' : moodEmoji} <b>Pre-Market Brief — ${esc(dateStr)}</b>`,
+            `${regimeEmoji} ${esc(regime.regime)}${isStressed ? ' — STRESS MODE' : ''}`,
             '',
-            `*Theme:* ${json.keyTheme}`,
-            `*Focus:* ${json.focusSectors?.join(', ')}${json.avoidSectors?.length ? `  |  Avoid: ${json.avoidSectors.join(', ')}` : ''}`,
+            `<b>Theme:</b> ${esc(json.keyTheme)}`,
+            `<b>Focus:</b> ${esc(json.focusSectors?.join(', '))}${json.avoidSectors?.length ? `  |  Avoid: ${esc(json.avoidSectors.join(', '))}` : ''}`,
             '',
-            holdingsLines ? `*Your Positions:*\n${holdingsLines}` : '*Positions:* None — fully in cash',
+            holdingsLines ? `<b>Your Positions:</b>\n${holdingsLines}` : '<b>Positions:</b> None — fully in cash',
             '',
-            json.topSetup ? `*Best setup today:* ${json.topSetup}` : null,
-            json.riskWarning ? `*Watch out for:* ${json.riskWarning}` : null,
+            json.topSetup ? `<b>Best setup today:</b> ${esc(json.topSetup)}` : null,
+            json.riskWarning ? `<b>Watch out for:</b> ${esc(json.riskWarning)}` : null,
             '',
-            `${aggrEmoji} _${json.playbook}_`,
+            `${aggrEmoji} <i>${esc(json.playbook)}</i>`,
             '',
-            `_War room plan at 9:00 AM → signals at 9:30 AM_`,
+            `<i>War room plan at 9:00 AM → signals at 9:30 AM</i>`,
           ].filter(l => l !== null).join('\n');
 
-          await bot.sendMessage(parseInt(tg.telegramId), lines, { parse_mode: 'MarkdownV2' }).catch(async (e) => {
-            // Fallback: plain text if MarkdownV2 fails
-            logger.warn(`[Pre-Market] MarkdownV2 failed for portfolio ${p.id}: ${e.message} — sending plain`);
-            const plain = lines.replace(/[*_`\[\]()~>#+=|{}.!\\-]/g, '');
-            await bot.sendMessage(parseInt(tg.telegramId), plain).catch(() => {});
+          await bot.sendMessage(parseInt(tg.telegramId), lines, { parse_mode: 'HTML' }).catch(async (e) => {
+            logger.warn(`[Pre-Market] HTML send failed for portfolio ${p.id}: ${e.message}`);
           });
         }
 
@@ -824,35 +824,69 @@ Minimum 5 setups in tomorrowSetups. Maximum 10. Cast the net wide — this is th
         const chatId = parseInt(telegramUser.telegramId);
         const executed = signals.filter(s => s.status === 'EXECUTED').length;
         const missed   = signals.filter(s => ['EXPIRED', 'DISMISSED'].includes(s.status)).length;
+        const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-        // Message 1: today's assessment
+        // Actual portfolio numbers — shown first so you see real data before Claude's summary
+        const holdingRows = portfolio.holdings.map(h => {
+          const avg  = parseFloat(h.avgPrice || 0);
+          const cur  = parseFloat(h.currentPrice || avg);
+          const pct  = avg > 0 ? ((cur - avg) / avg * 100) : 0;
+          const amt  = (cur - avg) * h.quantity;
+          const sign = pct >= 0 ? '+' : '';
+          const arrow = pct >= 0.5 ? '🟢' : pct <= -0.5 ? '🔴' : '⚪';
+          return `${arrow} <b>${h.symbol}</b>: ₹${cur.toFixed(2)}  ${sign}${pct.toFixed(1)}%  (${sign}₹${amt.toFixed(0)})`;
+        }).join('\n');
+
+        const totalInv = portfolio.holdings.reduce((s, h) => s + h.quantity * parseFloat(h.avgPrice), 0);
+        const totalCur = portfolio.holdings.reduce((s, h) => s + h.quantity * parseFloat(h.currentPrice || h.avgPrice), 0);
+        const totalPnl = totalCur - totalInv;
+        const totalPct = totalInv > 0 ? (totalPnl / totalInv * 100) : 0;
+        const cash     = parseFloat(portfolio.availableCash || 0);
+        const totalPortfolio = totalCur + cash;
+
+        const portfolioSection = portfolio.holdings.length > 0
+          ? [
+              `<b>📦 Holdings</b>`,
+              holdingRows,
+              `<b>Total P&amp;L: ${totalPnl >= 0 ? '+' : ''}₹${totalPnl.toFixed(0)} (${totalPnl >= 0 ? '+' : ''}${totalPct.toFixed(1)}%)</b>`,
+              `Cash: ₹${cash.toLocaleString('en-IN')}  |  Portfolio: ₹${totalPortfolio.toLocaleString('en-IN', {maximumFractionDigits: 0})}`,
+            ].join('\n')
+          : `<b>📦 No holdings</b> — fully in cash: ₹${cash.toLocaleString('en-IN')}`;
+
+        // Message 1: portfolio snapshot + today's assessment
         const msg1 = [
-          `📊 *EOD — ${signals.length} signals today (${executed} executed, ${missed} missed)*`,
+          `📊 <b>EOD — ${new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' })}</b>  |  ${executed}/${signals.length} signals executed`,
           '',
-          json.todayAssessment,
+          portfolioSection,
           '',
-          `*Sector read:* ${json.sectorRead}`,
-          json.riskWarning ? `\n⚠️ *Tomorrow risk:* ${json.riskWarning}` : '',
-        ].filter(Boolean).join('\n');
+          esc(json.todayAssessment),
+          '',
+          `<b>Sector read:</b> ${esc(json.sectorRead)}`,
+          json.riskWarning ? `\n⚠️ <b>Tomorrow risk:</b> ${esc(json.riskWarning)}` : '',
+        ].filter(s => s !== '').join('\n');
 
-        await bot.sendMessage(chatId, msg1, { parse_mode: 'Markdown' }).catch(() => {});
+        await bot.sendMessage(chatId, msg1, { parse_mode: 'HTML' }).catch(e => {
+          logger.warn(`[EOD] msg1 send failed: ${e.message}`);
+        });
         await new Promise(r => setTimeout(r, 500));
 
         // Message 2: tomorrow's setups
         const setupLines = (json.tomorrowSetups || []).map((s, i) => {
-          const rr = s.stop && s.entry && s.target
+          const rr = s.stop && s.entry && s.target && (s.entry - s.stop) > 0
             ? ((s.target - s.entry) / (s.entry - s.stop)).toFixed(1)
             : '?';
-          return `${i + 1}. *${s.action} ${s.symbol}* — ₹${s.entry} → ₹${s.target} (stop ₹${s.stop}, R:R ${rr}:1)\n   _${s.thesis}_`;
+          return `${i + 1}. <b>${s.action} ${esc(s.symbol)}</b> — ₹${s.entry} → ₹${s.target} (stop ₹${s.stop}, R:R ${rr}:1)\n   <i>${esc(s.thesis)}</i>`;
         }).join('\n\n');
 
         const msg2 = [
-          `🎯 *Tomorrow's Watchlist — ${json.tomorrowFocus}*`,
+          `🎯 <b>Tomorrow — ${esc(json.tomorrowFocus)}</b>`,
           '',
           setupLines,
         ].join('\n');
 
-        await bot.sendMessage(chatId, msg2, { parse_mode: 'Markdown' }).catch(() => {});
+        await bot.sendMessage(chatId, msg2, { parse_mode: 'HTML' }).catch(e => {
+          logger.warn(`[EOD] msg2 send failed: ${e.message}`);
+        });
       }
 
       logger.info(`[EOD Review] Portfolio ${portfolio.id}: ${json.tomorrowSetups?.length || 0} setups identified for tomorrow`);

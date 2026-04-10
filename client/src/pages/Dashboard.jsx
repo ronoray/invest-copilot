@@ -16,6 +16,7 @@ export default function Dashboard() {
   const [recommendations, setRecommendations] = useState(null);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [pricesAt, setPricesAt] = useState(null);
 
   // Trade signals state
   const [signals, setSignals] = useState([]);
@@ -43,6 +44,21 @@ export default function Dashboard() {
     }
   }, [selectedPortfolioId]);
 
+  // Auto-refresh holdings during market hours (IST 9:15–15:30, Mon–Fri)
+  useEffect(() => {
+    const isMarketHours = () => {
+      const now = new Date();
+      const day = now.toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata', weekday: 'short' });
+      if (['Sat', 'Sun'].includes(day)) return false;
+      const [h, m] = now.toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour12: false }).split(':').map(Number);
+      const mins = h * 60 + m;
+      return mins >= 9 * 60 + 15 && mins <= 15 * 60 + 30;
+    };
+    if (!isMarketHours()) return;
+    const id = setInterval(() => { if (isMarketHours()) loadHoldings(); }, 5 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [selectedPortfolioId]);
+
   const loadPortfolios = async () => {
     try {
       const data = await api.get('/portfolio?all=true');
@@ -57,8 +73,13 @@ export default function Dashboard() {
     try {
       if (selectedPortfolioId === 'all') {
         const data = await api.get('/portfolio');
-        setHoldings(data.holdings || []);
+        const h = data.holdings || [];
+        setHoldings(h);
         setSummary(data.summary || null);
+        if (h.length > 0) {
+          const latest = h.reduce((a, b) => (a.updatedAt > b.updatedAt ? a : b));
+          setPricesAt(new Date(latest.updatedAt).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' }));
+        }
       } else {
         const data = await api.get(`/portfolio/${selectedPortfolioId}/holdings`);
         const holdingsData = data.holdings || [];
@@ -72,6 +93,10 @@ export default function Dashboard() {
           unrealizedPL,
           plPercent: totalInvested > 0 ? ((unrealizedPL / totalInvested) * 100).toFixed(2) : '0.00'
         });
+        if (holdingsData.length > 0) {
+          const latest = holdingsData.reduce((a, b) => (a.updatedAt > b.updatedAt ? a : b));
+          setPricesAt(new Date(latest.updatedAt).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' }));
+        }
       }
     } catch (err) {
       console.error('Failed to load holdings:', err);
@@ -778,6 +803,7 @@ export default function Dashboard() {
                 <RefreshCw className={`w-6 h-6 mx-auto ${syncing ? 'animate-spin' : ''}`} />
               </div>
               <p className="font-semibold text-gray-900 dark:text-gray-100">{syncing ? 'Syncing...' : 'Sync Prices'}</p>
+              {pricesAt && <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">as of {pricesAt}</p>}
             </button>
             <button
               onClick={() => navigate('/insights')}

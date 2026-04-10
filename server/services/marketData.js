@@ -11,9 +11,10 @@ const BASE_URL = 'https://www.alphavantage.co/query';
 // Free tier: 500 calls/day (hard cap). Warn at 90%, block at 98%.
 // Counter resets at midnight IST. Blocked calls fall back to NSE scraping.
 const _avBudget = {
-  date:    null,   // 'YYYY-MM-DD' IST — resets on new day
-  count:   0,      // calls made today
-  warnSent: false, // warning already logged today (avoid log flood)
+  date:       null,  // 'YYYY-MM-DD' IST — resets on new day
+  count:      0,     // calls made today
+  warnSent:   false, // warning already logged today (avoid log flood)
+  alertSent:  false, // Telegram alert already sent today (avoid repeat pings)
 };
 
 const AV_WARN_AT  = 450; // 90% — log warning
@@ -29,9 +30,10 @@ function _resetAvIfNewDay() {
     if (_avBudget.date !== null) {
       logger.info(`[AV Budget] New day — counter reset (yesterday: ${_avBudget.count}/500 calls)`);
     }
-    _avBudget.date     = today;
-    _avBudget.count    = 0;
-    _avBudget.warnSent = false;
+    _avBudget.date      = today;
+    _avBudget.count     = 0;
+    _avBudget.warnSent  = false;
+    _avBudget.alertSent = false;
   }
 }
 
@@ -56,12 +58,18 @@ function _isAvBlocked() {
 export function getAVBudget() {
   _resetAvIfNewDay();
   return {
-    count:     _avBudget.count,
-    remaining: 500 - _avBudget.count,
-    warnSent:  _avBudget.warnSent,
-    blocked:   _avBudget.count >= AV_BLOCK_AT,
-    pct:       Math.round(_avBudget.count / 5), // % used
+    count:      _avBudget.count,
+    remaining:  500 - _avBudget.count,
+    warnSent:   _avBudget.warnSent,
+    alertSent:  _avBudget.alertSent,
+    blocked:    _avBudget.count >= AV_BLOCK_AT,
+    pct:        Math.round(_avBudget.count / 5), // % used
   };
+}
+
+/** Mark the daily Telegram budget alert as sent — prevents repeat pings. */
+export function markAVBudgetAlertSent() {
+  _avBudget.alertSent = true;
 }
 
 // NSE symbols with .NS suffix for Alpha Vantage

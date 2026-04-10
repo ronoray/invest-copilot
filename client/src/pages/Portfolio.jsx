@@ -30,6 +30,7 @@ export default function Portfolio() {
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [pricesAt, setPricesAt] = useState(null);
 
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -90,12 +91,32 @@ export default function Portfolio() {
         totalInvested, totalCurrent, unrealizedPL,
         plPercent: totalInvested > 0 ? ((unrealizedPL / totalInvested) * 100).toFixed(2) : '0.00'
       });
+      if (h.length > 0) {
+        const latest = h.reduce((a, b) => (a.updatedAt > b.updatedAt ? a : b));
+        setPricesAt(new Date(latest.updatedAt).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' }));
+      }
     } catch (err) {
       console.error('Failed to load holdings:', err);
     } finally {
       setLoading(false);
     }
   };
+
+  // Auto-refresh during market hours (IST 9:15–15:30, Mon–Fri)
+  useEffect(() => {
+    if (!selectedPortfolioId) return;
+    const isMarketHours = () => {
+      const now = new Date();
+      const day = now.toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata', weekday: 'short' });
+      if (['Sat', 'Sun'].includes(day)) return false;
+      const [h, m] = now.toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour12: false }).split(':').map(Number);
+      const mins = h * 60 + m;
+      return mins >= 9 * 60 + 15 && mins <= 15 * 60 + 30;
+    };
+    if (!isMarketHours()) return;
+    const id = setInterval(() => { if (isMarketHours()) loadHoldings(); }, 5 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [selectedPortfolioId]);
 
   const handleSync = async () => {
     setSyncing(true);
@@ -274,7 +295,8 @@ export default function Portfolio() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row gap-3 sm:justify-between sm:items-center">
         <h1 className="text-2xl sm:text-3xl font-bold">Portfolio</h1>
-        <div className="flex gap-2 sm:gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+          {pricesAt && <span className="text-xs text-gray-400 dark:text-gray-500 hidden sm:inline">Prices as of {pricesAt} IST</span>}
           <button onClick={handleSync} disabled={syncing} className="btn btn-secondary flex items-center gap-2">
             <RefreshCw size={18} className={syncing ? 'animate-spin' : ''} />
             <span className="hidden sm:inline">Sync Prices</span>

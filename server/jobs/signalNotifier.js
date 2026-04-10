@@ -12,7 +12,7 @@ import { buildPortfolioTrajectory } from '../services/advancedScreener.js';
 import { getMarketRegime, buildHoldingsTechnicals } from '../services/technicalAnalysis.js';
 import { isTradingDay, getISTMidnight } from '../utils/marketHolidays.js';
 import { getSystemPauseState } from '../services/pauseState.js';
-import { getAVBudget } from '../services/marketData.js';
+import { getAVBudget, markAVBudgetAlertSent } from '../services/marketData.js';
 import { fetchPreMarketNews } from '../services/marketNews.js';
 import { scanTradingUniverse } from '../services/opportunityScanner.js';
 import { runPriceGuard } from './priceGuard.js';
@@ -260,8 +260,9 @@ async function checkScanHealthAndRecover() {
 
   // ── Alpha Vantage budget check ────────────────────────────────────────────
   const avBudget = getAVBudget();
-  if (avBudget.remaining < 60 && !avBudget.warnSent) {
+  if (avBudget.remaining < 100 && !avBudget.alertSent) {
     logger.warn(`[AV Budget] Low: ${avBudget.count}/500 used, ${avBudget.remaining} remaining`);
+    markAVBudgetAlertSent();
     await alertEligibleUsers(
       `⚠️ *Market Data Budget Low*\n\n${avBudget.count}/500 Alpha Vantage calls used today.\n` +
       `${avBudget.remaining} remaining — later scans will use cached sector data.\n\n` +

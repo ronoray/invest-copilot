@@ -182,6 +182,70 @@ async function sendTrailMilestoneAlert(chatId, tgUserId, { symbol, avgPrice, new
   }
 }
 
+/**
+ * Send the execute signal card immediately after priceGuard creates a SELL signal.
+ * This avoids the ≤5 min lag before notifyPendingSignals picks it up.
+ * Updates lastNotifiedAt so notifyPendingSignals won't re-send for 30 min.
+ */
+async function sendImmediateSignalCard(signal, { portfolio, holding, ltp, pnlPct, pnlAmt }) {
+  try {
+    const bot = await getBot();
+    if (!bot) return;
+
+    const telegramUser = portfolio.user?.telegramUser;
+    if (!telegramUser) return;
+
+    const chatId = parseInt(telegramUser.telegramId);
+    const upstoxIntegration = portfolio.user?.upstoxIntegration;
+    const hasUpstox = portfolio.broker === 'UPSTOX' && upstoxIntegration?.isConnected && upstoxIntegration?.accessToken;
+
+    const sign = pnlPct >= 0 ? '+' : '−';
+    const absPct = Math.abs(pnlPct * 100).toFixed(1);
+    const absAmt = Math.abs(pnlAmt).toFixed(0);
+
+    let priceInfo = signal.triggerType === 'MARKET' ? 'At Market Price' : `Limit: ₹${signal.triggerPrice}`;
+    let actionGuide = signal.triggerType === 'MARKET'
+      ? `\n👉 *What to do:* Tap *Execute* to *SELL IMMEDIATELY* at market price.\n_Stop-loss — act quickly._`
+      : `\n👉 *What to do:* Tap *Execute* to place a LIMIT SELL at ₹${parseFloat(signal.triggerPrice).toFixed(2)}.\n_Fills automatically when price reaches that level. Or tap Dismiss to keep holding._`;
+
+    const msgText =
+      `🔴 *SELL: ${signal.symbol}* (${signal.exchange})\n` +
+      `━━━━━━━━━━━━━━━━━━━\n` +
+      `Qty: *${signal.quantity} shares* | ${priceInfo}\n` +
+      `📍 Now: ₹${ltp.toFixed(2)}  _(${sign}${absPct}%, ${sign}₹${absAmt})_` +
+      actionGuide + `\n` +
+      `━━━━━━━━━━━━━━━━━━━\n` +
+      `_${signal.rationale || ''}_`;
+
+    const buttons = hasUpstox
+      ? [
+          { text: '🚀 Execute', callback_data: `sig_exec_${signal.id}` },
+          { text: '⏰ Snooze 30m', callback_data: `sig_snooze_${signal.id}` },
+          { text: '❌ Dismiss', callback_data: `sig_dismiss_${signal.id}` }
+        ]
+      : [
+          { text: '✅ ACK', callback_data: `sig_ack_${signal.id}` },
+          { text: '⏰ Snooze 30m', callback_data: `sig_snooze_${signal.id}` },
+          { text: '❌ Dismiss', callback_data: `sig_dismiss_${signal.id}` }
+        ];
+
+    await bot.sendMessage(chatId, msgText, {
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: [buttons] }
+    }).catch(e => logger.warn(`[PriceGuard] sendImmediateSignalCard failed for ${signal.symbol}: ${e.message}`));
+
+    // Mark notified so notifyPendingSignals won't re-fire for 30 min
+    await prisma.tradeSignal.update({
+      where: { id: signal.id },
+      data: { lastNotifiedAt: new Date(), notifyCount: 1 }
+    });
+
+    logger.info(`[PriceGuard] Immediate signal card sent: #${signal.id} ${signal.symbol} to ${chatId}`);
+  } catch (e) {
+    logger.warn(`[PriceGuard] sendImmediateSignalCard error: ${e.message}`);
+  }
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 /**
@@ -195,7 +259,7 @@ export async function runPriceGuard() {
       where: { isActive: true, isPaused: false },
       include: {
         holdings: true,
-        user: { include: { telegramUser: true } }
+        user: { include: { telegramUser: true, upstoxIntegration: true } }
       }
     });
 
@@ -301,7 +365,7 @@ export async function runPriceGuard() {
           logger.warn(`[PriceGuard] STOP-LOSS (${stopSrc}): ${holding.symbol} ₹${ltp.toFixed(2)} ≤ stop ₹${stopLevel.toFixed(2)} (${(pnlPct * 100).toFixed(1)}%)`);
 
           // Stop-loss: MARKET order — exit immediately, price doesn't matter
-          await createSellSignal({
+          const stopSignal = await createSellSignal({
             portfolioId: portfolio.id,
             symbol: holding.symbol,
             exchange: holding.exchange,
@@ -312,7 +376,7 @@ export async function runPriceGuard() {
             rationale: `Stop-loss triggered (${stopSrc} stop). ${holding.symbol} at ₹${ltp.toFixed(2)}, breached stop ₹${stopLevel.toFixed(2)} (${Math.abs(pnlPct * 100).toFixed(1)}% from avg ₹${avgPrice.toFixed(2)}). MARKET exit — price is irrelevant, capital protection is everything. Every rupee saved now compounds into the next setup.`
           });
 
-          await sendAlert(chatId, { symbol: holding.symbol, holding, ltp, type: 'STOP_LOSS', pnlPct, pnlAmt, stopLevel, targetLevel: avgPrice * (1 + profitTargetPct) });
+          if (stopSignal) await sendImmediateSignalCard(stopSignal, { portfolio, holding, ltp, pnlPct, pnlAmt });
           continue;
         }
 
@@ -326,7 +390,7 @@ export async function runPriceGuard() {
 
           // Profit target: LIMIT at current price (not target) — locks in what's available now
           const sellPrice = parseFloat((ltp * 0.998).toFixed(2)); // 0.2% below LTP for quick fill
-          await createSellSignal({
+          const profitSignal = await createSellSignal({
             portfolioId: portfolio.id,
             symbol: holding.symbol,
             exchange: holding.exchange,
@@ -337,7 +401,7 @@ export async function runPriceGuard() {
             rationale: `Profit target hit. ${holding.symbol} at ₹${ltp.toFixed(2)} (+${(pnlPct * 100).toFixed(1)}%, ₹${pnlAmt.toFixed(0)} gain). LIMIT sell at ₹${sellPrice.toFixed(2)} — locks in today's price, not a stale number. Execute now. A realised ₹${pnlAmt.toFixed(0)} compounds. An unrealised gain evaporates on the next shock.`
           });
 
-          await sendAlert(chatId, { symbol: holding.symbol, holding, ltp, type: 'PROFIT_TARGET', pnlPct, pnlAmt, stopLevel, targetLevel: profitTarget });
+          if (profitSignal) await sendImmediateSignalCard(profitSignal, { portfolio, holding, ltp, pnlPct, pnlAmt });
           continue;
         }
 
@@ -359,7 +423,7 @@ export async function runPriceGuard() {
 
           logger.info(`[PriceGuard] PARTIAL PROFIT: ${holding.symbol} ₹${ltp.toFixed(2)} at ${(pnlPct * 100).toFixed(1)}% — selling half (${partialQty} of ${holding.quantity})`);
 
-          await createSellSignal({
+          const partialSignal = await createSellSignal({
             portfolioId: portfolio.id,
             symbol: holding.symbol,
             exchange: holding.exchange,
@@ -381,7 +445,7 @@ export async function runPriceGuard() {
             }
           });
 
-          await sendAlert(chatId, { symbol: holding.symbol, holding, ltp, type: 'PARTIAL_PROFIT', pnlPct, pnlAmt, stopLevel, targetLevel: profitTarget });
+          if (partialSignal) await sendImmediateSignalCard(partialSignal, { portfolio, holding, ltp, pnlPct, pnlAmt });
         }
       }
     }

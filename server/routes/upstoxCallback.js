@@ -88,7 +88,10 @@ router.get('/auth/upstox/callback', async (req, res) => {
  * This enables automatic daily token refresh without user clicking a login link.
  */
 router.post('/webhook/upstox/token', async (req, res) => {
-  if (!verifyUpstoxWebhook(req, res)) return;
+  // No secret guard here — Upstox calls this URL directly and can't add custom
+  // secret params. The access_token in the payload IS the credential.
+  // verifyUpstoxWebhook is only applied to order/GTT webhooks where we can
+  // register the URL with ?secret=... in the Upstox portal.
   try {
     logger.info('Upstox token webhook received:', JSON.stringify(req.body));
 

@@ -45,6 +45,15 @@ const TRAIL_MIN_STEP_PCT = 0.005; // 0.5% of avgPrice
 
 const isEtf = (symbol) => symbol.endsWith('BEES') || symbol.endsWith('ETF');
 
+// ─── Tick-size rounding ────────────────────────────────────────────────────────
+// NSE equity cash segment tick size is ₹0.05 for all stocks.
+// Upstox rejects orders with prices that aren't multiples of ₹0.05.
+// Round SELL limit DOWN (conservative — ensures fill) and BUY limit UP.
+function roundToTick(price, direction = 'down', tick = 0.05) {
+  if (direction === 'down') return Math.floor(Math.round(price / tick * 1e9) / 1e9) * tick;
+  return Math.ceil(Math.round(price / tick * 1e9) / 1e9) * tick;
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function buildExpiresAt() {
@@ -313,11 +322,11 @@ export async function runPriceGuard() {
         // Current effective stop (DB value, or default if not set)
         let stopLevel = holding.stopLoss
           ? parseFloat(holding.stopLoss)
-          : parseFloat((avgPrice * (1 - defaultStopPct)).toFixed(2));
+          : roundToTick(avgPrice * (1 - defaultStopPct), 'down');
 
         // ── 0. TRAILING STOP — ratchet the floor upward as price rises ─────────
         if (pnlPct >= trailActivate) {
-          const newTrailingStop = parseFloat((ltp * (1 - trailPct)).toFixed(2));
+          const newTrailingStop = roundToTick(ltp * (1 - trailPct), 'down');
           const minStep         = avgPrice * TRAIL_MIN_STEP_PCT;
 
           if (newTrailingStop > stopLevel + minStep) {
@@ -389,7 +398,7 @@ export async function runPriceGuard() {
           logger.info(`[PriceGuard] PROFIT TARGET: ${holding.symbol} ₹${ltp.toFixed(2)} ≥ ₹${profitTarget.toFixed(2)} (+${(pnlPct * 100).toFixed(1)}%)`);
 
           // Profit target: LIMIT at current price (not target) — locks in what's available now
-          const sellPrice = parseFloat((ltp * 0.998).toFixed(2)); // 0.2% below LTP for quick fill
+          const sellPrice = roundToTick(ltp * 0.998, 'down'); // 0.2% below LTP, tick-aligned
           const profitSignal = await createSellSignal({
             portfolioId: portfolio.id,
             symbol: holding.symbol,
@@ -429,7 +438,7 @@ export async function runPriceGuard() {
             exchange: holding.exchange,
             quantity: partialQty,
             triggerType: 'LIMIT',
-            triggerPrice: parseFloat((ltp * 0.998).toFixed(2)),
+            triggerPrice: roundToTick(ltp * 0.998, 'down'), // tick-aligned
             confidence: 78,
             rationale: `Partial profit — ${holding.symbol} is up ${(pnlPct * 100).toFixed(1)}% (${(profitTargetPct * 75).toFixed(0)}% of your ${(profitTargetPct * 100).toFixed(0)}% target). Selling half (${partialQty} shares, ₹${halfGain.toFixed(0)} gain) locks in real money while the remaining ${holding.quantity - partialQty} shares ride for the full target. Risk-free from here on the booked portion.`
           });

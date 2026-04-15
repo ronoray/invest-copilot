@@ -13,6 +13,12 @@ import { getSystemPauseState, setPauseState, clearPauseState } from './pauseStat
 
 const prisma = new PrismaClient();
 
+// NSE equity tick size = ₹0.05. Round sell limits DOWN, buy limits UP.
+function roundToTick(price, direction = 'down', tick = 0.05) {
+  if (direction === 'down') return Math.floor(Math.round(price / tick * 1e9) / 1e9) * tick;
+  return Math.ceil(Math.round(price / tick * 1e9) / 1e9) * tick;
+}
+
 // Create bot instance ONLY ONCE
 let bot = null;
 let _pollingRestartTimer = null;
@@ -392,7 +398,7 @@ async function handleExecuteSignal(botInstance, query, signalId) {
           if (deviation > 0.40) {
             logger.warn(`Signal #${signalId} price validation: signal=₹${price}, market=₹${currentPrice}, deviation=${(deviation * 100).toFixed(1)}% — offering live-price LIMIT`);
             // Signal price is stale/hallucinated. Offer to execute at live price instead.
-            const liveLimit = parseFloat((currentPrice * 0.999).toFixed(2)); // 0.1% below LTP
+            const liveLimit = roundToTick(currentPrice * 0.999, 'down'); // 0.1% below LTP, tick-aligned
             // Store live price in DB for the Force LIMIT handler
             await prisma.tradeSignal.update({
               where: { id: signalId },
@@ -639,7 +645,7 @@ async function handleExecuteMarketFallback(botInstance, query, signalId) {
       try {
         const ltpMap = await getUpstoxLTP([signal.symbol]);
         const ltp = ltpMap.get(signal.symbol);
-        if (ltp?.price > 0) execPrice = parseFloat((ltp.price * 0.999).toFixed(2));
+        if (ltp?.price > 0) execPrice = roundToTick(ltp.price * 0.999, 'down'); // tick-aligned
       } catch (_) {}
     }
     if (!execPrice || execPrice <= 0) {
@@ -775,7 +781,11 @@ async function generateResumeBriefing(pauseState) {
   ).join('\n');
 
   try {
-    const anthropic = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
+    const anthropic = new Anthropic({
+      apiKey: process.env.CLAUDE_API_KEY,
+      baseURL: process.env.ANTHROPIC_BASE_URL,
+      defaultHeaders: { 'x-caller-id': 'invest-copilot', 'x-feature-name': 'telegram_bot' },
+    });
     const response = await anthropic.messages.create({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 400,

@@ -13,6 +13,8 @@ import logger from './logger.js';
 
 const anthropic = new Anthropic({
   apiKey: process.env.CLAUDE_API_KEY,
+  baseURL: process.env.ANTHROPIC_BASE_URL,
+  defaultHeaders: { 'x-caller-id': 'invest-copilot', 'x-feature-name': 'signal_generator' },
 });
 
 /**
@@ -345,9 +347,9 @@ ${portfolio.broker === 'UPSTOX' && portfolio.apiEnabled ? `UPSTOX LIVE TRADING �
 - ONLY NSE_EQ CNC delivery. No intraday, no F&O.
 - Capital: ₹${effectiveCash.toLocaleString('en-IN')}. Number of signals = however many fit at 15-20% per position.
 - ORDER TYPE RULE — THIS IS CRITICAL:
-  * confidence ≥ 85: use MARKET order. High conviction = execute now at market price. Don't let it slip away waiting for a limit fill.
-  * confidence 78-84: use LIMIT at current market price ±0.5% (set triggerPrice = price you want to buy at, within 0.5% of today's close). This fills at open or shortly after.
-  * DO NOT set limit prices at "support levels" 2-5% below current price. Those orders sit unfilled for days and generate zero returns. The whole point of a signal is PARTICIPATION.
+  * ALL BUY signals: use MARKET order. Execute at market price immediately. Do NOT use LIMIT for buys.
+  * Historical data shows 70% of LIMIT buy orders expired unfilled — this destroyed returns. MARKET orders ensure participation.
+  * SELL signals (stop-loss, profit-target): use LIMIT at the target price.
 ` : ''}
 ${profitTakingBlock}${mandate}
 
@@ -389,7 +391,7 @@ Respond in this EXACT JSON format (no markdown, no extra text):
 
 Notes:
 - Maximum 5 signals
-- triggerType: MARKET (confidence ≥ 85) or LIMIT (confidence 78-84, price within 0.5% of current market price)
+- triggerType: MARKET for ALL BUY signals (no exceptions). LIMIT only for SELL signals.
 - EVERY signal needs "price" field for capital validation (use current market price for MARKET orders)
 - confidence: 0-100 (min ${minConviction})
 - CRITICAL: Total BUY cost must not exceed ₹${effectiveCash.toLocaleString('en-IN')}. Show math.`;
@@ -423,6 +425,13 @@ Notes:
     const convictionFiltered = validatedSignals.filter(sig => {
       if ((sig.confidence ?? 0) < 78) {
         logger.info(`[SignalGen] Conviction gate: dropped ${sig.side} ${sig.symbol} at ${sig.confidence} (floor 78)`);
+        return false;
+      }
+      // ── Bearish regime gate: block new BUY entries when market is falling ──
+      // Historical data: buying in BEARISH/HIGH_STRESS regimes caused the majority
+      // of portfolio drawdown. In these regimes only SELL signals pass through.
+      if (sig.side === 'BUY' && ['BEARISH', 'HIGH_STRESS', 'CRASH'].includes(marketRegime?.regime)) {
+        logger.info(`[SignalGen] Regime gate: blocked BUY ${sig.symbol} — regime is ${marketRegime.regime}`);
         return false;
       }
       return true;

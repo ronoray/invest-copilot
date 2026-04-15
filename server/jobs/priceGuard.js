@@ -26,18 +26,18 @@ import logger from '../services/logger.js';
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 // Default stop: X% below avg when no explicit stopLoss is set on the Holding.
-const DEFAULT_STOP_PCT_ETF   = 0.06;   // 6% — ETFs track indices, recover faster
-const DEFAULT_STOP_PCT_STOCK = 0.08;   // 8% — individual stocks need more room
+const DEFAULT_STOP_PCT_ETF   = 0.05;   // 5% — tightened to cut losses faster
+const DEFAULT_STOP_PCT_STOCK = 0.06;   // 6% — tightened from 8%; accept smaller losses
 
 // Trailing stop: trails X% behind LTP once position becomes profitable.
 // Rule: stop ONLY moves up (ratchet). Never moves down.
-const TRAIL_PCT_ETF   = 0.03;   // trail 3% below LTP for ETFs
-const TRAIL_PCT_STOCK = 0.04;   // trail 4% below LTP for stocks
+const TRAIL_PCT_ETF   = 0.025;  // trail 2.5% below LTP for ETFs (tightened from 3%)
+const TRAIL_PCT_STOCK = 0.03;   // trail 3% below LTP for stocks (tightened from 4%)
 
 // Trailing activates once position is this profitable.
 // Below threshold: fixed stop at DEFAULT_STOP_PCT applies.
-const TRAIL_ACTIVATE_ETF   = 0.02;  // +2% profit → start trailing
-const TRAIL_ACTIVATE_STOCK = 0.03;  // +3% profit → start trailing
+const TRAIL_ACTIVATE_ETF   = 0.015; // +1.5% profit → start trailing (was 2%)
+const TRAIL_ACTIVATE_STOCK = 0.02;  // +2% profit → start trailing (was 3%)
 
 // Minimum stop improvement (as % of avgPrice) before updating DB + alerting.
 // Prevents DB writes + Telegram noise on tiny ₹0.01 moves.

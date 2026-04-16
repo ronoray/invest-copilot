@@ -326,6 +326,50 @@ router.post('/sync', async (req, res) => {
 });
 
 /**
+ * GET /api/portfolio/:id - Portfolio summary with computed P&L (for MCP portfolio_snapshot)
+ */
+router.get('/:id([0-9]+)', async (req, res) => {
+  try {
+    const portfolioId = parseInt(req.params.id);
+    const portfolio = await prisma.portfolio.findFirst({
+      where: { id: portfolioId, isActive: true },
+      include: { holdings: { select: { quantity: true, avgPrice: true, currentPrice: true } } }
+    });
+    if (!portfolio) return res.status(404).json({ error: 'Portfolio not found' });
+
+    let totalInvested = 0, totalCurrentValue = 0;
+    for (const h of portfolio.holdings) {
+      totalInvested += h.quantity * parseFloat(h.avgPrice || 0);
+      totalCurrentValue += h.quantity * parseFloat(h.currentPrice || h.avgPrice || 0);
+    }
+    const unrealizedPL = totalCurrentValue - totalInvested;
+    const unrealizedPLPercent = totalInvested > 0 ? (unrealizedPL / totalInvested) * 100 : 0;
+    const availableCash = parseFloat(portfolio.availableCash);
+
+    res.json({
+      success: true,
+      portfolio: {
+        id: portfolio.id,
+        name: portfolio.name,
+        ownerName: portfolio.ownerName,
+        broker: portfolio.broker,
+        startingCapital: parseFloat(portfolio.startingCapital),
+        currentValue: totalCurrentValue,
+        availableCash,
+        totalPortfolioValue: totalCurrentValue + availableCash,
+        totalInvested,
+        unrealizedPL,
+        unrealizedPLPercent: parseFloat(unrealizedPLPercent.toFixed(2)),
+        holdingsCount: portfolio.holdings.length,
+      }
+    });
+  } catch (error) {
+    logger.error('Portfolio snapshot error:', error);
+    res.status(500).json({ error: 'Failed to fetch portfolio' });
+  }
+});
+
+/**
  * GET /api/portfolio/:portfolioId/holdings - Get holdings for specific portfolio
  */
 router.get('/:portfolioId/holdings', async (req, res) => {

@@ -231,6 +231,20 @@ export default function Dashboard() {
   const selectedPortfolio = portfolios.find(p => p.id === selectedPortfolioId);
   const isUpstoxPortfolio = selectedPortfolio?.broker === 'UPSTOX';
 
+  // Total portfolio worth = holdings + cash (the real number, not just deployed capital)
+  const activePorts = portfolios.filter(p => !p.isPaused);
+  const totalCash = selectedPortfolioId === 'all'
+    ? activePorts.reduce((sum, p) => sum + (parseFloat(p.availableCash) || 0), 0)
+    : parseFloat(selectedPortfolio?.availableCash || 0);
+  const totalPortfolioWorth = (summary?.totalCurrent || 0) + totalCash;
+
+  // Overall P&L vs original starting capital
+  const totalStartingCapital = selectedPortfolioId === 'all'
+    ? activePorts.reduce((sum, p) => sum + (parseFloat(p.startingCapital) || 0), 0)
+    : parseFloat(selectedPortfolio?.startingCapital || 0);
+  const overallPL = totalStartingCapital > 0 ? totalPortfolioWorth - totalStartingCapital : null;
+  const overallPLPct = totalStartingCapital > 0 ? ((overallPL / totalStartingCapital) * 100).toFixed(2) : null;
+
   // Aggregate all recommendations into a flat array
   const allRecs = recommendations
     ? [...(recommendations.categorized?.high || []), ...(recommendations.categorized?.medium || []), ...(recommendations.categorized?.low || [])]
@@ -395,42 +409,49 @@ export default function Dashboard() {
 
           {/* Quick Stats Grid */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {/* Portfolio Value */}
-            <div className={`bg-gradient-to-br from-blue-50 to-blue-100 dark:from-blue-900/30 dark:to-blue-800/30 rounded-xl p-6 border border-blue-200 dark:border-blue-700 hover:shadow-lg transition-shadow`}>
+            {/* Total Portfolio Worth (holdings + cash) */}
+            <div className={`bg-gradient-to-br ${overallPL !== null ? plBg(overallPL) : 'from-blue-50 to-blue-100 dark:from-blue-900/30 dark:to-blue-800/30 border-blue-200 dark:border-blue-700'} rounded-xl p-6 border hover:shadow-lg transition-shadow`}>
               <div className="flex items-center justify-between mb-2">
-                <h3 className="text-sm font-medium text-blue-700">Portfolio Value</h3>
+                <h3 className="text-sm font-medium text-blue-700 dark:text-blue-300">Total Portfolio</h3>
                 <TrendingUp className="w-5 h-5 text-blue-600" />
               </div>
-              <p className="text-xl sm:text-3xl font-bold text-blue-900">{formatCurrency(summary?.totalCurrent)}</p>
-              {summary && (
-                <p className={`text-sm mt-1 font-semibold ${plColor(summary.unrealizedPL)}`}>
-                  {Number(summary.unrealizedPL) >= 0 ? '+' : ''}{formatCurrency(summary.unrealizedPL)} ({summary.plPercent}%)
+              <p className="text-xl sm:text-3xl font-bold text-blue-900 dark:text-blue-100">{formatCurrency(totalPortfolioWorth || null)}</p>
+              <div className="mt-1 space-y-0.5">
+                {overallPL !== null && (
+                  <p className={`text-sm font-semibold ${plColor(overallPL)}`}>
+                    {overallPL >= 0 ? '+' : ''}{formatCurrency(overallPL)} vs start ({overallPLPct}%)
+                  </p>
+                )}
+                <p className="text-xs text-blue-600 dark:text-blue-400">
+                  Holdings {formatCurrency(summary?.totalCurrent)} + Cash {formatCurrency(totalCash)}
                 </p>
-              )}
+              </div>
             </div>
 
-            {/* Unrealized P&L */}
+            {/* Unrealized P&L (on open positions) */}
             <div className={`bg-gradient-to-br ${plBg(summary?.unrealizedPL)} rounded-xl p-6 border hover:shadow-lg transition-shadow`}>
               <div className="flex items-center justify-between mb-2">
-                <h3 className={`text-sm font-medium ${Number(summary?.unrealizedPL) >= 0 ? 'text-green-700' : 'text-red-700'}`}>Unrealized P&L</h3>
+                <h3 className={`text-sm font-medium ${Number(summary?.unrealizedPL) >= 0 ? 'text-green-700' : 'text-red-700'}`}>Open Positions P&L</h3>
                 {Number(summary?.unrealizedPL) >= 0 ? <TrendingUp className="w-5 h-5 text-green-600" /> : <TrendingDown className="w-5 h-5 text-red-600" />}
               </div>
-              <p className={`text-3xl font-bold ${Number(summary?.unrealizedPL) >= 0 ? 'text-green-900' : 'text-red-900'}`}>
+              <p className={`text-3xl font-bold ${Number(summary?.unrealizedPL) >= 0 ? 'text-green-900 dark:text-green-100' : 'text-red-900 dark:text-red-100'}`}>
                 {summary ? formatCurrency(Math.abs(summary.unrealizedPL)) : '\u2014'}
               </p>
               <p className={`text-sm mt-1 font-semibold ${plColor(summary?.unrealizedPL)}`}>
-                {summary ? `${Number(summary.plPercent) >= 0 ? '+' : ''}${summary.plPercent}%` : '\u2014'}
+                {summary ? `${Number(summary.plPercent) >= 0 ? '+' : ''}${summary.plPercent}% on deployed` : '\u2014'}
               </p>
             </div>
 
-            {/* Invested Amount */}
+            {/* Starting Capital */}
             <div className="bg-gradient-to-br from-purple-50 to-purple-100 dark:from-purple-900/30 dark:to-purple-800/30 rounded-xl p-6 border border-purple-200 dark:border-purple-700 hover:shadow-lg transition-shadow">
               <div className="flex items-center justify-between mb-2">
-                <h3 className="text-sm font-medium text-purple-700">Invested</h3>
+                <h3 className="text-sm font-medium text-purple-700">Starting Capital</h3>
                 <CheckCircle className="w-5 h-5 text-purple-600" />
               </div>
-              <p className="text-xl sm:text-3xl font-bold text-purple-900">{formatCurrency(summary?.totalInvested)}</p>
-              <p className="text-sm text-purple-600 mt-1">Total capital deployed</p>
+              <p className="text-xl sm:text-3xl font-bold text-purple-900 dark:text-purple-100">{formatCurrency(totalStartingCapital || null)}</p>
+              <p className="text-sm text-purple-600 mt-1">
+                {summary?.totalInvested ? `${formatCurrency(summary.totalInvested)} deployed` : 'Original investment'}
+              </p>
             </div>
 
             {/* Holdings Count */}
@@ -439,7 +460,7 @@ export default function Dashboard() {
                 <h3 className="text-sm font-medium text-amber-700">Holdings</h3>
                 <CheckCircle className="w-5 h-5 text-amber-600" />
               </div>
-              <p className="text-xl sm:text-3xl font-bold text-amber-900">{holdings.length}</p>
+              <p className="text-xl sm:text-3xl font-bold text-amber-900 dark:text-amber-100">{holdings.length}</p>
               <p className="text-sm text-amber-600 mt-1">
                 {selectedPortfolioId === 'all' ? 'Across all portfolios' : 'In this portfolio'}
               </p>

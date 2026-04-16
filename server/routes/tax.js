@@ -155,7 +155,7 @@ router.get('/ltcg-timer/:holdingId', async (req, res) => {
  */
 router.get('/export', async (req, res) => {
   try {
-    const userId = req.userId;
+    const userId = req.user?.userId;
     const { year } = req.query;
 
     if (!year) {

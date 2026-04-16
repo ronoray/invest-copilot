@@ -14,6 +14,8 @@ import logger from './logger.js';
 
 const anthropic = new Anthropic({
   apiKey: process.env.CLAUDE_API_KEY,
+  baseURL: process.env.ANTHROPIC_BASE_URL,
+  defaultHeaders: { 'x-caller-id': 'invest-copilot', 'x-feature-name': 'war_room' },
 });
 
 // ============================================
@@ -186,8 +188,8 @@ You MUST respond with ONLY valid JSON (no markdown, no extra text) in this exact
 ${portfolio.broker === 'UPSTOX' && portfolio.apiEnabled ? `UPSTOX LIVE TRADING CONTEXT:
 - All opening plays will be sent to Telegram with a 1-tap Execute button. Orders go live on Upstox immediately.
 - Product: CNC delivery equity ONLY. No intraday, no F&O. Stocks are held T+1 or longer.
-- ORDER TYPE: confidence ≥ 85 → MARKET (executes at open price). confidence 78-84 → LIMIT within 0.5% of yesterday's close.
-  DO NOT set limit prices 2-5% below current market price — those orders never fill and generate zero returns.
+- ORDER TYPE: ALL BUY signals must be MARKET (executes at open price). SELL signals use LIMIT at the target/stop price.
+  NEVER use LIMIT for BUY — stale AI prices cause limit orders to expire unfilled, generating zero returns.
 - Size each opening play: 15-20% of available cash ₹${effectiveCash.toFixed(0)} per position. Number of positions = however many fit.
 - holdings actions (ADD/EXIT/TRIM) will also be sent as executable signals — be precise with price levels.
 ` : ''}CAPITAL RULES:
@@ -663,7 +665,7 @@ HARD RULES:
 - Total BUY cost MUST NOT exceed ₹${effectiveCash.toFixed(0)}
 - SELL only stocks in CURRENT HOLDINGS above. No phantom sells.
 - NO ETFs (NIFTYBEES, BANKBEES, GOLDBEES, etc.) — these are index returns, not alpha
-- Every recommendation must be SPECIFIC to this account: name the stock, name the rupee gain, name the risk. Generic "good setup" language is REJECTED.${portfolio.broker === 'UPSTOX' && portfolio.apiEnabled ? `\n- Tomorrow's plays become executable Telegram signals. ORDER TYPE: confidence ≥ 85 → MARKET. confidence 78-84 → LIMIT within 0.5% of current price. CNC delivery equity only.` : ''}`;
+- Every recommendation must be SPECIFIC to this account: name the stock, name the rupee gain, name the risk. Generic "good setup" language is REJECTED.${portfolio.broker === 'UPSTOX' && portfolio.apiEnabled ? `\n- Tomorrow's plays become executable Telegram signals. ALL BUY signals use MARKET order (executes at open). SELL signals use LIMIT. CNC delivery equity only.` : ''}`;
 })()}
 NEXT TRADING DAY CONTEXT:
 ${(() => {
@@ -703,7 +705,7 @@ Respond with ONLY valid JSON (no markdown):
     "exchange": "NSE",
     "quantity": 0,
     "price": 0,
-    "orderType": "LIMIT|MARKET",
+    "orderType": "MARKET for BUY, LIMIT for SELL",
     "rationale": "...",
     "capitalUsed": "e.g. 10 × ₹1500 = ₹15,000 (27% of ₹${effectiveCash.toFixed(0)})"
   }],

@@ -1402,13 +1402,13 @@ async function generateSignalsForAllPortfolios() {
  * Signals are sent with inline buttons: Execute/ACK, Snooze 30m, Dismiss.
  * Re-sends every 30 minutes until acknowledged, executed, or dismissed.
  */
-async function notifyPendingSignals() {
+async function notifyPendingSignals({ forceTimeBypass = false } = {}) {
   if (!isTradingDay(new Date())) return;
 
-  // Don't notify before market open (9:15 AM IST)
+  // Don't notify before market open (9:15 AM IST) unless bypassed (evening playbook immediate notify)
   const nowIST = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
   const minutesIST = nowIST.getHours() * 60 + nowIST.getMinutes();
-  if (minutesIST < 9 * 60 + 15) return;
+  if (!forceTimeBypass && minutesIST < 9 * 60 + 15) return;
 
   const pauseState = await getSystemPauseState();
   if (pauseState) {
@@ -2417,11 +2417,13 @@ export function initSignalNotifier() {
     timezone: 'Asia/Kolkata'
   });
 
-  // Mid-day holdings sync every 30 min during market hours (DDPI SELL awareness)
+  // Mid-day holdings + funds sync every 30 min during market hours (DDPI SELL awareness)
+  // Funds sync keeps availableCash accurate for signal generation.
   // Runs even when paused so data is fresh on resume
   cron.schedule('*/30 9-15 * * 1-5', async () => {
     if (!isTradingDay(new Date())) return;
-    logger.info('Running mid-day Upstox holdings sync...');
+    logger.info('Running mid-day Upstox holdings + funds sync...');
+    await syncAllUpstoxFunds();
     await syncAllUpstoxHoldingsAndExpireStaleSignals();
   }, {
     timezone: 'Asia/Kolkata'
@@ -2469,5 +2471,8 @@ export function initSignalNotifier() {
   logger.info('  Watchdog (missed scan recovery): every 15 min, 8 AM–8:30 PM IST');
   logger.info('  Startup recovery: fires 12s after init');
 }
+
+// Named export for dynamic import from telegramAlerts.js (evening immediate notify)
+export { notifyPendingSignals };
 
 export default { initSignalNotifier, notifyPendingSignals, generateSignalsForAllPortfolios, pollPendingOrders, generateSignalsConditional, syncAllUpstoxFunds, generateSignalsAtPivot };

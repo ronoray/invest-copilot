@@ -530,8 +530,10 @@ async function runEveningPlaybook() {
                     side: p.action === 'BUY' ? 'BUY' : 'SELL',
                     quantity: parseInt(p.quantity) || 1,
                     price: parseFloat(p.price),
-                    triggerType: p.orderType === 'MARKET' ? 'MARKET' : 'LIMIT',
-                    triggerPrice: p.orderType !== 'MARKET' ? parseFloat(p.price) : null,
+                    // BUY signals are always MARKET — stale AI limit prices cause expired orders.
+                    // Only SELL signals use LIMIT (at the target/stop price the AI specified).
+                    triggerType: p.action === 'BUY' ? 'MARKET' : (p.orderType === 'MARKET' ? 'MARKET' : 'LIMIT'),
+                    triggerPrice: p.action === 'BUY' ? null : (p.orderType !== 'MARKET' ? parseFloat(p.price) : null),
                     triggerLow: null,
                     triggerHigh: null,
                     confidence: 80,
@@ -565,8 +567,8 @@ async function runEveningPlaybook() {
                         exchange: sig.exchange || 'NSE',
                         side: sig.side,
                         quantity: Math.max(1, parseInt(sig.quantity) || 1),
-                        triggerType: sig.triggerType || 'LIMIT',
-                        triggerPrice: sig.triggerPrice ? parseFloat(sig.triggerPrice) : null,
+                        triggerType: sig.triggerType || 'MARKET',
+                        triggerPrice: sig.triggerType === 'MARKET' ? null : (sig.triggerPrice ? parseFloat(sig.triggerPrice) : null),
                         triggerLow: null,
                         triggerHigh: null,
                         confidence: sig.confidence || 80,
@@ -583,6 +585,14 @@ async function runEveningPlaybook() {
                 }
                 if (signalCount > 0) {
                   logger.info(`Evening playbook: created ${signalCount} signal(s) for portfolio ${portfolio.id}`);
+                  // Immediately notify — send signal cards with Execute buttons now.
+                  // Normal notifier only runs 9AM–3:30PM; without this the user waits until morning.
+                  try {
+                    const { notifyPendingSignals } = await import('./signalNotifier.js');
+                    await notifyPendingSignals({ forceTimeBypass: true });
+                  } catch (notifyErr) {
+                    logger.warn(`Evening playbook: immediate notify failed: ${notifyErr.message}`);
+                  }
                 }
               } catch (sigCreateErr) {
                 logger.error(`Evening playbook: signal creation failed for portfolio ${portfolio.id}:`, sigCreateErr.message);

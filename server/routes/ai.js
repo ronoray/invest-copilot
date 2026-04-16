@@ -226,7 +226,7 @@ router.get('/recommendations', async (req, res) => {
  */
 router.post('/scan', async (req, res) => {
   try {
-    const userId = req.userId;
+    const userId = req.user?.userId;
     const { baseAmount = 10000, perCategory = 5, portfolioId } = req.body;
 
     logger.info(`Starting AI market scan - amount: ₹${baseAmount}, portfolioId: ${portfolioId || 'auto'}`);
@@ -298,7 +298,7 @@ router.post('/scan', async (req, res) => {
 router.get('/portfolio-plan', async (req, res) => {
   try {
     const { portfolioId } = req.query;
-    const userId = req.userId; // From auth middleware
+    const userId = req.user?.userId; // From auth middleware
 
     logger.info(`Generating portfolio plan... (portfolioId: ${portfolioId || 'all'})`);
 
@@ -508,7 +508,7 @@ Return ONLY JSON (no markdown):
  */
 router.get('/comprehensive-analysis', async (req, res) => {
   try {
-    const userId = req.userId;
+    const userId = req.user?.userId;
     const { portfolioId } = req.query;
 
     logger.info(`Generating comprehensive analysis (portfolioId: ${portfolioId || 'all'})...`);
@@ -703,7 +703,7 @@ router.post('/plan/update-capital', async (req, res) => {
  */
 router.post('/multi-asset/scan', async (req, res) => {
   try {
-    const userId = req.userId;
+    const userId = req.user?.userId;
     const { portfolioId, riskProfile = 'BALANCED', capital = 100000, timeHorizon = 'MEDIUM' } = req.body;
 
     logger.info(`Multi-asset scan: capital=₹${capital}, risk=${riskProfile}, horizon=${timeHorizon}, portfolioId=${portfolioId || 'auto'}`);
@@ -746,7 +746,7 @@ router.post('/multi-asset/scan', async (req, res) => {
  */
 router.get('/commodities', async (req, res) => {
   try {
-    const userId = req.userId;
+    const userId = req.user?.userId;
     const { capital = 50000, riskProfile = 'BALANCED', portfolioId } = req.query;
 
     logger.info(`Commodity recommendations: capital=₹${capital}, risk=${riskProfile}, portfolioId=${portfolioId || 'auto'}`);
@@ -783,7 +783,7 @@ router.get('/commodities', async (req, res) => {
  */
 router.get('/mutual-funds', async (req, res) => {
   try {
-    const userId = req.userId;
+    const userId = req.user?.userId;
     const { capital = 50000, riskProfile = 'BALANCED', timeHorizon = 'LONG', portfolioId } = req.query;
 
     logger.info(`MF recommendations: capital=₹${capital}, risk=${riskProfile}, horizon=${timeHorizon}, portfolioId=${portfolioId || 'auto'}`);

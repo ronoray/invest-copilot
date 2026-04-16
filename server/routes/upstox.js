@@ -17,7 +17,7 @@ const router = express.Router();
  */
 router.get('/authorize', async (req, res) => {
   try {
-    const userId = req.userId;
+    const userId = req.user?.userId;
     const authUrl = await getAuthorizationUrl(userId);
     res.json({ authUrl });
   } catch (error) {
@@ -32,7 +32,7 @@ router.get('/authorize', async (req, res) => {
  */
 router.post('/place-order', async (req, res) => {
   try {
-    const userId = req.userId;
+    const userId = req.user?.userId;
     const { symbol, exchange, transactionType, orderType, quantity, price, triggerPrice, portfolioId } = req.body;
 
     if (!symbol || !transactionType || !quantity) {
@@ -71,7 +71,7 @@ router.post('/place-order', async (req, res) => {
  */
 router.get('/order/:orderId', async (req, res) => {
   try {
-    const userId = req.userId;
+    const userId = req.user?.userId;
     const { orderId } = req.params;
 
     const result = await getOrderStatus(userId, orderId);
@@ -88,7 +88,7 @@ router.get('/order/:orderId', async (req, res) => {
  */
 router.delete('/order/:orderId', async (req, res) => {
   try {
-    const userId = req.userId;
+    const userId = req.user?.userId;
     const { orderId } = req.params;
 
     const result = await cancelOrder(userId, orderId);
@@ -105,7 +105,7 @@ router.delete('/order/:orderId', async (req, res) => {
  */
 router.get('/holdings', async (req, res) => {
   try {
-    const userId = req.userId;
+    const userId = req.user?.userId;
     const result = await getHoldings(userId);
     res.json(result);
   } catch (error) {
@@ -120,7 +120,7 @@ router.get('/holdings', async (req, res) => {
  */
 router.get('/funds', async (req, res) => {
   try {
-    const result = await getFunds(req.userId);
+    const result = await getFunds(req.user?.userId);
     res.json({ success: true, data: result });
   } catch (error) {
     logger.error('Upstox funds error:', error.message);
@@ -134,7 +134,7 @@ router.get('/funds', async (req, res) => {
  */
 router.get('/orders', async (req, res) => {
   try {
-    const result = await getOrderBook(req.userId);
+    const result = await getOrderBook(req.user?.userId);
     res.json({ success: true, ...result });
   } catch (error) {
     logger.error('Upstox order book error:', error.message);
@@ -148,7 +148,7 @@ router.get('/orders', async (req, res) => {
  */
 router.get('/trades', async (req, res) => {
   try {
-    const result = await getTradeBook(req.userId);
+    const result = await getTradeBook(req.user?.userId);
     res.json({ success: true, ...result });
   } catch (error) {
     logger.error('Upstox trade book error:', error.message);
@@ -162,7 +162,7 @@ router.get('/trades', async (req, res) => {
  */
 router.get('/profile', async (req, res) => {
   try {
-    const data = await getUserProfile(req.userId);
+    const data = await getUserProfile(req.user?.userId);
     res.json({ success: true, data });
   } catch (error) {
     logger.error('Upstox profile error:', error.message);

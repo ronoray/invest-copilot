@@ -14,11 +14,11 @@ const prisma = new PrismaClient();
 router.get('/', async (req, res) => {
   try {
     const { all } = req.query;
-    // const userId = req.userId; // UNCOMMENT when authenticate middleware is added
+    // const userId = req.user?.userId; // UNCOMMENT when authenticate middleware is added
 
     // ==================== Portfolio list for dropdown (with computed values) ====================
     if (all === 'true') {
-      const userId = req.userId;
+      const userId = req.user?.userId;
 
       // Sync Upstox portfolios in background (best-effort, don't block on failure)
       if (userId) {
@@ -331,7 +331,7 @@ router.post('/sync', async (req, res) => {
 router.get('/:portfolioId/holdings', async (req, res) => {
   try {
     const { portfolioId } = req.params;
-    const userId = req.userId;
+    const userId = req.user?.userId;
 
     // Verify portfolio exists
     const portfolio = await prisma.portfolio.findFirst({
@@ -402,7 +402,7 @@ router.post('/:id/update-capital', async (req, res) => {
   try {
     const { id } = req.params;
     const { newCapital, reason } = req.body;
-    const userId = req.userId;
+    const userId = req.user?.userId;
 
     // Validate
     if (!newCapital || newCapital < 1000) {
@@ -504,7 +504,7 @@ router.post('/create', async (req, res) => {
     }
 
     // Get userId from auth if available
-    const userId = req.userId || 1;
+    const userId = req.user?.userId || 1;
 
     const portfolio = await prisma.portfolio.create({
       data: {

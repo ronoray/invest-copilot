@@ -324,9 +324,14 @@ export async function exchangeCodeForToken(code, userId) {
 
   const tokenData = response.data;
 
-  // Upstox v2 tokens expire at end of trading day (~3:30 PM IST next day to be safe)
-  const expiresAt = new Date();
-  expiresAt.setHours(23, 59, 59, 0); // End of today
+  // Use the actual JWT exp field for accurate expiry (Upstox tokens expire at ~3:30 AM IST)
+  let expiresAt;
+  try {
+    const payload = JSON.parse(Buffer.from(tokenData.access_token.split('.')[1], 'base64').toString());
+    expiresAt = new Date(payload.exp * 1000);
+  } catch {
+    expiresAt = new Date(Date.now() + 3 * 60 * 60 * 1000); // fallback: 3 hours
+  }
 
   await prisma.upstoxIntegration.update({
     where: { userId },

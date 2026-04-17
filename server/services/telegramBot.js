@@ -1984,18 +1984,11 @@ Use /mute to disable all alerts`;
           return;
         }
 
-        // Check if token is still valid
         const valid = await isTokenValid(userId);
-        if (valid) {
-          await botInstance.sendMessage(msg.chat.id,
-            '✅ Upstox token is still valid! No need to re-authenticate.',
-            { parse_mode: 'Markdown' });
-          return;
-        }
-
         const authUrl = await getAuthorizationUrl(userId);
+        const statusLine = valid ? '✅ Token is active — click to refresh anyway.' : '🔐 Token expired — login required.';
         await botInstance.sendMessage(msg.chat.id,
-          `🔐 *Upstox Authentication Required*\n\nYour token has expired. Click below to login:\n\n[Login to Upstox](${authUrl})\n\nAfter login, you'll be redirected back and your token will be refreshed automatically.`,
+          `${statusLine}\n\n[Login to Upstox](${authUrl})\n\nAfter login, your token will be refreshed automatically.`,
           { parse_mode: 'Markdown', disable_web_page_preview: true });
       } catch (error) {
         logger.error('Auth command error:', error);

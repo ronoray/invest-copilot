@@ -2006,12 +2006,23 @@ async function resetStalePlacingSignals() {
       const price = sig.triggerPrice ? `₹${parseFloat(sig.triggerPrice).toFixed(2)}` : 'market';
 
       // Step 1: check actual Upstox order status if we have an order ID
+      // sig.upstoxOrderId is the internal UpstoxOrder.id — must look up the actual Upstox orderId first
       let upstoxStatus = null;
+      let upstoxOrderId = null;
       if (sig.upstoxOrderId && userId) {
         try {
-          const statusResult = await getOrderStatus(userId, sig.upstoxOrderId);
-          upstoxStatus = statusResult.status; // COMPLETE, OPEN, PENDING, REJECTED, CANCELLED
-          logger.info(`[Stale PLACING] Signal #${sig.id} Upstox order ${sig.upstoxOrderId} status: ${upstoxStatus}`);
+          const orderRecord = await prisma.upstoxOrder.findUnique({
+            where: { id: sig.upstoxOrderId },
+            select: { orderId: true }
+          });
+          upstoxOrderId = orderRecord?.orderId;
+          if (upstoxOrderId) {
+            const statusResult = await getOrderStatus(userId, upstoxOrderId);
+            upstoxStatus = statusResult.status; // COMPLETE, OPEN, PENDING, REJECTED, CANCELLED
+            logger.info(`[Stale PLACING] Signal #${sig.id} Upstox order ${upstoxOrderId} status: ${upstoxStatus}`);
+          } else {
+            logger.warn(`[Stale PLACING] No Upstox orderId found for internal order ${sig.upstoxOrderId} (signal #${sig.id})`);
+          }
         } catch (e) {
           logger.warn(`[Stale PLACING] Could not fetch Upstox status for signal #${sig.id}: ${e.message}`);
         }
@@ -2041,10 +2052,10 @@ async function resetStalePlacingSignals() {
         // If we don't cancel: Upstox already deducted this capital from available_margin,
         // AND getEffectiveCash will also reserve it for the PENDING signal → double-count → capital check fails.
         try {
-          await cancelOrder(userId, sig.upstoxOrderId);
-          logger.info(`[Stale PLACING] Cancelled live Upstox order ${sig.upstoxOrderId} for signal #${sig.id} (${sig.symbol})`);
+          await cancelOrder(userId, upstoxOrderId);
+          logger.info(`[Stale PLACING] Cancelled live Upstox order ${upstoxOrderId} for signal #${sig.id} (${sig.symbol})`);
         } catch (e) {
-          logger.error(`[Stale PLACING] Failed to cancel Upstox order ${sig.upstoxOrderId}: ${e.message} — skipping reset to avoid capital double-count`);
+          logger.error(`[Stale PLACING] Failed to cancel Upstox order ${upstoxOrderId}: ${e.message} — skipping reset to avoid capital double-count`);
           // Don't reset to PENDING if cancel failed — leave in PLACING so it gets retried next cycle
           if (bot && chatId) {
             await bot.sendMessage(chatId,

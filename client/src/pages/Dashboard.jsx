@@ -857,6 +857,24 @@ export default function Dashboard() {
                 <p className="font-semibold text-gray-900 dark:text-gray-100">Withdraw Funds</p>
               </a>
             )}
+            {isUpstoxPortfolio && (
+              <button
+                onClick={async () => {
+                  try {
+                    const res = await api.get('/upstox/authorize');
+                    window.location.href = res.data.authUrl;
+                  } catch (e) {
+                    alert('Failed to get auth URL: ' + (e.response?.data?.error || e.message));
+                  }
+                }}
+                className="bg-orange-50 dark:bg-orange-900/20 hover:bg-orange-100 dark:hover:bg-orange-900/40 border-2 border-orange-200 dark:border-orange-700 rounded-xl p-4 text-center transition-all hover:shadow-md"
+              >
+                <div className="text-2xl mb-2">
+                  <RefreshCw className="w-6 h-6 mx-auto text-orange-600" />
+                </div>
+                <p className="font-semibold text-orange-700 dark:text-orange-400">Reconnect Upstox</p>
+              </button>
+            )}
           </div>
         </>
       )}

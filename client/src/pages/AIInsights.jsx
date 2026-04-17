@@ -180,6 +180,7 @@ export default function AIInsights() {
               </span>
               <span>
                 🕒 Generated: {new Date(analysis.generatedAt).toLocaleString('en-IN', {
+                  timeZone: 'Asia/Kolkata',
                   month: 'short',
                   day: 'numeric',
                   hour: '2-digit',

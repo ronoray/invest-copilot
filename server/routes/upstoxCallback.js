@@ -115,9 +115,14 @@ router.post('/webhook/upstox/token', async (req, res) => {
       return res.status(404).json({ error: 'No integration found' });
     }
 
-    // Update token
-    const expiresAt = new Date();
-    expiresAt.setHours(23, 59, 59, 0);
+    // Use actual JWT exp for accurate expiry
+    let expiresAt;
+    try {
+      const payload = JSON.parse(Buffer.from(access_token.split('.')[1], 'base64').toString());
+      expiresAt = new Date(payload.exp * 1000);
+    } catch {
+      expiresAt = new Date(Date.now() + 3 * 60 * 60 * 1000);
+    }
 
     await prisma.upstoxIntegration.update({
       where: { id: integration.id },

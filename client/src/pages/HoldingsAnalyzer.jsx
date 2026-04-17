@@ -442,7 +442,7 @@ export default function HoldingsAnalyzer() {
                   {pendingCount > 0
                     ? `${pendingCount} pending signal${pendingCount > 1 ? 's' : ''} (repeats every 30 min)`
                     : 'No pending signals'}
-                  {lastNotifiedAt && ` | Last push: ${new Date(lastNotifiedAt).toLocaleTimeString('en-IN')}`}
+                  {lastNotifiedAt && ` | Last push: ${new Date(lastNotifiedAt).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })}`}
                 </p>
               </div>
             </div>

@@ -647,7 +647,7 @@ export default function Dashboard() {
                           {getTriggerLabel(sig)}
                         </span>
                         <span>{sig.exchange}</span>
-                        <span>{new Date(sig.createdAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}</span>
+                        <span>{new Date(sig.createdAt).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' })}</span>
                       </div>
 
                       {sig.rationale && (

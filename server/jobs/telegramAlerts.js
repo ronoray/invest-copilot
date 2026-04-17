@@ -584,15 +584,9 @@ async function runEveningPlaybook() {
                   }
                 }
                 if (signalCount > 0) {
-                  logger.info(`Evening playbook: created ${signalCount} signal(s) for portfolio ${portfolio.id}`);
-                  // Immediately notify — send signal cards with Execute buttons now.
-                  // Normal notifier only runs 9AM–3:30PM; without this the user waits until morning.
-                  try {
-                    const { notifyPendingSignals } = await import('./signalNotifier.js');
-                    await notifyPendingSignals({ forceTimeBypass: true });
-                  } catch (notifyErr) {
-                    logger.warn(`Evening playbook: immediate notify failed: ${notifyErr.message}`);
-                  }
+                  logger.info(`Evening playbook: created ${signalCount} signal(s) for portfolio ${portfolio.id} — queued for market open`);
+                  // Do NOT send Execute buttons now — markets are closed.
+                  // The morning signalNotifier will send them at 9:15 AM when Upstox is live.
                 }
               } catch (sigCreateErr) {
                 logger.error(`Evening playbook: signal creation failed for portfolio ${portfolio.id}:`, sigCreateErr.message);
@@ -606,7 +600,7 @@ async function runEveningPlaybook() {
 
             const capitalCheckLine = playbook.capitalCheck ? `\n_Capital: ${playbook.capitalCheck}_` : '';
             const executeNote = signalCount > 0
-              ? `\n⚡ *${signalCount} signal(s) queued — Execute buttons ready*`
+              ? `\n⏰ *${signalCount} signal(s) queued — Execute buttons will appear at market open (9:15 AM)*`
               : '';
 
             // Build compact section: forward-looking first, brief accountability last

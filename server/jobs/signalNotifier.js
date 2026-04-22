@@ -2051,24 +2051,37 @@ async function resetStalePlacingSignals() {
         // Order is still live on exchange — MUST cancel before resetting to PENDING.
         // If we don't cancel: Upstox already deducted this capital from available_margin,
         // AND getEffectiveCash will also reserve it for the PENDING signal → double-count → capital check fails.
-        try {
-          await cancelOrder(userId, upstoxOrderId);
-          logger.info(`[Stale PLACING] Cancelled live Upstox order ${upstoxOrderId} for signal #${sig.id} (${sig.symbol})`);
-        } catch (e) {
-          logger.error(`[Stale PLACING] Failed to cancel Upstox order ${upstoxOrderId}: ${e.message} — skipping reset to avoid capital double-count`);
-          // Don't reset to PENDING if cancel failed — leave in PLACING so it gets retried next cycle
-          if (bot && chatId) {
-            await bot.sendMessage(chatId,
-              `⚠️ *Order Cancel Failed*\n\n` +
-              `Signal #${sig.id}: *${sig.symbol}* has a live order on Upstox that couldn't be cancelled automatically.\n\n` +
-              `Please cancel it manually in Upstox app, then tap Dismiss here.`,
-              {
-                parse_mode: 'Markdown',
-                reply_markup: { inline_keyboard: [[{ text: '🚫 Dismiss', callback_data: `sig_dismiss_${sig.id}` }]] }
-              }
-            ).catch(() => {});
+        let cancelled = false;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            await cancelOrder(userId, upstoxOrderId);
+            cancelled = true;
+            logger.info(`[Stale PLACING] Cancelled live Upstox order ${upstoxOrderId} for signal #${sig.id} (${sig.symbol}) on attempt ${attempt}`);
+            break;
+          } catch (e) {
+            logger.warn(`[Stale PLACING] Cancel attempt ${attempt}/3 failed for order ${upstoxOrderId}: ${e.message}`);
+            if (attempt < 3) await new Promise(r => setTimeout(r, 1000));
           }
-          continue;
+        }
+
+        if (!cancelled) {
+          logger.error(`[Stale PLACING] All 3 cancel attempts failed for order ${upstoxOrderId} (signal #${sig.id}) — will retry next cron cycle`);
+          // Throttle user notification to once per 2 hours to avoid spam
+          const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+          const shouldNotify = !sig.lastNotifiedAt || sig.lastNotifiedAt < twoHoursAgo;
+          if (shouldNotify && bot && chatId) {
+            await bot.sendMessage(chatId,
+              `⚠️ *Order Cancel Pending*\n\n` +
+              `Signal #${sig.id}: *${sig.symbol}* ${sig.side} ${sig.quantity}qty @ ${price}\n\n` +
+              `Upstox order is still live but cancel is failing. Retrying automatically every 5 min.`,
+              { parse_mode: 'Markdown' }
+            ).catch(() => {});
+            await prisma.tradeSignal.update({
+              where: { id: sig.id },
+              data: { lastNotifiedAt: new Date() }
+            });
+          }
+          continue; // Stay in PLACING, cron will retry next cycle
         }
       }
 

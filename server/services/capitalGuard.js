@@ -552,11 +552,12 @@ export async function syncUpstoxHoldings(userId) {
       const avgPrice = parseFloat(uh.average_price || 0);
       const currentPrice = parseFloat(uh.last_price || uh.close_price || 0);
 
-      // Adjust for today's sells (long-term-holdings doesn't reflect same-day sells until T+1)
-      const adj = positionAdjustments.get(key);
-      if (adj && adj.sellQty > 0) {
-        quantity -= adj.sellQty;
-        logger.info(`[Capital Guard] ${symbol}: demat qty=${uh.quantity}, today sold=${adj.sellQty}, effective=${quantity}`);
+      // cnc_used_quantity = units already committed in CNC trades today (sold but not yet T+1 settled,
+      // or pledged for margin). These cannot be sold again — subtract to get actual sellable quantity.
+      const cncUsed = uh.cnc_used_quantity || 0;
+      if (cncUsed > 0) {
+        quantity = Math.max(0, quantity - cncUsed);
+        logger.info(`[Capital Guard] ${symbol}: demat=${uh.quantity}, cnc_used=${cncUsed}, sellable=${quantity}`);
       }
 
       if (quantity > 0) {

@@ -122,12 +122,48 @@ async function upstoxRequest(accessToken, method, endpoint, data = null) {
     const body = error.response?.data;
     logger.error(`Upstox API ${method} ${endpoint} failed [${status}]:`, JSON.stringify(body));
 
-    // Throw a more useful error with the Upstox error message
     const upstoxMsg = body?.errors?.[0]?.message || body?.message || body?.error || error.message;
     const enriched = new Error(`Upstox API [${status}]: ${upstoxMsg}`);
     enriched.status = status;
     enriched.upstoxBody = body;
+    // Flag UDAPI100016 so callers can mark the token as invalid and alert the user
+    enriched.isInvalidCredentials = body?.errors?.some(e => e.errorCode === 'UDAPI100016') === true;
     throw enriched;
+  }
+}
+
+/**
+ * Mark the Upstox integration as disconnected (token invalidated by Upstox)
+ * and send an immediate Telegram re-auth notification.
+ * Called when UDAPI100016 is received from a live API call.
+ */
+async function handleInvalidCredentials(userId) {
+  try {
+    await prisma.upstoxIntegration.updateMany({
+      where: { userId },
+      data: { isConnected: false }
+    });
+    logger.warn(`[Upstox] UDAPI100016 — token invalidated for user ${userId}. Marked isConnected=false.`);
+  } catch (e) {
+    logger.error(`[Upstox] Failed to mark integration disconnected for user ${userId}:`, e.message);
+  }
+  // Fire-and-forget Telegram alert via dynamic import to avoid circular dep
+  try {
+    const { getBot } = await import('./telegramBot.js');
+    const bot = getBot();
+    if (bot) {
+      const integration = await prisma.upstoxIntegration.findFirst({ where: { userId }, include: { user: { include: { telegramUser: true } } } });
+      const telegramUser = integration?.user?.telegramUser;
+      if (telegramUser) {
+        const authUrl = await getAuthorizationUrl(userId);
+        await bot.sendMessage(parseInt(telegramUser.telegramId),
+          `⚠️ *Upstox: Invalid Credentials*\n\nYour Upstox token was rejected by the API (UDAPI100016). This usually means the token was invalidated by a re-auth elsewhere.\n\nPlease re-authenticate:\n[Login to Upstox](${authUrl})\n\nOr use /auth`,
+          { parse_mode: 'Markdown', disable_web_page_preview: true }
+        );
+      }
+    }
+  } catch (e) {
+    logger.warn(`[Upstox] Could not send UDAPI100016 Telegram alert for user ${userId}:`, e.message);
   }
 }
 
@@ -167,12 +203,13 @@ export async function placeOrder(userId, orderParams) {
 
   logger.info(`Placing Upstox order: ${transactionType} ${quantity}x ${symbol}`, orderData);
 
-  const result = await upstoxRequest(
-    integration.accessToken,
-    'POST',
-    '/order/place',
-    orderData
-  );
+  let result;
+  try {
+    result = await upstoxRequest(integration.accessToken, 'POST', '/order/place', orderData);
+  } catch (err) {
+    if (err.isInvalidCredentials) handleInvalidCredentials(userId).catch(() => {});
+    throw err;
+  }
 
   // Record order in DB
   const order = await prisma.upstoxOrder.create({
@@ -372,7 +409,13 @@ export async function isTokenValid(userId) {
  */
 export async function getFunds(userId) {
   const integration = await getIntegration(userId);
-  const result = await upstoxRequest(integration.accessToken, 'GET', '/user/get-funds-and-margin');
+  let result;
+  try {
+    result = await upstoxRequest(integration.accessToken, 'GET', '/user/get-funds-and-margin');
+  } catch (err) {
+    if (err.isInvalidCredentials) handleInvalidCredentials(userId).catch(() => {});
+    throw err;
+  }
   const eq = result.data?.equity || {};
   return {
     availableMargin: eq.available_margin || 0,
@@ -418,11 +461,13 @@ export async function getUserProfile(userId) {
 export async function getHoldings(userId) {
   const integration = await getIntegration(userId);
 
-  const result = await upstoxRequest(
-    integration.accessToken,
-    'GET',
-    '/portfolio/long-term-holdings'
-  );
+  let result;
+  try {
+    result = await upstoxRequest(integration.accessToken, 'GET', '/portfolio/long-term-holdings');
+  } catch (err) {
+    if (err.isInvalidCredentials) handleInvalidCredentials(userId).catch(() => {});
+    throw err;
+  }
 
   // Update last sync time
   await prisma.upstoxIntegration.update({

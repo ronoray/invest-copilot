@@ -124,6 +124,15 @@ router.post('/webhook/upstox/token', async (req, res) => {
       expiresAt = new Date(Date.now() + 3 * 60 * 60 * 1000);
     }
 
+    // Only overwrite if this token expires AFTER the one already stored.
+    // Prevents a delayed webhook from clobbering a fresher token the user
+    // just obtained via manual OAuth re-auth.
+    const currentExpiry = integration.tokenExpiresAt ? new Date(integration.tokenExpiresAt) : null;
+    if (currentExpiry && expiresAt <= currentExpiry) {
+      logger.info(`Upstox token webhook: skipped — stored token expires ${currentExpiry.toISOString()}, webhook token expires ${expiresAt.toISOString()} (not newer)`);
+      return res.json({ success: true, skipped: true });
+    }
+
     await prisma.upstoxIntegration.update({
       where: { id: integration.id },
       data: {

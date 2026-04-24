@@ -997,9 +997,8 @@ async function syncAllUpstoxHoldingsAndExpireStaleSignals() {
       }
     }
 
-    // P&L tracking for external Upstox sells (done via Upstox app, not through the bot)
+    // P&L DB update for external Upstox sells (notification handled in capitalGuard.syncUpstoxHoldings)
     if (allSoldHoldings.length > 0) {
-      const bot = getBot();
       for (const sold of allSoldHoldings) {
         try {
           if (!sold.sellPrice || sold.sellPrice <= 0) continue;
@@ -1011,10 +1010,10 @@ async function syncAllUpstoxHoldingsAndExpireStaleSignals() {
               symbol: sold.symbol,
               side: 'BUY',
               status: 'EXECUTED',
-              executedPrice: { not: null }
+              executedPrice: { not: null },
+              exitPrice: null  // only update if not already captured inline
             },
-            orderBy: { createdAt: 'desc' },
-            include: { portfolio: { include: { user: { include: { telegramUser: true } } } } }
+            orderBy: { createdAt: 'desc' }
           });
 
           if (matchingBuy?.executedPrice) {
@@ -1028,20 +1027,6 @@ async function syncAllUpstoxHoldingsAndExpireStaleSignals() {
             });
 
             logger.info(`[External P&L] ${sold.symbol}: buy=₹${matchingBuy.executedPrice.toFixed(2)} → sell=₹${sold.sellPrice.toFixed(2)}, P&L=${pnlSign}₹${pnl.toFixed(2)} (${outcome})`);
-
-            const telegramUser = matchingBuy.portfolio?.user?.telegramUser;
-            if (bot && telegramUser?.isActive) {
-              const emoji = outcome === 'PROFIT' ? '🟢' : outcome === 'LOSS' ? '🔴' : '⚪';
-              await bot.sendMessage(
-                parseInt(telegramUser.telegramId),
-                `${emoji} *External Sell Detected — P&L Captured*\n\n` +
-                `*${sold.symbol}* — ${sold.quantity} shares\n` +
-                `Buy: ₹${matchingBuy.executedPrice.toFixed(2)} → Sell: ₹${sold.sellPrice.toFixed(2)}\n` +
-                `Realized P&L: *${pnlSign}₹${Math.abs(pnl).toFixed(2)}* (${outcome})\n\n` +
-                `_This sell was done via Upstox app (not through the bot). P&L has been recorded._`,
-                { parse_mode: 'Markdown' }
-              ).catch(e => logger.warn(`P&L alert failed for ${sold.symbol}:`, e.message));
-            }
           }
         } catch (pnlErr) {
           logger.warn(`[External P&L] tracking failed for ${sold.symbol}:`, pnlErr.message);

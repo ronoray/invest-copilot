@@ -672,23 +672,45 @@ export async function syncUpstoxHoldings(userId) {
             logger.warn(`[Capital Guard] Failed to expire SELL signals for ${holding.symbol}: ${expireErr.message}`);
           }
 
-          // Telegram notification for externally-sold holdings
+          // Telegram notification + P&L DB update for externally-sold holdings
           try {
             const tg = portfolio.user?.telegramUser;
             if (tg?.isActive && !tg?.isMuted) {
               const { getBot } = await import('./telegramBot.js');
               const bot = getBot();
               if (bot) {
-                const avgP = parseFloat(holding.avgPrice);
-                const plPct = sellPrice > 0 && avgP > 0
-                  ? ((sellPrice - avgP) / avgP * 100).toFixed(2)
-                  : null;
-                const plStr = plPct !== null
-                  ? `\nSell ₹${sellPrice.toFixed(2)} | Cost ₹${avgP.toFixed(2)} | P&L ${plPct >= 0 ? '+' : ''}${plPct}%`
-                  : '';
+                let plLine = '';
+                // Try to find matching EXECUTED BUY signal for accurate P&L
+                if (sellPrice > 0) {
+                  try {
+                    const matchingBuy = await prisma.tradeSignal.findFirst({
+                      where: {
+                        portfolioId: portfolio.id,
+                        symbol: holding.symbol,
+                        side: 'BUY',
+                        status: 'EXECUTED',
+                        executedPrice: { not: null }
+                      },
+                      orderBy: { createdAt: 'desc' }
+                    });
+                    if (matchingBuy?.executedPrice) {
+                      const pnl = (sellPrice - matchingBuy.executedPrice) * holding.quantity;
+                      const outcome = pnl > 1 ? 'PROFIT' : pnl < -1 ? 'LOSS' : 'BREAKEVEN';
+                      const pnlSign = pnl >= 0 ? '+' : '';
+                      const emoji = outcome === 'PROFIT' ? '🟢' : outcome === 'LOSS' ? '🔴' : '⚪';
+                      plLine = `\nBuy ₹${matchingBuy.executedPrice.toFixed(2)} → Sell ₹${sellPrice.toFixed(2)} | ${emoji} ${pnlSign}₹${Math.abs(pnl).toFixed(2)} (${outcome})`;
+                      await prisma.tradeSignal.update({
+                        where: { id: matchingBuy.id },
+                        data: { exitPrice: sellPrice, realizedPnl: pnl, outcome }
+                      }).catch(() => {});
+                    }
+                  } catch (buyErr) {
+                    logger.warn(`[Capital Guard] BUY signal P&L lookup failed for ${holding.symbol}: ${buyErr.message}`);
+                  }
+                }
                 await bot.sendMessage(
                   parseInt(tg.telegramId),
-                  `✅ *${holding.symbol} Sold* (detected externally)\n\n${holding.quantity}× *${holding.symbol}* is no longer in your Upstox holdings.${plStr}\n\n_Pending sell signals for this stock have been expired._`,
+                  `✅ *${holding.symbol} Sold* (detected externally)\n\n${holding.quantity}× *${holding.symbol}* is no longer in your Upstox holdings.${plLine}\n\n_Pending sell signals for this stock have been expired._`,
                   { parse_mode: 'Markdown' }
                 ).catch(() => {});
               }

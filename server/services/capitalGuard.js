@@ -589,7 +589,7 @@ export async function syncUpstoxHoldings(userId) {
     // Find all active UPSTOX portfolios for this user
     const portfolios = await prisma.portfolio.findMany({
       where: { userId, broker: 'UPSTOX', isActive: true },
-      include: { holdings: true }
+      include: { holdings: true, user: { include: { telegramUser: true } } }
     });
 
     let synced = 0, created = 0, removed = 0;
@@ -653,6 +653,49 @@ export async function syncUpstoxHoldings(userId) {
             avgPrice: parseFloat(holding.avgPrice),
             sellPrice
           });
+
+          // Expire any pending SELL signals — the holding is gone
+          try {
+            const expiredSells = await prisma.tradeSignal.updateMany({
+              where: {
+                portfolioId: portfolio.id,
+                symbol: holding.symbol,
+                side: 'SELL',
+                status: { in: ['PENDING', 'ACKED', 'SNOOZED', 'PLACING'] }
+              },
+              data: { status: 'EXPIRED' }
+            });
+            if (expiredSells.count > 0) {
+              logger.info(`[Capital Guard] Expired ${expiredSells.count} SELL signal(s) for ${holding.symbol} (external sell detected)`);
+            }
+          } catch (expireErr) {
+            logger.warn(`[Capital Guard] Failed to expire SELL signals for ${holding.symbol}: ${expireErr.message}`);
+          }
+
+          // Telegram notification for externally-sold holdings
+          try {
+            const tg = portfolio.user?.telegramUser;
+            if (tg?.isActive && !tg?.isMuted) {
+              const { getBot } = await import('./telegramBot.js');
+              const bot = getBot();
+              if (bot) {
+                const avgP = parseFloat(holding.avgPrice);
+                const plPct = sellPrice > 0 && avgP > 0
+                  ? ((sellPrice - avgP) / avgP * 100).toFixed(2)
+                  : null;
+                const plStr = plPct !== null
+                  ? `\nSell ₹${sellPrice.toFixed(2)} | Cost ₹${avgP.toFixed(2)} | P&L ${plPct >= 0 ? '+' : ''}${plPct}%`
+                  : '';
+                await bot.sendMessage(
+                  parseInt(tg.telegramId),
+                  `✅ *${holding.symbol} Sold* (detected externally)\n\n${holding.quantity}× *${holding.symbol}* is no longer in your Upstox holdings.${plStr}\n\n_Pending sell signals for this stock have been expired._`,
+                  { parse_mode: 'Markdown' }
+                ).catch(() => {});
+              }
+            }
+          } catch (notifyErr) {
+            logger.warn(`[Capital Guard] External sell notification failed for ${holding.symbol}: ${notifyErr.message}`);
+          }
         }
       }
     }

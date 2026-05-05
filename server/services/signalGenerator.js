@@ -191,6 +191,42 @@ export async function generateTradeSignals(portfolioId, extraContext = '') {
     return (current - avg) / avg >= profitThreshold * 0.7; // alert at 70% of target
   });
 
+  // Capital exhaustion detection — when cash < 10% of starting capital,
+  // the system cannot generate new entries. Must recycle by exiting weak positions.
+  const startingCapital = parseFloat(portfolio.startingCapital || 20000);
+  const cashRatio = effectiveCash / startingCapital;
+  let capitalExhaustionBlock = '';
+  if (cashRatio < 0.10 && (portfolio.holdings || []).length > 0) {
+    const holdingSummary = (portfolio.holdings || []).map(h => {
+      const liveEntry = holdingLTPMap.get(h.symbol);
+      const current = liveEntry?.price || parseFloat(h.currentPrice || h.avgPrice || 0);
+      const avg = parseFloat(h.avgPrice || 0);
+      const pnlPct = avg > 0 ? ((current - avg) / avg * 100).toFixed(1) : '0.0';
+      const pnlAmt = ((current - avg) * h.quantity).toFixed(0);
+      const sign = parseFloat(pnlAmt) >= 0 ? '+' : '';
+      return `- ${h.symbol}: ${h.quantity} shares, avg ₹${avg.toFixed(2)}, now ₹${current.toFixed(2)}, P&L ${sign}${pnlPct}% (${sign}₹${pnlAmt}), cost ₹${(h.quantity * avg).toFixed(0)}`;
+    }).join('\n');
+
+    capitalExhaustionBlock = `
+🚨 CAPITAL EXHAUSTION — MANDATORY PORTFOLIO RECYCLING:
+Available cash ₹${effectiveCash.toLocaleString('en-IN')} is only ${(cashRatio * 100).toFixed(0)}% of starting capital ₹${startingCapital.toLocaleString('en-IN')}.
+The system CANNOT generate new BUY entries without recycling capital from existing positions.
+This is the highest-priority action — it overrides all normal SELL thresholds.
+
+CURRENT HOLDINGS (live prices):
+${holdingSummary}
+
+MANDATORY RECYCLING RULES — apply in order, generate at least 1 SELL:
+1. RSI < 45 AND EMA20 below EMA50 AND negative P&L → SELL MARKET (full position). Momentum is broken and the thesis has not played out. Exit.
+2. RSI > 65 AND positive P&L → SELL MARKET (full position or trim 50%). Lock the gain while you can and free capital.
+3. Held > 5 trading days with P&L between -3% and 0% AND no imminent catalyst → SELL MARKET. Dead capital is opportunity cost.
+4. Use MARKET order type for all recycling sells — capital return speed matters more than a 0.1% price difference.
+5. Target: after recycling, cash should be > 20% of starting capital (₹${(startingCapital * 0.20).toLocaleString('en-IN')}).
+
+DO NOT return empty signals in capital exhaustion mode. At minimum, exit the weakest position.
+`;
+  }
+
   let profitTakingBlock = '';
   if (profitCandidates.length > 0) {
     const targetPct = portfolio.profitTargetPct || 10;
@@ -351,7 +387,7 @@ ${portfolio.broker === 'UPSTOX' && portfolio.apiEnabled ? `UPSTOX LIVE TRADING �
   * Historical data shows 70% of LIMIT buy orders expired unfilled — this destroyed returns. MARKET orders ensure participation.
   * SELL signals (stop-loss, profit-target): use LIMIT at the target price.
 ` : ''}
-${profitTakingBlock}${mandate}
+${capitalExhaustionBlock}${profitTakingBlock}${mandate}
 
 ${scorecard ? `ACCOUNTABILITY: Your previous calls are above. Own every outcome. If a setup remains technically valid, re-enter with updated levels. If conditions have changed, say so and move on.` : ''}
 
@@ -367,7 +403,7 @@ This portfolio holds ZERO positions and is sitting on ₹${effectiveCash.toLocal
 - If no setup crosses 78% raw, lower your threshold to 72% for cash-only portfolios — the cost of being undeployed for weeks vastly exceeds the cost of a slightly-suboptimal entry.
 - LIMIT orders at support cost NOTHING if unfilled. A LIMIT order at support is always better than sitting in cash.
 - Choose the 2-3 best NSE individual stocks from today's scan. Use the sector rotation data and technicals above. Size at 25-30% of capital per position.
-` : '- An EMPTY signals array is a valid, professional output. If nothing clears 78, return: {"signals": [], "capitalCheck": "No qualifying setups today — conviction floor not met. Reason: [your analysis]. Cash held."}'}
+` : cashRatio < 0.10 ? '- CAPITAL EXHAUSTION MODE: an empty signals array IS NOT valid. See recycling mandate above. You must exit at least one position.' : '- An EMPTY signals array is a valid, professional output. If nothing clears 78, return: {"signals": [], "capitalCheck": "No qualifying setups today — conviction floor not met. Reason: [your analysis]. Cash held."}'}
 
 Respond in this EXACT JSON format (no markdown, no extra text):
 {

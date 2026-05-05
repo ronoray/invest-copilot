@@ -311,6 +311,14 @@ export async function runPriceGuard() {
         const avgPrice = parseFloat(holding.avgPrice);
         if (!avgPrice || avgPrice <= 0) continue;
 
+        // T+1 block: CNC purchases can't be sold same-day on NSE.
+        // Skip all SELL signal checks for holdings created today.
+        const holdingCreatedAt = holding.createdAt ? new Date(holding.createdAt) : null;
+        if (holdingCreatedAt && holdingCreatedAt >= getISTMidnight()) {
+          logger.info(`[PriceGuard] Skipping SELL checks for ${holding.symbol} — bought today (T+1 delivery, sellable tomorrow)`);
+          continue;
+        }
+
         const pnlPct = (ltp - avgPrice) / avgPrice;
         const pnlAmt = (ltp - avgPrice) * holding.quantity;
 

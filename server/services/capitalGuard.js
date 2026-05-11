@@ -552,12 +552,15 @@ export async function syncUpstoxHoldings(userId) {
       const avgPrice = parseFloat(uh.average_price || 0);
       const currentPrice = parseFloat(uh.last_price || uh.close_price || 0);
 
-      // cnc_used_quantity = units already committed in CNC trades today (sold but not yet T+1 settled,
-      // or pledged for margin). These cannot be sold again — subtract to get actual sellable quantity.
-      const cncUsed = uh.cnc_used_quantity || 0;
-      if (cncUsed > 0) {
-        quantity = Math.max(0, quantity - cncUsed);
-        logger.info(`[Capital Guard] ${symbol}: demat=${uh.quantity}, cnc_used=${cncUsed}, sellable=${quantity}`);
+      // t1_quantity = shares bought today (T+1 delivery, not yet settled, cannot be sold same-day CNC).
+      // These are excluded from sellable quantity.
+      // cnc_used_quantity = shares committed to OPEN (unfilled) sell orders — we still OWN these,
+      // so do NOT subtract them. Subtracting cnc_used caused holdings to disappear from DB when a
+      // LIMIT sell order was open for the full position (e.g. PFC with 33 shares locked in open orders).
+      const t1Qty = uh.t1_quantity || 0;
+      if (t1Qty > 0) {
+        quantity = Math.max(0, quantity - t1Qty);
+        logger.info(`[Capital Guard] ${symbol}: total=${uh.quantity}, t1=${t1Qty}, sellable=${quantity}`);
       }
 
       if (quantity > 0) {

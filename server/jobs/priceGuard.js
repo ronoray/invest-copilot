@@ -397,6 +397,16 @@ export async function runPriceGuard() {
           continue;
         }
 
+        // Minimum hold period: no profit-taking for positions < 5 calendar days old.
+        // Stop-loss above runs regardless of age. Only profit-taking is gated.
+        // Prevents the buy→sell cycle within the same week that destroys capital via STT.
+        const FIVE_DAYS_MS = 5 * 24 * 60 * 60 * 1000;
+        if (holdingCreatedAt && (Date.now() - holdingCreatedAt.getTime()) < FIVE_DAYS_MS) {
+          const heldDays = Math.floor((Date.now() - holdingCreatedAt.getTime()) / 86400000);
+          logger.info(`[PriceGuard] ${holding.symbol}: held ${heldDays}d — skipping profit-taking (min 5 days). Stop active at ₹${stopLevel.toFixed(2)}.`);
+          continue;
+        }
+
         // Profit levels
         const profitTarget   = avgPrice * (1 + profitTargetPct);
         const partialTrigger = avgPrice * (1 + profitTargetPct * 0.75);

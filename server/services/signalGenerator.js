@@ -166,7 +166,7 @@ export async function generateTradeSignals(portfolioId, extraContext = '') {
   }
 
   const aggMult      = marketRegime.aggressionMultiplier ?? 0.8;
-  const minConviction = 78; // Hard floor regardless of regime — below 78 means setup is not ready
+  const minConviction = 83; // Raised from 78 — fewer, higher-conviction trades only
   const maxPosPct     = aggMult < 0.6 ? 18 : aggMult < 0.8 ? 25 : 30;
 
   // Profit-taking candidates — holdings at or near the portfolio profit target
@@ -191,12 +191,13 @@ export async function generateTradeSignals(portfolioId, extraContext = '') {
     return (current - avg) / avg >= profitThreshold * 0.7; // alert at 70% of target
   });
 
-  // Capital exhaustion detection — when cash < 10% of starting capital,
-  // the system cannot generate new entries. Must recycle by exiting weak positions.
+  // Capital preservation: when cash < 20% of starting capital, no new BUY entries allowed.
+  // Raised from 10% — positions < ₹3-4k are too small to generate meaningful returns
+  // after STT, and the death spiral of tiny positions accelerates capital erosion.
   const startingCapital = parseFloat(portfolio.startingCapital || 20000);
   const cashRatio = effectiveCash / startingCapital;
   let capitalExhaustionBlock = '';
-  if (cashRatio < 0.10 && (portfolio.holdings || []).length > 0) {
+  if (cashRatio < 0.20 && (portfolio.holdings || []).length > 0) {
     const holdingSummary = (portfolio.holdings || []).map(h => {
       const liveEntry = holdingLTPMap.get(h.symbol);
       const current = liveEntry?.price || parseFloat(h.currentPrice || h.avgPrice || 0);
@@ -259,6 +260,29 @@ Rules:
 
 `;
   }
+
+  // Recently-sold symbols (7-day cooling period): no BUY re-entry.
+  // Selling and immediately re-buying the same stock destroys capital through STT round-trips
+  // and proves the original thesis was weak. Force a discipline pause.
+  const recentlySoldSymbols = new Set();
+  try {
+    const recentSells = await prisma.tradeSignal.findMany({
+      where: {
+        portfolioId,
+        side: 'SELL',
+        status: 'EXECUTED',
+        updatedAt: { gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
+      },
+      select: { symbol: true }
+    });
+    for (const s of recentSells) recentlySoldSymbols.add(s.symbol);
+  } catch (e) {
+    logger.warn('[SignalGen] Could not fetch recently sold symbols:', e.message);
+  }
+
+  const recentlySoldBlock = recentlySoldSymbols.size > 0
+    ? `\n🚫 COOLING-OFF — NO RE-ENTRY (sold within last 7 days):\n${[...recentlySoldSymbols].join(', ')}\nDo NOT generate BUY signals for these symbols. Re-entering within 7 days of a sell incurs STT both ways with no edge. Wait for a fresh setup.\n`
+    : '';
 
   // Two completely different mandates: stressed market vs normal
   const mandate = isStressed ? `
@@ -387,7 +411,7 @@ ${portfolio.broker === 'UPSTOX' && portfolio.apiEnabled ? `UPSTOX LIVE TRADING �
   * Historical data shows 70% of LIMIT buy orders expired unfilled — this destroyed returns. MARKET orders ensure participation.
   * SELL signals (stop-loss, profit-target): use LIMIT at the target price.
 ` : ''}
-${capitalExhaustionBlock}${profitTakingBlock}${mandate}
+${recentlySoldBlock}${capitalExhaustionBlock}${profitTakingBlock}${mandate}
 
 ${scorecard ? `ACCOUNTABILITY: Your previous calls are above. Own every outcome. If a setup remains technically valid, re-enter with updated levels. If conditions have changed, say so and move on.` : ''}
 
@@ -403,7 +427,7 @@ This portfolio holds ZERO positions and is sitting on ₹${effectiveCash.toLocal
 - If no setup crosses 78% raw, lower your threshold to 72% for cash-only portfolios — the cost of being undeployed for weeks vastly exceeds the cost of a slightly-suboptimal entry.
 - LIMIT orders at support cost NOTHING if unfilled. A LIMIT order at support is always better than sitting in cash.
 - Choose the 2-3 best NSE individual stocks from today's scan. Use the sector rotation data and technicals above. Size at 25-30% of capital per position.
-` : cashRatio < 0.10 ? '- CAPITAL EXHAUSTION MODE: an empty signals array IS NOT valid. See recycling mandate above. You must exit at least one position.' : '- An EMPTY signals array is a valid, professional output. If nothing clears 78, return: {"signals": [], "capitalCheck": "No qualifying setups today — conviction floor not met. Reason: [your analysis]. Cash held."}'}
+` : cashRatio < 0.20 ? '- CAPITAL PRESERVATION MODE: an empty signals array IS NOT valid. See recycling mandate above. You must exit at least one position.' : '- An EMPTY signals array is a valid, professional output. If nothing clears 83, return: {"signals": [], "capitalCheck": "No qualifying setups today — conviction floor not met. Reason: [your analysis]. Cash held."}'}
 
 Respond in this EXACT JSON format (no markdown, no extra text):
 {
@@ -456,11 +480,11 @@ Notes:
     // Capital guard: validate signals against effective cash
     const validatedSignals = await validateSignals(result.signals, portfolioId);
 
-    // ── Hard conviction gate: 78 minimum — post-generation filter ────────────
+    // ── Hard conviction gate: 83 minimum — post-generation filter ────────────
     // Claude is instructed to self-filter, but this is the technical guarantee.
     const convictionFiltered = validatedSignals.filter(sig => {
-      if ((sig.confidence ?? 0) < 78) {
-        logger.info(`[SignalGen] Conviction gate: dropped ${sig.side} ${sig.symbol} at ${sig.confidence} (floor 78)`);
+      if ((sig.confidence ?? 0) < 83) {
+        logger.info(`[SignalGen] Conviction gate: dropped ${sig.side} ${sig.symbol} at ${sig.confidence} (floor 83)`);
         return false;
       }
       // ── Bearish regime gate: block new BUY entries when market is falling ──
@@ -473,7 +497,7 @@ Notes:
       return true;
     });
     if (convictionFiltered.length === 0) {
-      logger.info(`[SignalGen] Portfolio ${portfolioId}: all signals filtered by conviction gate (floor 78)`);
+      logger.info(`[SignalGen] Portfolio ${portfolioId}: all signals filtered by conviction gate (floor 83)`);
       return [];
     }
 
@@ -533,6 +557,11 @@ Notes:
       const key = `${sig.symbol}:${sig.side}`;
       if (alreadyCoveredKeys.has(key)) {
         logger.info(`[SignalGen] Skipping duplicate signal ${sig.side} ${sig.symbol} — already covered by active signal or open Upstox order`);
+        return false;
+      }
+      // Block BUY re-entry within 7 days of selling the same stock
+      if (sig.side === 'BUY' && recentlySoldSymbols.has(sig.symbol)) {
+        logger.info(`[SignalGen] Blocking BUY ${sig.symbol} — sold within last 7 days (cooling period)`);
         return false;
       }
       return true;

@@ -74,9 +74,8 @@ const scanHeartbeat = new Map(); // name → { at: Date, signals: number }
 // This prevents post-market deploys from blasting stale recovery messages.
 const SCAN_SCHEDULE_DEF = [
   { name: 'pre-market',      hour: 8,  minute: 30, recoveryDeadline: 9  * 60 + 30 }, // don't recover after market open
-  { name: '9:30-signals',    hour: 9,  minute: 30, recoveryDeadline: 13 * 60 +  0 }, // stale after midday scan fires
-  { name: '11:00-pivot',     hour: 11, minute: 0,  recoveryDeadline: 14 * 60 + 30 }, // stale after pre-close pivot
-  { name: '13:00-signals',   hour: 13, minute: 0,  recoveryDeadline: 15 * 60 + 30 }, // stale at market close
+  { name: '9:30-signals',    hour: 9,  minute: 30, recoveryDeadline: 15 * 60 + 30 }, // stale at market close
+  // '11:00-pivot' and '13:00-signals' removed — caused intraday cycling and overtrading
   { name: '14:30-pivot',     hour: 14, minute: 30, recoveryDeadline: 15 * 60 + 45 }, // stale after EOD review
   { name: 'evening-playbook',hour: 19, minute: 30, recoveryDeadline: 20 * 60 + 30 }, // still protected until 8:30 PM
 ];
@@ -1374,7 +1373,7 @@ async function generateSignalsForAllPortfolios() {
         `📊 *Market Scan Complete — ${nowISTStr()} IST*\n\n` +
         `Scanned the full NSE market. No setups met the conviction threshold.${regimeNote}\n\n` +
         `_Cash preserved and ready to deploy when the right opportunity appears._\n` +
-        `_Next scan: 11:00 AM (pivot) → 1:00 PM (full) → 2:30 PM (pivot)_`
+        `_Next scan: 2:30 PM (pivot)_`
       );
     }
   } catch (error) {
@@ -2386,21 +2385,11 @@ export function initSignalNotifier() {
     timezone: 'Asia/Kolkata'
   });
 
-  // Mid-morning pivot scan at 11:00 AM — direction confirmed, new setups emerging
-  cron.schedule('0 11 * * 1-5', async () => {
-    logger.info('[11:00 AM] Running mid-morning pivot signal scan...');
-    await generateSignalsAtPivot('11:00 AM');
-  }, {
-    timezone: 'Asia/Kolkata'
-  });
+  // 11:00 AM pivot scan DISABLED — caused same-day BUY re-entry after morning SELLs,
+  // creating buy→sell cycles that generated STT costs with no alpha.
 
-  // Midday full scan at 1:00 PM — unconditional, complete market sweep
-  cron.schedule('0 13 * * 1-5', async () => {
-    logger.info('[1:00 PM] Running midday signal generation...');
-    await generateSignalsForAllPortfolios();
-  }, {
-    timezone: 'Asia/Kolkata'
-  });
+  // 1:00 PM full scan DISABLED — combined with 11 AM removal, reduces daily signal
+  // generation from 4x to 2x (9:30 AM + 2:30 PM only). Cuts overtrading by ~50%.
 
   // Pre-close pivot scan at 2:30 PM — institutional positioning window
   cron.schedule('30 14 * * 1-5', async () => {
@@ -2472,7 +2461,7 @@ export function initSignalNotifier() {
   logger.info('Signal notifier initialized:');
   logger.info('  Pre-market intelligence: 8:30 AM IST');
   logger.info('  Upstox fund sync: 9:17 AM IST');
-  logger.info('  Signal generation: 9:30 AM (full) | 11:00 AM (pivot) | 1:00 PM (full) | 2:30 PM (pivot) IST');
+  logger.info('  Signal generation: 9:30 AM (full) | 2:30 PM (pivot) IST [11 AM + 1 PM disabled]');
   logger.info('  Signal notifications: every 5 min, 9-3:30 PM IST');
   logger.info('  Order status polling + stale PLACING reset: every 5 min, 9 AM-4 PM IST');
   logger.info('  Mid-day holdings sync (DDPI): every 30 min, 9-3:30 PM IST');

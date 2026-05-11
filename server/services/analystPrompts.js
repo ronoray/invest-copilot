@@ -208,10 +208,10 @@ export async function buildAccountabilityScorecard(portfolioId, days = 7) {
       const winRate = ((wins / (wins + losses)) * 100).toFixed(0);
       lines.push(`\nMY SCORECARD: ${wins}W / ${losses}L (${winRate}% hit rate) | Estimated P&L from executed: ${totalPLEstimate >= 0 ? '+' : ''}₹${totalPLEstimate.toFixed(0)}`);
       if (losses > wins) {
-        lines.push('⚠️ I am LOSING more than I am winning. This is MY FAILURE. New calls must be: higher conviction (80+), tighter stops, proven setups only. I need to recover this deficit.');
+        lines.push('📉 More losses than wins. Reduce frequency — only trade when setup is technically unambiguous, catalyst is company-specific, and R:R ≥ 3:1. Fewer, better trades beat more frequent, mediocre ones.');
       }
       if (totalPLEstimate < 0) {
-        lines.push(`🔴 Net negative P&L. I owe this portfolio ₹${Math.abs(totalPLEstimate).toFixed(0)} in recovery. Every new recommendation must factor this recovery target.`);
+        lines.push(`📊 Recent closed-trade P&L: -₹${Math.abs(totalPLEstimate).toFixed(0)}. No revenge entries. Discipline over urgency — a missed trade costs nothing, a bad trade costs real money.`);
       }
     }
 

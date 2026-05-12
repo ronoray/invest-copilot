@@ -101,4 +101,9 @@ export function getISTMidnight() {
   return new Date(istMidnightVirtual.getTime() - IST_OFFSET_MS);
 }
 
-export default { isMarketHoliday, isTradingDay, getISTMidnight };
+/** Format a Date as "YYYY-MM-DD HH:mm:ss IST" for API responses and logs. */
+export function toISTString(date = new Date()) {
+  return new Date(date).toLocaleString('sv-SE', { timeZone: 'Asia/Kolkata' }) + ' IST';
+}
+
+export default { isMarketHoliday, isTradingDay, getISTMidnight, toISTString };

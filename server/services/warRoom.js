@@ -9,7 +9,7 @@ import { getUpstoxLTP } from './upstoxMarketData.js';
 import { ANALYST_IDENTITY, MARKET_DATA_INSTRUCTION, ELITE_TRADER_EDGE, buildAccountabilityScorecard } from './analystPrompts.js';
 import { buildProfileBrief } from './advancedScreener.js';
 import { getEffectiveCash } from './capitalGuard.js';
-import { getISTMidnight, isMarketHoliday, isTradingDay } from '../utils/marketHolidays.js';
+import { getISTMidnight, isMarketHoliday, isTradingDay, toISTString } from '../utils/marketHolidays.js';
 import logger from './logger.js';
 
 const anthropic = new Anthropic({
@@ -211,7 +211,7 @@ ${portfolio.broker === 'UPSTOX' && portfolio.apiEnabled ? `UPSTOX LIVE TRADING C
     const plan = JSON.parse(jsonStr);
 
     // Add metadata
-    plan.generatedAt = new Date().toISOString();
+    plan.generatedAt = toISTString();
     plan.version = 1;
 
     // Store in DailyTarget using IST midnight as the date key

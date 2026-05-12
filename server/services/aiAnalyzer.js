@@ -1,9 +1,12 @@
 import Anthropic from '@anthropic-ai/sdk';
 import logger from './logger.js';
 import { analyzeTechnicals, determineRiskCategory } from './technicalAnalysis.js';
+import { toISTString } from '../utils/marketHolidays.js';
 
 const anthropic = new Anthropic({
   apiKey: process.env.CLAUDE_API_KEY,
+  baseURL: process.env.ANTHROPIC_BASE_URL,
+  defaultHeaders: { 'x-caller-id': 'invest-copilot', 'x-feature-name': 'ai_analyzer' },
 });
 
 /**
@@ -84,7 +87,7 @@ Example "comparison": "Like betting on an underdog cricket team - risky but big 
       marketCap: marketData.marketCap,
       analysis,
       technicals,
-      analyzedAt: new Date().toISOString(),
+      analyzedAt: toISTString(),
     };
   } catch (error) {
     logger.error(`AI analysis error for ${symbol}:`, error);

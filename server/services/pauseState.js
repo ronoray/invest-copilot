@@ -4,6 +4,7 @@
 
 import prisma from './prisma.js';
 import logger from './logger.js';
+import { toISTString } from '../utils/marketHolidays.js';
 
 const PAUSE_KEY = 'signals_paused';
 
@@ -28,7 +29,7 @@ export async function getSystemPauseState() {
 export async function setPauseState({ reason, pausedByTelegramId }) {
   const value = JSON.stringify({
     reason,
-    pausedAt: new Date().toISOString(),
+    pausedAt: toISTString(),
     pausedByTelegramId
   });
   await prisma.config.upsert({

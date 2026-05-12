@@ -8,9 +8,12 @@ import { fetchMarketContext } from './marketData.js';
 import { ANALYST_IDENTITY, MARKET_DATA_INSTRUCTION, buildAccountabilityScorecard } from './analystPrompts.js';
 import { validateAllocations } from './capitalGuard.js';
 import logger from './logger.js';
+import { toISTString } from '../utils/marketHolidays.js';
 
 const anthropic = new Anthropic({
   apiKey: process.env.CLAUDE_API_KEY,
+  baseURL: process.env.ANTHROPIC_BASE_URL,
+  defaultHeaders: { 'x-caller-id': 'invest-copilot', 'x-feature-name': 'multi_asset_recs' },
 });
 
 /**
@@ -289,7 +292,7 @@ Return ONLY valid JSON (no markdown):
     return {
       success: true,
       recommendations,
-      generatedAt: new Date().toISOString()
+      generatedAt: toISTString()
     };
 
   } catch (error) {

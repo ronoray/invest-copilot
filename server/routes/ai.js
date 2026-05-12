@@ -8,6 +8,7 @@ import { ANALYST_IDENTITY, MARKET_DATA_INSTRUCTION, buildAccountabilityScorecard
 import prisma from '../services/prisma.js';
 import Anthropic from '@anthropic-ai/sdk';
 import logger from '../services/logger.js';
+import { toISTString } from '../utils/marketHolidays.js';
 import crypto from 'crypto';
 import { generateMultiAssetRecommendations, getCommodityRecommendations, getMutualFundRecommendations } from '../services/multiAssetRecommendations.js';
 
@@ -278,7 +279,7 @@ router.post('/scan', async (req, res) => {
         availableCapital: investAmount,
         portfolioName: portfolioData?.name || 'General'
       },
-      scannedAt: new Date().toISOString()
+      scannedAt: toISTString()
     });
 
   } catch (error) {

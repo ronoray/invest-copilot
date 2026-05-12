@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import dotenv from 'dotenv';
 import cron from 'node-cron';
 import prisma from './services/prisma.js';
+import { toISTString } from './utils/marketHolidays.js';
 
 // Route imports
 import authRoutes from './routes/auth.js';
@@ -71,7 +72,7 @@ app.use((req, res, next) => {
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
-    timestamp: new Date().toISOString(),
+    timestamp: toISTString(),
     version: '1.0.0'
   });
 });
@@ -79,7 +80,7 @@ app.get('/health', (req, res) => {
 app.get('/api/health', (req, res) => {
   res.json({ 
     ok: true, 
-    timestamp: new Date().toISOString(),
+    timestamp: toISTString(),
     services: {
       database: 'connected',
       email: process.env.ENABLE_EMAIL_NOTIFICATIONS === 'true' ? 'enabled' : 'disabled',

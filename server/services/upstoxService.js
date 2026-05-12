@@ -4,6 +4,7 @@ import { pipeline } from 'stream/promises';
 import { Readable } from 'stream';
 import prisma from './prisma.js';
 import logger from './logger.js';
+import { toISTString } from '../utils/marketHolidays.js';
 
 const UPSTOX_BASE_URL = 'https://api.upstox.com/v2';
 
@@ -477,7 +478,7 @@ export async function getHoldings(userId) {
 
   return {
     holdings: result.data || [],
-    syncedAt: new Date().toISOString()
+    syncedAt: toISTString()
   };
 }
 

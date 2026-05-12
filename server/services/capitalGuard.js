@@ -563,6 +563,19 @@ export async function syncUpstoxHoldings(userId) {
         logger.info(`[Capital Guard] ${symbol}: total=${uh.quantity}, t1=${t1Qty}, sellable=${quantity}`);
       }
 
+      // day_sell_quantity = shares ACTUALLY SOLD today (filled). Upstox holdings API won't reflect
+      // these until T+1 settlement, so the raw quantity is still inflated. Subtract confirmed fills
+      // to avoid ghost sell signals on positions that were already trimmed today.
+      // Unlike cnc_used_quantity (which includes open limit orders), day_sell_quantity is fills only.
+      const adj = positionAdjustments.get(key);
+      if (adj && adj.sellQty > 0) {
+        const adjusted = Math.max(0, quantity - adj.sellQty);
+        if (adjusted !== quantity) {
+          logger.info(`[Capital Guard] ${symbol}: subtracting ${adj.sellQty} today-sold (T+1 pending) → ${quantity}→${adjusted}`);
+          quantity = adjusted;
+        }
+      }
+
       if (quantity > 0) {
         effectiveHoldings.set(key, { symbol, exchange, quantity, avgPrice, currentPrice });
       }

@@ -20,6 +20,14 @@ const BASE_URL = 'https://www.alphavantage.co/query';
 // Per-day cache keyed by 'SYMBOL-YYYY-MM-DD'
 const dailyDataCache = new Map();
 
+// Serialize AV fallback calls — premium limit is 75/min (800ms gap = ~50/min, safe margin)
+let _avThrottleChain = Promise.resolve();
+function _avThrottled(fn) {
+  const result = _avThrottleChain.then(() => fn());
+  _avThrottleChain = _avThrottleChain.then(() => new Promise(r => setTimeout(r, 800)));
+  return result;
+}
+
 // Sector ETFs that proxy each major theme in Indian markets
 export const SECTOR_PROXIES = [
   { symbol: 'NIFTYBEES',  label: 'Nifty 50 (broad market)' },
@@ -54,10 +62,10 @@ export async function fetchDailyData(symbol, exchange = 'NSE') {
     logger.warn(`[MarketIntel] Upstox candles failed for ${symbol}: ${upstoxErr.message} — trying Alpha Vantage`);
   }
 
-  // ── 2. Alpha Vantage TIME_SERIES_DAILY (fallback) ──────────────────────────
+  // ── 2. Alpha Vantage TIME_SERIES_DAILY (fallback — throttled to 800ms/call) ─
   try {
     const suffix = exchange === 'NSE' ? '.NS' : '.BO';
-    const response = await axios.get(BASE_URL, {
+    const response = await _avThrottled(() => axios.get(BASE_URL, {
       params: {
         function: 'TIME_SERIES_DAILY',
         symbol: `${symbol}${suffix}`,
@@ -65,7 +73,7 @@ export async function fetchDailyData(symbol, exchange = 'NSE') {
         apikey: ALPHA_VANTAGE_KEY,
       },
       timeout: 15000,
-    });
+    }));
 
     const ts = response.data['Time Series (Daily)'];
     if (!ts) return null;

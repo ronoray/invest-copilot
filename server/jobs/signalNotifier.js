@@ -2002,13 +2002,35 @@ async function resetStalePlacingSignals() {
           upstoxOrderId = orderRecord?.orderId;
           if (upstoxOrderId) {
             const statusResult = await getOrderStatus(userId, upstoxOrderId);
-            upstoxStatus = statusResult.status; // COMPLETE, OPEN, PENDING, REJECTED, CANCELLED
+            upstoxStatus = statusResult.status;
             logger.info(`[Stale PLACING] Signal #${sig.id} Upstox order ${upstoxOrderId} status: ${upstoxStatus}`);
           } else {
             logger.warn(`[Stale PLACING] No Upstox orderId found for internal order ${sig.upstoxOrderId} (signal #${sig.id})`);
           }
         } catch (e) {
           logger.warn(`[Stale PLACING] Could not fetch Upstox status for signal #${sig.id}: ${e.message}`);
+        }
+      }
+
+      // If upstoxOrderId is null (order ID never saved or cleared), scan today's Upstox order book
+      // for a matching open order by symbol+side to avoid resetting a signal that's already live.
+      if (!upstoxOrderId && userId) {
+        try {
+          const { getOrderBook } = await import('../services/upstoxService.js');
+          const bookResult = await getOrderBook(userId);
+          const openMatch = (bookResult?.orders || []).find(o => {
+            const sym = (o.tradingsymbol || o.trading_symbol || '').replace(/-EQ$/, '');
+            const side = (o.transaction_type || '').toUpperCase();
+            const status = (o.status || '').toLowerCase();
+            return sym === sig.symbol && side === sig.side && (status === 'open' || status === 'trigger pending');
+          });
+          if (openMatch) {
+            upstoxStatus = 'OPEN';
+            upstoxOrderId = openMatch.order_id;
+            logger.info(`[Stale PLACING] Signal #${sig.id} (${sig.symbol} ${sig.side}) matched open Upstox order ${upstoxOrderId} via order book scan`);
+          }
+        } catch (e) {
+          logger.warn(`[Stale PLACING] Order book scan failed for signal #${sig.id}: ${e.message}`);
         }
       }
 
@@ -2031,42 +2053,31 @@ async function resetStalePlacingSignals() {
         continue;
       }
 
-      if (upstoxStatus === 'OPEN' || upstoxStatus === 'PENDING') {
-        // Order is still live on exchange — MUST cancel before resetting to PENDING.
-        // If we don't cancel: Upstox already deducted this capital from available_margin,
-        // AND getEffectiveCash will also reserve it for the PENDING signal → double-count → capital check fails.
-        let cancelled = false;
-        for (let attempt = 1; attempt <= 3; attempt++) {
-          try {
-            await cancelOrder(userId, upstoxOrderId);
-            cancelled = true;
-            logger.info(`[Stale PLACING] Cancelled live Upstox order ${upstoxOrderId} for signal #${sig.id} (${sig.symbol}) on attempt ${attempt}`);
-            break;
-          } catch (e) {
-            logger.warn(`[Stale PLACING] Cancel attempt ${attempt}/3 failed for order ${upstoxOrderId}: ${e.message}`);
-            if (attempt < 3) await new Promise(r => setTimeout(r, 1000));
-          }
+      if (upstoxStatus === 'OPEN' || upstoxStatus === 'TRIGGER PENDING') {
+        // Order is live on exchange and waiting to fill — DO NOT cancel.
+        // LIMIT orders (especially SELL) are designed to wait hours for the price target.
+        // Cancelling after 30 min and offering "Execute Again" causes duplicate orders
+        // which Upstox rejects with "order quantity exceeds holdings". Keep monitoring.
+        const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+        const shouldNotify = !sig.lastNotifiedAt || sig.lastNotifiedAt < twoHoursAgo;
+        if (shouldNotify && bot && chatId) {
+          await bot.sendMessage(chatId,
+            `⏳ *LIMIT Order Waiting to Fill*\n\n` +
+            `Signal #${sig.id}: *${sig.symbol}* ${sig.side} ${sig.quantity}qty @ ${price}\n\n` +
+            `Your order is live on the exchange and waiting for the price target. No action needed — I'll alert you when it fills or is rejected.`,
+            { parse_mode: 'Markdown' }
+          ).catch(() => {});
+          await prisma.tradeSignal.update({ where: { id: sig.id }, data: { lastNotifiedAt: new Date() } });
         }
+        logger.info(`[Stale PLACING] Signal #${sig.id} (${sig.symbol}) LIMIT order ${upstoxOrderId} still OPEN — keeping PLACING, monitoring`);
+        continue; // Stay in PLACING — order will fill or expire at EOD
+      }
 
-        if (!cancelled) {
-          logger.error(`[Stale PLACING] All 3 cancel attempts failed for order ${upstoxOrderId} (signal #${sig.id}) — will retry next cron cycle`);
-          // Throttle user notification to once per 2 hours to avoid spam
-          const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
-          const shouldNotify = !sig.lastNotifiedAt || sig.lastNotifiedAt < twoHoursAgo;
-          if (shouldNotify && bot && chatId) {
-            await bot.sendMessage(chatId,
-              `⚠️ *Order Cancel Pending*\n\n` +
-              `Signal #${sig.id}: *${sig.symbol}* ${sig.side} ${sig.quantity}qty @ ${price}\n\n` +
-              `Upstox order is still live but cancel is failing. Retrying automatically every 5 min.`,
-              { parse_mode: 'Markdown' }
-            ).catch(() => {});
-            await prisma.tradeSignal.update({
-              where: { id: sig.id },
-              data: { lastNotifiedAt: new Date() }
-            });
-          }
-          continue; // Stay in PLACING, cron will retry next cycle
-        }
+      if (upstoxStatus === 'PENDING') {
+        // Order reached exchange but not yet confirmed (rare transient state).
+        // Wait another cycle before taking action.
+        logger.info(`[Stale PLACING] Signal #${sig.id} (${sig.symbol}) order ${upstoxOrderId} status PENDING — waiting one more cycle`);
+        continue;
       }
 
       // At this point: order is REJECTED, CANCELLED, not found, or we successfully cancelled it above

@@ -264,6 +264,22 @@ function pollOrderViaTelegram(botInstance, chatId, userId, signalId, signal, ord
         return;
       }
 
+      // "Exceeds holdings" on a SELL = shares already locked by an existing open order on exchange.
+      // Retrying places a duplicate order — rejected every time. Auto-expire the signal.
+      // The original open order on Upstox will fill or expire EOD independently.
+      const isHoldingsExceeded = /order quantity exceeds.*holdings|check holdings/i.test(reason || '');
+      if (isHoldingsExceeded && signal.side === 'SELL') {
+        await prisma.tradeSignal.updateMany({
+          where: { id: signalId, status: { in: ['PENDING', 'ACKED', 'SNOOZED'] } },
+          data: { status: 'EXPIRED' }
+        }).catch(() => {});
+        await botInstance.sendMessage(chatId,
+          `🔒 *SELL Signal Expired — Shares Already Committed*\n\n${signal.quantity}x *${signal.symbol}*\nReason: _${reason}_\n\nAn existing SELL order for this stock is already live on the exchange. This signal has been expired to prevent duplicate orders. The open order will fill when price is reached or cancel at market close.`,
+          { parse_mode: 'Markdown' }
+        );
+        return;
+      }
+
       const failureMsg = `🔴 *Order ${status.toUpperCase()}*\n\n${signal.side} ${signal.symbol} @ ${formatPrice(signal.triggerPrice || signal.triggerLow || 0)}\nReason: _${reason}_\n\nSignal reset — choose how to proceed:`;
       await botInstance.sendMessage(chatId, failureMsg, {
         parse_mode: 'Markdown',

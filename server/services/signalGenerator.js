@@ -67,10 +67,13 @@ export async function generateTradeSignals(portfolioId, extraContext = '') {
   // Also fetch active DB signals (PENDING/ACKED/SNOOZED/PLACING) — these are not on Upstox yet
   // but represent the user's current intent. We must not regenerate signals for the same symbol:side.
   // Use IST midnight so evening playbook signals (created at 7:30 PM IST = 2 PM UTC) are included.
+  // Include EXECUTED signals from today in dedup — prevents same-day double-buy.
+  // Root cause of PFC disaster: 9:30 AM BUY executed → EXECUTED state → 1 PM scan
+  // saw no PENDING PFC → generated fresh BUY → 77% of capital in one stock.
   const activeDbSignals = await prisma.tradeSignal.findMany({
     where: {
       portfolioId,
-      status: { in: ['PENDING', 'ACKED', 'SNOOZED', 'PLACING'] },
+      status: { in: ['PENDING', 'ACKED', 'SNOOZED', 'PLACING', 'EXECUTED'] },
       createdAt: { gte: getISTMidnight() }
     },
     select: { symbol: true, side: true }
@@ -165,9 +168,32 @@ export async function generateTradeSignals(portfolioId, extraContext = '') {
     logger.warn('Could not build scorecard:', e.message);
   }
 
-  const aggMult      = marketRegime.aggressionMultiplier ?? 0.8;
-  const minConviction = 83; // Raised from 78 — fewer, higher-conviction trades only
-  const maxPosPct     = aggMult < 0.6 ? 18 : aggMult < 0.8 ? 25 : 30;
+  const aggMult = marketRegime.aggressionMultiplier ?? 0.8;
+  const maxPosPct = aggMult < 0.6 ? 18 : aggMult < 0.8 ? 25 : 30;
+
+  // Adaptive conviction floor — self-corrects based on actual win rate.
+  // System raises its own bar when losing, lowers it after sustained winning.
+  // This removes the need for manual tuning: the trade history drives the threshold.
+  let minConviction = 83;
+  try {
+    const recentPnL = await prisma.tradeSignal.findMany({
+      where: { portfolioId, side: 'BUY', status: 'EXECUTED', realizedPnl: { not: null } },
+      orderBy: { updatedAt: 'desc' },
+      take: 20,
+      select: { outcome: true, realizedPnl: true }
+    });
+    if (recentPnL.length >= 5) {
+      const wins = recentPnL.filter(t => t.outcome === 'PROFIT').length;
+      const winRate = wins / recentPnL.length;
+      if (winRate < 0.35)      minConviction = 90; // Losing badly — only near-certain setups
+      else if (winRate < 0.45) minConviction = 88; // Below break-even — tighten up
+      else if (winRate < 0.55) minConviction = 85; // Marginally losing — slight caution
+      // winRate >= 0.55: stay at 83 — system is performing, don't interfere
+      logger.info(`[SignalGen] Adaptive conviction: ${(winRate*100).toFixed(0)}% win rate (${wins}W/${recentPnL.length-wins}L over ${recentPnL.length} trades) → floor ${minConviction}`);
+    }
+  } catch (e) {
+    logger.warn('[SignalGen] Adaptive conviction calc failed:', e.message);
+  }
 
   // Profit-taking candidates — holdings at or near the portfolio profit target
   // Use live LTP (Upstox real-time) so we never miss a target that has been hit
@@ -482,16 +508,32 @@ Notes:
     // Capital guard: validate signals against effective cash
     const validatedSignals = await validateSignals(result.signals, portfolioId);
 
-    // ── Hard conviction gate: 83 minimum — post-generation filter ────────────
-    // Claude is instructed to self-filter, but this is the technical guarantee.
+    // ── Drawdown circuit breaker ───────────────────────────────────────────────
+    // If total portfolio value < 85% of starting capital, block ALL new BUY signals.
+    // The system stops digging. Only SELLs allowed to free capital and cut losses.
+    // Lifts automatically when portfolio recovers above the threshold.
+    const startingCap = parseFloat(portfolio.startingCapital || 20000);
+    const holdingsTotal = (portfolio.holdings || []).reduce((sum, h) =>
+      sum + parseFloat(h.currentPrice || h.avgPrice || 0) * h.quantity, 0);
+    const totalPortfolioValue = effectiveCash + holdingsTotal;
+    const drawdownThreshold = startingCap * 0.85;
+    const isInDrawdown = totalPortfolioValue < drawdownThreshold && (portfolio.holdings || []).length > 0;
+    if (isInDrawdown) {
+      logger.warn(`[SignalGen] Drawdown circuit breaker ACTIVE: portfolio ₹${totalPortfolioValue.toFixed(0)} < ₹${drawdownThreshold.toFixed(0)} (85% of ₹${startingCap.toFixed(0)}). Blocking all BUY signals.`);
+    }
+
+    // ── Hard conviction gate — post-generation filter ─────────────────────────
     const convictionFiltered = validatedSignals.filter(sig => {
-      if ((sig.confidence ?? 0) < 83) {
-        logger.info(`[SignalGen] Conviction gate: dropped ${sig.side} ${sig.symbol} at ${sig.confidence} (floor 83)`);
+      if ((sig.confidence ?? 0) < minConviction) {
+        logger.info(`[SignalGen] Conviction gate: dropped ${sig.side} ${sig.symbol} at ${sig.confidence} (adaptive floor ${minConviction})`);
+        return false;
+      }
+      // Drawdown breaker: only SELLs pass when portfolio is underwater
+      if (sig.side === 'BUY' && isInDrawdown) {
+        logger.info(`[SignalGen] Drawdown gate: blocked BUY ${sig.symbol} — portfolio in drawdown (₹${totalPortfolioValue.toFixed(0)} < ₹${drawdownThreshold.toFixed(0)})`);
         return false;
       }
       // ── Bearish regime gate: block new BUY entries when market is falling ──
-      // Historical data: buying in BEARISH/HIGH_STRESS regimes caused the majority
-      // of portfolio drawdown. In these regimes only SELL signals pass through.
       if (sig.side === 'BUY' && ['BEARISH', 'HIGH_STRESS', 'CRASH'].includes(marketRegime?.regime)) {
         logger.info(`[SignalGen] Regime gate: blocked BUY ${sig.symbol} — regime is ${marketRegime.regime}`);
         return false;

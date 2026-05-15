@@ -68,14 +68,25 @@ export async function validateSignals(signals, portfolioId) {
 
   const { effectiveCash } = await getEffectiveCash(portfolioId);
 
-  // Fetch holdings for SELL validation
+  // Fetch portfolio for concentration cap
+  const portfolio = await prisma.portfolio.findUnique({
+    where: { id: portfolioId },
+    select: { startingCapital: true }
+  });
+  const startingCapital = parseFloat(portfolio?.startingCapital || 20000);
+  const MAX_STOCK_ALLOCATION = startingCapital * 0.25; // 25% of starting capital per stock
+
+  // Fetch holdings for SELL validation and concentration check
   const holdings = await prisma.holding.findMany({
     where: { portfolioId },
-    select: { symbol: true, quantity: true }
+    select: { symbol: true, quantity: true, avgPrice: true, currentPrice: true }
   });
   const holdingMap = {};
+  const holdingValueMap = {}; // existing market value per symbol
   for (const h of holdings) {
     holdingMap[h.symbol] = h.quantity;
+    const hPrice = parseFloat(h.currentPrice || h.avgPrice || 0);
+    holdingValueMap[h.symbol] = h.quantity * hPrice;
   }
 
   const validated = [];
@@ -102,7 +113,6 @@ export async function validateSignals(signals, portfolioId) {
   // Validate BUY signals against remaining cash
   for (const sig of buySignals) {
     let aiPrice = parseFloat(sig.triggerPrice || sig.triggerLow || sig.price || 0);
-    const quantity = Math.max(1, parseInt(sig.quantity) || 1);
 
     // Primary: Upstox real-time LTP. Secondary: Alpha Vantage / NSE scraper.
     let upstoxPrice = upstoxLTPMap.get(sig.symbol)?.price || 0;
@@ -155,6 +165,24 @@ export async function validateSignals(signals, portfolioId) {
       continue;
     }
 
+    let quantity = Math.max(1, parseInt(sig.quantity) || 1);
+
+    // Per-stock concentration cap: existing holding value + new position <= 25% of startingCapital.
+    // Prevents the PFC-style disaster (77% of capital in one stock from two same-day BUYs).
+    const existingValue = holdingValueMap[sig.symbol] || 0;
+    const newCost = quantity * price;
+    if (existingValue + newCost > MAX_STOCK_ALLOCATION) {
+      const headroom = Math.max(0, MAX_STOCK_ALLOCATION - existingValue);
+      if (headroom < 2500) {
+        logger.warn(`[Capital Guard] BUY ${sig.symbol}: DROPPED — concentration cap hit (existing ₹${existingValue.toFixed(0)} + new ₹${newCost.toFixed(0)} > 25% limit ₹${MAX_STOCK_ALLOCATION.toFixed(0)})`);
+        continue;
+      }
+      const cappedQty = Math.floor(headroom / price);
+      logger.warn(`[Capital Guard] BUY ${sig.symbol}: qty capped ${quantity}→${cappedQty} (concentration cap: ₹${MAX_STOCK_ALLOCATION.toFixed(0)} max per stock)`);
+      sig.quantity = cappedQty;
+      quantity = cappedQty;
+    }
+
     const totalCost = quantity * price;
 
     if (totalCost <= remainingCash) {
@@ -166,10 +194,10 @@ export async function validateSignals(signals, portfolioId) {
       // Can afford fewer shares — reduce quantity
       const affordableQty = Math.floor(remainingCash / price);
       const reducedCost = affordableQty * price;
-      // Minimum viable position: ₹1,500. Positions smaller than this cost more in STT
-      // round-trips than they can realistically earn. No signal is better than a false signal.
-      if (reducedCost < 1500) {
-        logger.warn(`[Capital Guard] BUY ${sig.symbol}: DROPPED — reduced position ₹${reducedCost.toFixed(0)} < ₹1,500 minimum (insufficient capital for meaningful position)`);
+      // Minimum viable position: ₹2,500. Below this, STT + friction erode any gain.
+      // At ₹20k capital, ₹2,500 = 12.5% — the smallest position worth holding.
+      if (reducedCost < 2500) {
+        logger.warn(`[Capital Guard] BUY ${sig.symbol}: DROPPED — reduced position ₹${reducedCost.toFixed(0)} < ₹2,500 minimum (insufficient capital for meaningful position)`);
         continue;
       }
       sig.quantity = affordableQty;

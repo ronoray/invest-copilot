@@ -137,93 +137,96 @@ REAL-TIME DATA USAGE:
  * @param {number} [days=7] - Look back period
  * @returns {Promise<string>} Formatted scorecard text
  */
-export async function buildAccountabilityScorecard(portfolioId, days = 7) {
+export async function buildAccountabilityScorecard(portfolioId, days = 30) {
   try {
-    const since = new Date();
-    since.setDate(since.getDate() - days);
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
-    const recentSignals = await prisma.tradeSignal.findMany({
-      where: {
-        portfolioId,
-        createdAt: { gte: since }
-      },
-      orderBy: { createdAt: 'desc' },
-      take: 10
-    });
+    const [recentSignals, closedTrades] = await Promise.all([
+      prisma.tradeSignal.findMany({
+        where: { portfolioId, createdAt: { gte: since } },
+        orderBy: { createdAt: 'desc' },
+        take: 20
+      }),
+      // Closed BUY trades with actual realized P&L — ground truth for self-learning
+      prisma.tradeSignal.findMany({
+        where: { portfolioId, side: 'BUY', status: 'EXECUTED', realizedPnl: { not: null }, updatedAt: { gte: since } },
+        orderBy: { updatedAt: 'desc' },
+        select: { symbol: true, executedPrice: true, exitPrice: true, realizedPnl: true, outcome: true, confidence: true, updatedAt: true }
+      })
+    ]);
 
-    if (recentSignals.length === 0) {
-      return '';
-    }
+    if (recentSignals.length === 0 && closedTrades.length === 0) return '';
 
-    // Get current prices from holdings for comparison
-    const portfolio = await prisma.portfolio.findUnique({
-      where: { id: portfolioId },
-      include: { holdings: true }
-    });
+    const lines = ['=== SELF-LEARNING FEEDBACK — READ BEFORE GENERATING SIGNALS ==='];
 
-    const holdingPrices = {};
-    for (const h of (portfolio?.holdings || [])) {
-      holdingPrices[h.symbol.toUpperCase()] = parseFloat(h.currentPrice || h.avgPrice);
-    }
-
-    const lines = ['=== MY PREVIOUS CALLS — I OWN THESE (Last 7 Days) ==='];
-    let wins = 0;
-    let losses = 0;
-    let totalPLEstimate = 0;
-
-    for (const sig of recentSignals) {
-      const status = sig.status;
-      const symbol = sig.symbol;
-      const side = sig.side;
-      const triggerPrice = sig.triggerPrice || sig.triggerLow || 0;
-      const currentPrice = holdingPrices[symbol.toUpperCase()];
-
-      let outcome = '';
-      if (currentPrice && triggerPrice > 0) {
-        const diff = side === 'BUY'
-          ? ((currentPrice - triggerPrice) / triggerPrice * 100)
-          : ((triggerPrice - currentPrice) / triggerPrice * 100);
-        const plAmount = side === 'BUY'
-          ? (currentPrice - triggerPrice) * sig.quantity
-          : (triggerPrice - currentPrice) * sig.quantity;
-        outcome = ` → Now ₹${currentPrice.toFixed(0)} (${diff >= 0 ? '+' : ''}${diff.toFixed(1)}%, P&L: ${plAmount >= 0 ? '+' : ''}₹${plAmount.toFixed(0)})`;
-        if (diff >= 0) wins++; else losses++;
-        if (status === 'EXECUTED') totalPLEstimate += plAmount;
+    // Section 1: Realized P&L (ground truth, not estimated)
+    if (closedTrades.length > 0) {
+      const wins   = closedTrades.filter(t => t.outcome === 'PROFIT').length;
+      const losses = closedTrades.filter(t => t.outcome === 'LOSS').length;
+      const totalPnL = closedTrades.reduce((s, t) => s + (parseFloat(t.realizedPnl) || 0), 0);
+      const winRate = wins + losses > 0 ? (wins / (wins + losses) * 100).toFixed(0) : '?';
+      lines.push(`\nACTUAL REALIZED OUTCOMES (last ${days} days):`);
+      for (const t of closedTrades.slice(0, 8)) {
+        const pnl = parseFloat(t.realizedPnl || 0);
+        const icon = t.outcome === 'PROFIT' ? '✅' : t.outcome === 'LOSS' ? '❌' : '⚪';
+        const pct = t.executedPrice && t.exitPrice
+          ? ((parseFloat(t.exitPrice) - parseFloat(t.executedPrice)) / parseFloat(t.executedPrice) * 100).toFixed(1) : '?';
+        const d = new Date(t.updatedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+        lines.push(`  ${icon} ${d}: ${t.symbol} ${pnl >= 0 ? '+' : ''}₹${pnl.toFixed(0)} (${pct}%) conf:${t.confidence}%`);
       }
+      lines.push(`  WIN RATE: ${wins}W/${losses}L = ${winRate}% | NET: ${totalPnL >= 0 ? '+' : ''}₹${totalPnL.toFixed(0)}`);
+    }
 
-      const statusTag = status === 'EXECUTED' ? '[EXECUTED]'
-        : status === 'PENDING' ? '[NOT ACTED ON — MISSED OPPORTUNITY?]'
-        : status === 'DISMISSED' ? '[DISMISSED BY INVESTOR]'
-        : status === 'EXPIRED' ? '[EXPIRED — MONEY LEFT ON TABLE]'
-        : `[${status}]`;
-
-      const dateStr = sig.createdAt.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
-      lines.push(`${dateStr}: ${side} ${symbol} @ ₹${triggerPrice.toFixed(0)} ${statusTag}${outcome} | Confidence: ${sig.confidence}%`);
-      if (sig.rationale) {
-        lines.push(`  My thesis was: ${sig.rationale}`);
+    // Section 2: Damaged stocks — avoid re-entry on stocks with net loss
+    const symbolPnL = {};
+    for (const t of closedTrades) {
+      symbolPnL[t.symbol] = (symbolPnL[t.symbol] || 0) + (parseFloat(t.realizedPnl) || 0);
+    }
+    const damaged = Object.entries(symbolPnL).filter(([, p]) => p < -5).sort(([, a], [, b]) => a - b);
+    if (damaged.length > 0) {
+      lines.push(`\n🚫 DAMAGED STOCKS — AVOID BUY RE-ENTRY (net loss in last ${days} days):`);
+      for (const [sym, pnl] of damaged) {
+        lines.push(`  ${sym}: -₹${Math.abs(pnl).toFixed(0)} net loss. Do NOT generate a BUY signal for this stock. Re-entering a losing stock is revenge trading. Move to fresh setups.`);
       }
     }
 
-    if (wins + losses > 0) {
-      const winRate = ((wins / (wins + losses)) * 100).toFixed(0);
-      lines.push(`\nMY SCORECARD: ${wins}W / ${losses}L (${winRate}% hit rate) | Estimated P&L from executed: ${totalPLEstimate >= 0 ? '+' : ''}₹${totalPLEstimate.toFixed(0)}`);
-      if (losses > wins) {
-        lines.push('📉 More losses than wins. Reduce frequency — only trade when setup is technically unambiguous, catalyst is company-specific, and R:R ≥ 3:1. Fewer, better trades beat more frequent, mediocre ones.');
-      }
-      if (totalPLEstimate < 0) {
-        lines.push(`📊 Recent closed-trade P&L: -₹${Math.abs(totalPLEstimate).toFixed(0)}. No revenge entries. Discipline over urgency — a missed trade costs nothing, a bad trade costs real money.`);
+    // Section 3: What worked — replicate these setups
+    const bigWins = closedTrades.filter(t => t.outcome === 'PROFIT' && parseFloat(t.realizedPnl || 0) > 50);
+    if (bigWins.length > 0) {
+      lines.push(`\n✅ SETUPS THAT WORKED (>₹50 profit) — study and replicate:`);
+      for (const w of bigWins) {
+        const pnl = parseFloat(w.realizedPnl || 0);
+        const pct = w.executedPrice && w.exitPrice
+          ? ((parseFloat(w.exitPrice) - parseFloat(w.executedPrice)) / parseFloat(w.executedPrice) * 100).toFixed(1) : '?';
+        lines.push(`  ${w.symbol}: +₹${pnl.toFixed(0)} (+${pct}%) — what worked here? Same sector/catalyst pattern?`);
       }
     }
 
-    // Check for unacted signals
-    const pendingCount = recentSignals.filter(s => s.status === 'PENDING' || s.status === 'EXPIRED').length;
-    if (pendingCount > 0) {
-      lines.push(`\n${pendingCount} of my signals were NOT executed. If these were good calls that the investor missed, I need to push harder. If they were weak calls, I need better conviction.`);
+    // Section 4: Adaptive signal discipline based on win rate
+    const graded = closedTrades.filter(t => t.outcome === 'PROFIT' || t.outcome === 'LOSS');
+    if (graded.length >= 5) {
+      const wr = closedTrades.filter(t => t.outcome === 'PROFIT').length / graded.length;
+      lines.push(`\n📊 ADAPTIVE DISCIPLINE (win rate ${(wr*100).toFixed(0)}%):`);
+      if (wr < 0.35)      lines.push(`  CRITICAL — generate MAX 1 signal today. Confidence 90%+ required. R:R ≥ 4:1. If nothing clears this, return empty.`);
+      else if (wr < 0.45) lines.push(`  BELOW BREAK-EVEN — max 2 signals. Company-specific catalyst required. No "looks technically OK" picks.`);
+      else if (wr < 0.55) lines.push(`  MARGINAL — max 3 signals. Confidence 85%+. R:R ≥ 3:1.`);
+      else                lines.push(`  PERFORMING — normal generation. Maintain discipline.`);
     }
 
-    lines.push('=== END SCORECARD ===');
+    // Section 5: Last 7 days signal log
+    const week = recentSignals.filter(s => new Date(s.createdAt) >= new Date(Date.now() - 7*24*60*60*1000));
+    if (week.length > 0) {
+      lines.push(`\nLAST 7 DAYS SIGNALS:`);
+      for (const s of week.slice(0, 6)) {
+        const tag = s.status === 'EXECUTED' ? '[EXE]' : s.status === 'DISMISSED' ? '[DIS]' : s.status === 'EXPIRED' ? '[EXP]' : `[${s.status.slice(0,3)}]`;
+        const pnlStr = s.realizedPnl != null ? ` ${parseFloat(s.realizedPnl) >= 0 ? '+' : ''}₹${parseFloat(s.realizedPnl).toFixed(0)}` : '';
+        const d = new Date(s.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+        lines.push(`  ${d}: ${s.side} ${s.symbol} ${tag} c:${s.confidence}%${pnlStr}`);
+      }
+    }
+
+    lines.push('=== END SELF-LEARNING FEEDBACK ===');
     return '\n' + lines.join('\n') + '\n';
-
   } catch (error) {
     logger.error('Failed to build accountability scorecard:', error.message);
     return '';

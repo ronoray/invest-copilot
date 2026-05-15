@@ -419,6 +419,8 @@ HARD RULES — NEVER VIOLATED:
 - BUY capital: sum of (quantity × price) for ALL BUY signals ≤ ₹${effectiveCash.toLocaleString('en-IN')}. Verify math in capitalCheck.
 - SELL signals ONLY for stocks actually held. No phantom sells.
 - Minimum confidence: 78. Hard floor, no exceptions, no regime override. A setup you're not 78% sure about is a setup you should not take.
+- MINIMUM POSITION SIZE: Each BUY signal must be ≥ ₹1,500 (quantity × price ≥ 1500). A position smaller than ₹1,500 costs more in STT round-trips than it can earn. If available capital cannot fund even ₹1,500 in any single name, return empty signals with a clear capitalCheck note.
+- STRUCTURALLY DISTRESSED STOCKS — NEVER GENERATE BUY SIGNALS FOR: IDEA (Vodafone Idea — negative net worth, debt > ₹2L crore, no FCF path), YESBANK (post-reconstruction, structurally weak), ZEEL (promoter pledging / governance overhang). These are not "buying opportunities at support" — they are structural traps. The only valid signal for these is SELL if already held.
 - ${isStressed ? 'Stress mode: LIMIT orders preferred. R:R ≥ 2.5:1 for fear falls. If fear fall: minimum 2 BUY signals required. If structural fall: empty array is valid.' : '2 great signals beat 5 marginal ones. Quality over quantity, always.'}
 ${(portfolio.holdings || []).length === 0 ? `
 ⚡ FULL CASH — DEPLOYMENT MANDATE (NON-NEGOTIABLE):
@@ -581,7 +583,12 @@ Notes:
             triggerType: sig.triggerType || 'MARKET',
             triggerPrice: sig.triggerPrice ? parseFloat(sig.triggerPrice) : null,
             triggerLow: sig.triggerLow ? parseFloat(sig.triggerLow) : null,
-            triggerHigh: sig.triggerHigh ? parseFloat(sig.triggerHigh) : null,
+            // For MARKET BUY signals, store the AI price estimate in triggerHigh.
+            // getEffectiveCash uses triggerPrice||triggerLow||triggerHigh to reserve capital —
+            // without this, MARKET signals reserve ₹0 and the same capital funds multiple signals.
+            triggerHigh: sig.triggerType === 'MARKET' && sig.side === 'BUY' && sig.price
+              ? parseFloat(sig.price)
+              : (sig.triggerHigh ? parseFloat(sig.triggerHigh) : null),
             confidence: Math.min(100, Math.max(0, parseInt(sig.confidence) || 50)),
             rationale: sig.rationale || null,
             status: 'PENDING',

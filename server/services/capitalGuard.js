@@ -165,8 +165,14 @@ export async function validateSignals(signals, portfolioId) {
     } else if (remainingCash >= price) {
       // Can afford fewer shares — reduce quantity
       const affordableQty = Math.floor(remainingCash / price);
-      sig.quantity = affordableQty;
       const reducedCost = affordableQty * price;
+      // Minimum viable position: ₹1,500. Positions smaller than this cost more in STT
+      // round-trips than they can realistically earn. No signal is better than a false signal.
+      if (reducedCost < 1500) {
+        logger.warn(`[Capital Guard] BUY ${sig.symbol}: DROPPED — reduced position ₹${reducedCost.toFixed(0)} < ₹1,500 minimum (insufficient capital for meaningful position)`);
+        continue;
+      }
+      sig.quantity = affordableQty;
       validated.push(sig);
       remainingCash -= reducedCost;
       logger.warn(`[Capital Guard] BUY ${sig.symbol}: reduced ${quantity}→${affordableQty} shares (budget: ₹${reducedCost.toFixed(0)}, remaining: ₹${remainingCash.toFixed(0)})`);

@@ -548,6 +548,18 @@ Notes:
       expiresAt.setDate(expiresAt.getDate() + 1);
     }
 
+    // Permanent hardcoded BUY blocklist — structurally distressed companies.
+    // This is a CODE-LEVEL filter; the AI prompt cannot override it.
+    // Criteria: negative net worth OR debt > 5× equity OR no FCF path visible in 3 years.
+    const PERMANENT_BUY_BLOCKLIST = new Set([
+      'IDEA',       // Vodafone Idea — negative net worth, ₹2L cr debt, no FCF path
+      'YESBANK',    // Post-reconstruction, structurally weak capital base
+      'RCOM',       // Reliance Comms — bankrupt, under NCLT
+      'JETAIRWAYS', // Bankrupt airline
+      'ZEEL',       // Promoter pledging + governance overhang
+      'SUZLON',     // Historically distressed (re-evaluate if fundamentally restored)
+    ]);
+
     // Dedup: skip signals for symbols that already have coverage via:
     // 1. Live Upstox open orders (already on exchange)
     // 2. Active DB signals today (PENDING/ACKED/SNOOZED/PLACING — not yet on exchange but queued)
@@ -559,6 +571,11 @@ Notes:
       const key = `${sig.symbol}:${sig.side}`;
       if (alreadyCoveredKeys.has(key)) {
         logger.info(`[SignalGen] Skipping duplicate signal ${sig.side} ${sig.symbol} — already covered by active signal or open Upstox order`);
+        return false;
+      }
+      // Permanent hardblock: never generate BUY for distressed stocks
+      if (sig.side === 'BUY' && PERMANENT_BUY_BLOCKLIST.has(sig.symbol)) {
+        logger.warn(`[SignalGen] PERMANENT BLOCK: BUY ${sig.symbol} rejected — structurally distressed stock, hardcoded blocklist`);
         return false;
       }
       // Block BUY re-entry within 7 days of selling the same stock

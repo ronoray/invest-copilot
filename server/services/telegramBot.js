@@ -243,8 +243,6 @@ function pollOrderViaTelegram(botInstance, chatId, userId, signalId, signal, ord
       await botInstance.sendMessage(chatId, successMsg, { parse_mode: 'Markdown' });
     },
     onFailure: async ({ status, reason }) => {
-      const failureMsg = `🔴 *Order ${status.toUpperCase()}*\n\n${signal.side} ${signal.symbol} @ ${formatPrice(signal.triggerPrice || signal.triggerLow || 0)}\nReason: _${reason}_\n\nSignal reset — choose how to proceed:`;
-
       try {
         await botInstance.editMessageReplyMarkup(
           { inline_keyboard: [[{ text: `🔴 ${status.toUpperCase()} — reset`, callback_data: 'noop' }]] },
@@ -252,6 +250,21 @@ function pollOrderViaTelegram(botInstance, chatId, userId, signalId, signal, ord
         );
       } catch (e) { /* message may be old */ }
 
+      // "Margin Exceeds" = insufficient capital — retrying is pointless, auto-dismiss.
+      const isMarginRejection = /margin exceeds|need to add|insufficient/i.test(reason || '');
+      if (isMarginRejection) {
+        await prisma.tradeSignal.updateMany({
+          where: { id: signalId, status: { in: ['PENDING', 'ACKED', 'SNOOZED'] } },
+          data: { status: 'DISMISSED' }
+        }).catch(() => {});
+        await botInstance.sendMessage(chatId,
+          `💰 *Insufficient Capital — Auto-dismissed*\n\n${signal.side} ${signal.quantity}x *${signal.symbol}*\nReason: _${reason}_\n\nThis signal has been dismissed. Free up capital by selling existing positions before generating new BUY signals.`,
+          { parse_mode: 'Markdown' }
+        );
+        return;
+      }
+
+      const failureMsg = `🔴 *Order ${status.toUpperCase()}*\n\n${signal.side} ${signal.symbol} @ ${formatPrice(signal.triggerPrice || signal.triggerLow || 0)}\nReason: _${reason}_\n\nSignal reset — choose how to proceed:`;
       await botInstance.sendMessage(chatId, failureMsg, {
         parse_mode: 'Markdown',
         reply_markup: {

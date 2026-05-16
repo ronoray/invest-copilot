@@ -127,6 +127,13 @@ echo "$TARGET_SHA" > "$APP_DIR/DEPLOYED_SHA"
 log "✅ Wrote DEPLOYED_SHA: $TARGET_SHA"
 
 # ============================================================================
+# Prune dangling images left by the build
+# ============================================================================
+log "Pruning dangling Docker images after build..."
+docker image prune -f 2>/dev/null | tail -1
+log "✅ Docker image prune done"
+
+# ============================================================================
 # Deploy notification email
 # ============================================================================
 DEPLOY_TIME="$(date '+%Y-%m-%d %H:%M:%S IST')"

@@ -19,6 +19,7 @@ import upstoxRoutes from './routes/upstox.js';
 import upstoxCallbackRoutes from './routes/upstoxCallback.js';
 import dailyTargetRoutes from './routes/dailyTarget.js';
 import signalRoutes from './routes/signals.js';
+import performanceRoutes from './routes/performance.js';
 
 // Service imports
 import { scanMarket } from './jobs/marketScanner.js';
@@ -110,6 +111,7 @@ app.use('/api/tax', authenticate, taxRoutes);
 app.use('/api/upstox', authenticate, upstoxRoutes);
 app.use('/api/daily-target', authenticate, dailyTargetRoutes);
 app.use('/api/signals', authenticate, signalRoutes);
+app.use('/api/performance', authenticate, performanceRoutes);
 app.post('/api/deploy/webhook', handleDeployWebhook);   // legacy path (under /api)
 app.post('/webhook/github', handleDeployWebhook);       // CF-bypass path (same router as /webhook/upstox)
 app.post('/api/deploy/trigger', authenticate, triggerManualDeploy);

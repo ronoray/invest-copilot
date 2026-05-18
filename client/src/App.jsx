@@ -1,6 +1,6 @@
 import { Routes, Route, Link, useLocation } from 'react-router-dom';
 import { useState, useEffect } from 'react';
-import { Home, Briefcase, Eye, Lightbulb, Receipt, Target, LogOut, Menu, X, Brain, Layers, BarChart3, Sun, Moon } from 'lucide-react';
+import { Home, Briefcase, Eye, Lightbulb, Receipt, Target, LogOut, Menu, X, Brain, Layers, BarChart3, Sun, Moon, TrendingUp } from 'lucide-react';
 import { api } from './utils/api';
 import { useAuth } from './context/AuthContext';
 import { useTheme } from './context/ThemeContext';
@@ -16,6 +16,7 @@ import TaxDashboard from './pages/TaxDashboard';
 import YourPlan from './pages/YourPlan';
 import MultiAssetRecommendations from './pages/MultiAssetRecommendations';
 import HoldingsAnalyzer from './pages/HoldingsAnalyzer';
+import Performance from './pages/Performance';
 
 function App() {
   return (
@@ -92,6 +93,7 @@ function AppLayout() {
                 <NavLink to="/ai" icon={<Lightbulb size={18} />} active={isActive('/ai')}>AI</NavLink>
                 <NavLink to="/insights" icon={<Brain size={18} />} active={isActive('/insights')}>Insights</NavLink>
                 <NavLink to="/tax" icon={<Receipt size={18} />} active={isActive('/tax')}>Tax</NavLink>
+                <NavLink to="/performance" icon={<TrendingUp size={18} />} active={isActive('/performance')}>Performance</NavLink>
               </div>
             </div>
 
@@ -142,6 +144,7 @@ function AppLayout() {
               <MobileNavLink to="/insights" icon={<Brain size={20} />} onClick={closeMobileMenu} active={isActive('/insights')}>AI Insights</MobileNavLink>
               <MobileNavLink to="/tax" icon={<Receipt size={18} />} onClick={closeMobileMenu} active={isActive('/tax')}>Tax Dashboard</MobileNavLink>
               <MobileNavLink to="/watchlist" icon={<Eye size={20} />} onClick={closeMobileMenu} active={isActive('/watchlist')}>Watchlist</MobileNavLink>
+              <MobileNavLink to="/performance" icon={<TrendingUp size={20} />} onClick={closeMobileMenu} active={isActive('/performance')}>Performance &amp; Learning</MobileNavLink>
             </div>
 
             {/* Mobile User Section */}
@@ -185,6 +188,7 @@ function AppLayout() {
           <Route path="/tax" element={<TaxDashboard />} />
           <Route path="/watchlist" element={<Watchlist />} />
           <Route path="/proposals" element={<Proposals />} />
+          <Route path="/performance" element={<Performance />} />
         </Routes>
       </main>
     </div>

@@ -147,9 +147,12 @@ model Portfolio {
   trades              Trade[]
   proposals           Proposal[]
   alertPreferences    AlertPreference?
-  capitalHistory      CapitalHistory[]  // Track capital changes
+  capitalHistory      CapitalHistory[]
   dailyTargets        DailyTarget[]
   tradeSignals        TradeSignal[]
+  snapshots           PortfolioSnapshot[]
+  mistakeLogs         MistakeLog[]
+  learningRules       LearningRule[]
 
   @@index([userId, isActive])
   @@index([broker])
@@ -672,4 +675,72 @@ model SignalAck {
   signal      TradeSignal @relation(fields: [signalId], references: [id], onDelete: Cascade)
 
   @@index([signalId])
+}
+
+// ============================================
+// PERFORMANCE TRACKING
+// ============================================
+
+model PortfolioSnapshot {
+  id              Int      @id @default(autoincrement())
+  portfolioId     Int
+
+  date            DateTime @db.Date
+  startingCapital Float
+  currentEquity   Float    // investedValue + cashBalance (cost basis proxy)
+  investedValue   Float    // sum of holdings at avg price (cost basis)
+  cashBalance     Float
+  realizedPnl     Float    @default(0)
+  unrealizedPnl   Float    @default(0)
+  peakEquity      Float    // high-water mark up to and including this date
+  drawdownPct     Float    @default(0) // (currentEquity - peakEquity) / peakEquity * 100
+
+  notes           String?
+  createdAt       DateTime @default(now())
+
+  portfolio       Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+
+  @@unique([portfolioId, date])
+  @@index([portfolioId, date])
+}
+
+model MistakeLog {
+  id               Int      @id @default(autoincrement())
+  portfolioId      Int
+
+  symbol           String
+  tradeId          Int?     // optional link to Trade
+  signalId         Int?     // optional link to TradeSignal
+  mistakeCategory  String   // BAD_ENTRY, LATE_ENTRY, EARLY_EXIT, LATE_EXIT, STOP_LOSS_TOO_WIDE, STOP_LOSS_TOO_TIGHT, NO_STOP_LOSS, OVERTRADING, POOR_RISK_REWARD, IGNORED_TREND, NEWS_RISK, LOW_CONFIDENCE_TRADE, CLAUDE_REASONING_ERROR, DATA_QUALITY, USER_OVERRIDE, UNKNOWN
+  description      String   @db.Text  // what happened
+  reason           String?  @db.Text  // why it happened
+  lesson           String?  @db.Text  // rule to prevent recurrence
+  ruleImplemented  Boolean  @default(false)
+  pnlImpact        Float?   // negative = loss amount
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  portfolio        Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+
+  @@index([portfolioId])
+  @@index([portfolioId, mistakeCategory])
+}
+
+model LearningRule {
+  id               Int      @id @default(autoincrement())
+  portfolioId      Int
+
+  title            String
+  description      String   @db.Text
+  sourceMistakeId  Int?     // optional link to MistakeLog
+  status           String   @default("PROPOSED") // PROPOSED, ACTIVE, REJECTED
+  impact           Float?   // measured improvement % after activation
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  portfolio        Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+
+  @@index([portfolioId, status])
 }

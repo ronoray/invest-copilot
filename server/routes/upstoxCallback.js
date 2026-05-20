@@ -1,5 +1,6 @@
 import express from 'express';
 import { exchangeCodeForToken } from '../services/upstoxService.js';
+import { set_token } from '../services/upstoxTokenStore.js';
 import { getBot } from '../services/telegramBot.js';
 import { updateCashOnExecution, upsertHoldingOnExecution, syncUpstoxFunds } from '../services/capitalGuard.js';
 import prisma from '../services/prisma.js';
@@ -88,71 +89,45 @@ router.get('/auth/upstox/callback', async (req, res) => {
  * This enables automatic daily token refresh without user clicking a login link.
  */
 router.post('/webhook/upstox/token', async (req, res) => {
-  // No secret guard here — Upstox calls this URL directly and can't add custom
-  // secret params. The access_token in the payload IS the credential.
-  // verifyUpstoxWebhook is only applied to order/GTT webhooks where we can
-  // register the URL with ?secret=... in the Upstox portal.
+  // Legacy path — kept for backward compat during Upstox app reconfiguration.
+  // New path is /upstox/notifier (registered in upstoxWebhooks.js).
+  // Delegates to the same set_token() used by the new handler.
   try {
-    logger.info('Upstox token webhook received:', JSON.stringify(req.body));
+    logger.info('[/webhook/upstox/token] Token webhook received');
 
-    const { authorized_redirect_uri, user_id, access_token, email } = req.body || {};
+    const payload = req.body || {};
+    const access_token = payload.access_token;
 
     if (!access_token) {
-      logger.warn('Upstox token webhook: no access_token in payload');
+      logger.warn('[/webhook/upstox/token] No access_token in payload');
       return res.status(400).json({ error: 'No access_token' });
     }
 
-    // Find the integration by matching — Upstox sends us the token
-    // We need to figure out which user this belongs to
-    // Try to match by the first connected integration (single-user setup)
     const integration = await prisma.upstoxIntegration.findFirst({
       where: { isConnected: true },
       include: { user: { include: { telegramUser: true } } }
     });
 
     if (!integration) {
-      logger.warn('Upstox token webhook: no connected integration found');
+      logger.warn('[/webhook/upstox/token] No connected integration found');
       return res.status(404).json({ error: 'No integration found' });
     }
 
-    // Use actual JWT exp for accurate expiry
-    let expiresAt;
-    try {
-      const payload = JSON.parse(Buffer.from(access_token.split('.')[1], 'base64').toString());
-      expiresAt = new Date(payload.exp * 1000);
-    } catch {
-      expiresAt = new Date(Date.now() + 3 * 60 * 60 * 1000);
+    const result = await set_token(integration.userId, payload);
+
+    if (!result.saved) {
+      logger.info(`[/webhook/upstox/token] Token not saved: ${result.reason}`);
+      return res.json({ success: true, skipped: true, reason: result.reason });
     }
 
-    // Only overwrite if this token expires AFTER the one already stored.
-    // Prevents a delayed webhook from clobbering a fresher token the user
-    // just obtained via manual OAuth re-auth.
-    const currentExpiry = integration.tokenExpiresAt ? new Date(integration.tokenExpiresAt) : null;
-    if (currentExpiry && expiresAt <= currentExpiry) {
-      logger.info(`Upstox token webhook: skipped — stored token expires ${currentExpiry.toISOString()}, webhook token expires ${expiresAt.toISOString()} (not newer)`);
-      return res.json({ success: true, skipped: true });
-    }
+    logger.info(`[/webhook/upstox/token] Token saved for user ${integration.userId}`);
 
-    await prisma.upstoxIntegration.update({
-      where: { id: integration.id },
-      data: {
-        accessToken: access_token,
-        tokenExpiresAt: expiresAt,
-        isConnected: true,
-        lastSyncAt: new Date()
-      }
-    });
-
-    logger.info(`Upstox token auto-refreshed for user ${integration.userId} via webhook`);
-
-    // Sync Upstox funds to portfolio availableCash
     try {
       await syncUpstoxFunds(integration.userId);
-    } catch (syncErr) {
-      logger.warn('Fund sync after token webhook failed:', syncErr.message);
+    } catch (e) {
+      logger.warn('[/webhook/upstox/token] Fund sync failed:', e.message);
     }
 
-    // Notify via Telegram
     try {
       const telegramUser = integration.user?.telegramUser;
       if (telegramUser) {
@@ -160,18 +135,18 @@ router.post('/webhook/upstox/token', async (req, res) => {
         if (bot) {
           await bot.sendMessage(
             parseInt(telegramUser.telegramId),
-            '🔑 *Upstox Token Auto-Refreshed*\nYour token was refreshed automatically via webhook. Execute buttons are active!',
+            '🔑 *Upstox Token Refreshed*\nToken received via webhook. Execute buttons are active!',
             { parse_mode: 'Markdown' }
           );
         }
       }
-    } catch (tgErr) {
-      logger.warn('Could not send Telegram notification after token webhook:', tgErr.message);
+    } catch (e) {
+      logger.warn('[/webhook/upstox/token] Telegram send failed:', e.message);
     }
 
     res.json({ success: true });
   } catch (error) {
-    logger.error('Upstox token webhook error:', error);
+    logger.error('[/webhook/upstox/token] Error:', error);
     res.status(500).json({ error: 'Internal error' });
   }
 });

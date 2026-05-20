@@ -15,6 +15,7 @@
 import axios from 'axios';
 import prisma from './prisma.js';
 import { resolveInstrumentKey } from './upstoxService.js';
+import { get_active_token } from './upstoxTokenStore.js';
 import logger from './logger.js';
 
 const UPSTOX_BASE_URL = 'https://api.upstox.com/v2';
@@ -35,21 +36,20 @@ async function getConnectedUserId() {
 }
 
 /**
- * Get a valid Upstox access token — throws if missing or expired.
+ * Get a valid Upstox access token via the token store (respects 5-min safety margin).
+ * Throws if the token is missing, stale, or near-expiry.
  */
 async function getToken() {
   const userId = await getConnectedUserId();
-  const integration = await prisma.upstoxIntegration.findUnique({
-    where: { userId },
-    select: { accessToken: true, tokenExpiresAt: true, isConnected: true },
-  });
-  if (!integration?.isConnected || !integration?.accessToken) {
-    throw new Error('Upstox not connected');
+  const token = await get_active_token(userId);
+  if (!token) {
+    // Trigger background re-auth
+    import('./upstoxAuthKickoff.js')
+      .then(m => m.triggerReAuthIfNotRecent())
+      .catch(() => {});
+    throw new Error('Upstox token is expired or near-expiry — re-auth request sent');
   }
-  if (integration.tokenExpiresAt && new Date() > new Date(integration.tokenExpiresAt)) {
-    throw new Error('Upstox token expired — re-authenticate via /auth');
-  }
-  return integration.accessToken;
+  return token.accessToken;
 }
 
 /**

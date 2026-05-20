@@ -7,7 +7,9 @@
     "start": "node index.js",
     "db:migrate": "prisma migrate dev",
     "db:generate": "prisma generate",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "test:upstox": "node --test tests/upstox-notifier.test.js tests/upstox-postback.test.js tests/upstox-token-guard.test.js",
+    "test:upstox-auth": "node tests/smoke/upstox-auth-smoke.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.17.2",

@@ -17,6 +17,7 @@ import taxRoutes from './routes/tax.js';
 import portfolioCalcRoutes from './routes/portfolioCalc.js';
 import upstoxRoutes from './routes/upstox.js';
 import upstoxCallbackRoutes from './routes/upstoxCallback.js';
+import upstoxWebhookRoutes from './routes/upstoxWebhooks.js';
 import dailyTargetRoutes from './routes/dailyTarget.js';
 import signalRoutes from './routes/signals.js';
 import performanceRoutes from './routes/performance.js';
@@ -26,6 +27,7 @@ import { scanMarket } from './jobs/marketScanner.js';
 import { initTelegramBot } from './services/telegramBot.js';
 import { initTelegramAlerts } from './jobs/telegramAlerts.js';
 import { initSignalNotifier } from './jobs/signalNotifier.js';
+import { initAuthKickoff } from './services/upstoxAuthKickoff.js';
 import logger from './services/logger.js';
 import { hashPassword } from './services/authService.js';
 
@@ -98,7 +100,8 @@ app.get('/api/health', (req, res) => {
 
 // Public routes
 app.use('/api/auth', authRoutes);
-app.use('/', upstoxCallbackRoutes); // Upstox OAuth callback + webhooks (public, no JWT)
+app.use('/', upstoxCallbackRoutes); // Upstox OAuth callback + legacy webhooks (public, no JWT)
+app.use('/', upstoxWebhookRoutes);  // Upstox v3 notifier + postback + health + request-auth
 
 // Protected routes (require authentication)
 app.use('/api/portfolio', authenticate, portfolioRoutes);
@@ -132,6 +135,8 @@ if (process.env.NODE_ENV === 'production' || process.env.ENABLE_CRON === 'true')
   }, {
     timezone: 'Asia/Kolkata'
   });
+
+  initAuthKickoff();
 
   logger.info('Cron jobs initialized');
 }

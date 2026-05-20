@@ -5,8 +5,21 @@ import { Readable } from 'stream';
 import prisma from './prisma.js';
 import logger from './logger.js';
 import { toISTString } from '../utils/marketHolidays.js';
+import { get_active_token } from './upstoxTokenStore.js';
 
-const UPSTOX_BASE_URL = 'https://api.upstox.com/v2';
+const UPSTOX_BASE_URL = process.env.UPSTOX_BASE_URL || 'https://api.upstox.com/v2';
+
+/**
+ * Thrown when the Upstox token is expired or within the safety margin window.
+ * Callers should surface this to the user and/or trigger re-auth.
+ */
+export class TokenStaleError extends Error {
+  constructor(msg = 'Upstox token is expired or near-expiry. Re-auth request sent — tap Approve on Upstox app.') {
+    super(msg);
+    this.name = 'TokenStaleError';
+    this.isTokenStale = true;
+  }
+}
 
 // In-memory instrument cache: trading_symbol → instrument_key
 let instrumentCache = new Map();
@@ -78,23 +91,30 @@ export async function resolveInstrumentKey(symbol, exchange = 'NSE_EQ') {
 }
 
 /**
- * Get Upstox integration for a user
+ * Get Upstox integration for a user, with token freshness guard.
+ *
+ * Throws TokenStaleError if the token is expired or within the 5-min safety
+ * margin — and fires a background re-auth request (at most once per 30 min).
  */
 async function getIntegration(userId) {
   const integration = await prisma.upstoxIntegration.findUnique({
     where: { userId }
   });
 
-  if (!integration || !integration.isConnected || !integration.accessToken) {
+  if (!integration || !integration.isConnected) {
     throw new Error('Upstox not connected. Please link your Upstox account first.');
   }
 
-  // Check token expiry
-  if (integration.tokenExpiresAt && new Date() > new Date(integration.tokenExpiresAt)) {
-    throw new Error('Upstox token expired. Please re-authenticate.');
+  const token = await get_active_token(userId);
+  if (!token) {
+    // Fire background re-auth (dynamic import avoids circular dependency)
+    import('./upstoxAuthKickoff.js')
+      .then(m => m.triggerReAuthIfNotRecent())
+      .catch(() => {});
+    throw new TokenStaleError();
   }
 
-  return integration;
+  return { ...integration, accessToken: token.accessToken };
 }
 
 /**
@@ -127,8 +147,13 @@ async function upstoxRequest(accessToken, method, endpoint, data = null) {
     const enriched = new Error(`Upstox API [${status}]: ${upstoxMsg}`);
     enriched.status = status;
     enriched.upstoxBody = body;
-    // Flag UDAPI100016 so callers can mark the token as invalid and alert the user
-    enriched.isInvalidCredentials = body?.errors?.some(e => e.errorCode === 'UDAPI100016') === true;
+    // Flag as invalid credentials for UDAPI100016 (token invalidated), UDAPI100050 (token expired),
+    // or any 401 response — callers should mark token stale and trigger re-auth.
+    enriched.isInvalidCredentials =
+      status === 401 ||
+      body?.errors?.some(e =>
+        e.errorCode === 'UDAPI100016' || e.errorCode === 'UDAPI100050',
+      ) === true;
     throw enriched;
   }
 }
@@ -148,24 +173,10 @@ async function handleInvalidCredentials(userId) {
   } catch (e) {
     logger.error(`[Upstox] Failed to mark integration disconnected for user ${userId}:`, e.message);
   }
-  // Fire-and-forget Telegram alert via dynamic import to avoid circular dep
-  try {
-    const { getBot } = await import('./telegramBot.js');
-    const bot = getBot();
-    if (bot) {
-      const integration = await prisma.upstoxIntegration.findFirst({ where: { userId }, include: { user: { include: { telegramUser: true } } } });
-      const telegramUser = integration?.user?.telegramUser;
-      if (telegramUser) {
-        const authUrl = await getAuthorizationUrl(userId);
-        await bot.sendMessage(parseInt(telegramUser.telegramId),
-          `⚠️ *Upstox: Invalid Credentials*\n\nYour Upstox token was rejected by the API (UDAPI100016). This usually means the token was invalidated by a re-auth elsewhere.\n\nPlease re-authenticate:\n[Login to Upstox](${authUrl})\n\nOr use /auth`,
-          { parse_mode: 'Markdown', disable_web_page_preview: true }
-        );
-      }
-    }
-  } catch (e) {
-    logger.warn(`[Upstox] Could not send UDAPI100016 Telegram alert for user ${userId}:`, e.message);
-  }
+  // Trigger background re-auth via the v3 kickoff flow
+  import('./upstoxAuthKickoff.js')
+    .then(m => m.triggerReAuthIfNotRecent())
+    .catch(() => {});
 }
 
 /**

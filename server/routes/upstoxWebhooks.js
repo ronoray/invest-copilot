@@ -54,120 +54,124 @@ setInterval(() => {
 }, 300000).unref();
 
 // ============================================
-// POST /upstox/notifier
+// POST /upstox/notifier  (and /webhook/upstox/notifier — CF bypass alias)
 // Upstox delivers the access token here after the user taps Approve.
 // ============================================
 
-router.post('/upstox/notifier', rateLimit, async (req, res) => {
-  // Return 200 immediately — Upstox should not retry on success
-  res.json({ status: 'ok' });
+async function processNotifier(req) {
+  const payload = req.body;
 
-  setImmediate(async () => {
-    try {
-      const payload = req.body;
+  if (
+    !payload ||
+    typeof payload !== 'object' ||
+    payload.message_type !== 'access_token' ||
+    typeof payload.access_token !== 'string' ||
+    !payload.access_token
+  ) {
+    logger.warn(
+      '[notifier] Invalid payload — expected message_type=access_token with access_token string. ' +
+      `Got: message_type=${payload?.message_type}, has_token=${!!payload?.access_token}`,
+    );
+    return;
+  }
 
-      // Strict shape validation
-      if (
-        !payload ||
-        typeof payload !== 'object' ||
-        payload.message_type !== 'access_token' ||
-        typeof payload.access_token !== 'string' ||
-        !payload.access_token
-      ) {
-        logger.warn(
-          '[notifier] Invalid payload — expected message_type=access_token with access_token string. ' +
-          `Got: message_type=${payload?.message_type}, has_token=${!!payload?.access_token}`,
-        );
-        return;
-      }
-
-      // For single-user setup: find the first connected integration.
-      // client_id in the payload can be used for multi-user matching in future.
-      const integration = await prisma.upstoxIntegration.findFirst({
-        where: { isConnected: true },
-        include: { user: { include: { telegramUser: true } } },
-      });
-
-      if (!integration) {
-        logger.warn('[notifier] No connected UpstoxIntegration found');
-        return;
-      }
-
-      const result = await set_token(integration.userId, payload);
-
-      if (!result.saved) {
-        logger.info(`[notifier] Token not saved: ${result.reason}`);
-        return;
-      }
-
-      // Sync funds to portfolio cash balance
-      try {
-        await syncUpstoxFunds(integration.userId);
-      } catch (e) {
-        logger.warn('[notifier] Fund sync after token refresh failed:', e.message);
-      }
-
-      // Telegram: token refreshed confirmation
-      const telegramUser = integration.user?.telegramUser;
-      if (telegramUser) {
-        const bot = getBot();
-        if (bot) {
-          const expiryIST = result.expiresAt
-            ? new Date(result.expiresAt).toLocaleString('en-IN', {
-                timeZone: 'Asia/Kolkata',
-                hour: '2-digit',
-                minute: '2-digit',
-                hour12: true,
-              })
-            : 'unknown';
-          await bot
-            .sendMessage(
-              parseInt(telegramUser.telegramId),
-              `✅ *Upstox Token Refreshed*\n` +
-              `New token received via notifier webhook.\n` +
-              `Valid until: *${expiryIST} IST*\n` +
-              `Execute buttons are active!`,
-              { parse_mode: 'Markdown' },
-            )
-            .catch(e => logger.warn('[notifier] Telegram send failed:', e.message));
-        }
-      }
-    } catch (err) {
-      logger.error('[notifier] Background processing error:', err);
-    }
+  const integration = await prisma.upstoxIntegration.findFirst({
+    where: { isConnected: true },
+    include: { user: { include: { telegramUser: true } } },
   });
-});
+
+  if (!integration) {
+    logger.warn('[notifier] No connected UpstoxIntegration found');
+    return;
+  }
+
+  const result = await set_token(integration.userId, payload);
+
+  if (!result.saved) {
+    logger.info(`[notifier] Token not saved: ${result.reason}`);
+    return;
+  }
+
+  try {
+    await syncUpstoxFunds(integration.userId);
+  } catch (e) {
+    logger.warn('[notifier] Fund sync after token refresh failed:', e.message);
+  }
+
+  const telegramUser = integration.user?.telegramUser;
+  if (telegramUser) {
+    const bot = getBot();
+    if (bot) {
+      const expiryIST = result.expiresAt
+        ? new Date(result.expiresAt).toLocaleString('en-IN', {
+            timeZone: 'Asia/Kolkata',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: true,
+          })
+        : 'unknown';
+      await bot
+        .sendMessage(
+          parseInt(telegramUser.telegramId),
+          `✅ *Upstox Token Refreshed*\n` +
+          `New token received via notifier webhook.\n` +
+          `Valid until: *${expiryIST} IST*\n` +
+          `Execute buttons are active!`,
+          { parse_mode: 'Markdown' },
+        )
+        .catch(e => logger.warn('[notifier] Telegram send failed:', e.message));
+    }
+  }
+}
+
+function notifierHandler(req, res) {
+  res.json({ status: 'ok' });
+  setImmediate(() =>
+    processNotifier(req).catch(err =>
+      logger.error('[notifier] Background processing error:', err),
+    ),
+  );
+}
+
+router.post('/upstox/notifier', rateLimit, notifierHandler);
+// Cloudflare Access bypass alias — /webhook/* is exempted from Zero Trust auth
+router.post('/webhook/upstox/notifier', rateLimit, notifierHandler);
 
 // ============================================
-// POST /upstox/postback
+// POST /upstox/postback  (and /webhook/upstox/postback — CF bypass alias)
 // Upstox sends order and GTT order status updates here.
 // ============================================
 
-router.post('/upstox/postback', rateLimit, async (req, res) => {
+async function processPostback(req) {
+  const data = req.body;
+  const updateType = data?.update_type;
+
+  if (!updateType) {
+    logger.warn('[postback] Missing update_type in payload');
+    return;
+  }
+
+  if (updateType === 'order') {
+    await handleOrderUpdate(data);
+  } else if (updateType === 'gtt_order') {
+    await handleGttOrderUpdate(data);
+  } else {
+    logger.warn(`[postback] Unknown update_type: ${updateType}`);
+  }
+}
+
+function postbackHandler(req, res) {
   res.json({ status: 'ok' });
+  setImmediate(() =>
+    processPostback(req).catch(err =>
+      logger.error('[postback] Background processing error:', err),
+    ),
+  );
+}
 
-  setImmediate(async () => {
-    try {
-      const data = req.body;
-      const updateType = data?.update_type;
-
-      if (!updateType) {
-        logger.warn('[postback] Missing update_type in payload');
-        return;
-      }
-
-      if (updateType === 'order') {
-        await handleOrderUpdate(data);
-      } else if (updateType === 'gtt_order') {
-        await handleGttOrderUpdate(data);
-      } else {
-        logger.warn(`[postback] Unknown update_type: ${updateType}`);
-      }
-    } catch (err) {
-      logger.error('[postback] Background processing error:', err);
-    }
-  });
-});
+router.post('/upstox/postback', rateLimit, postbackHandler);
+// Cloudflare Access bypass alias
+router.post('/webhook/upstox/postback', rateLimit, postbackHandler);
 
 async function handleOrderUpdate(data) {
   // Use snake_case fields per spec; deprecated tradingsymbol / userId are ignored.

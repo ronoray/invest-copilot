@@ -13,8 +13,10 @@ Go to **account.upstox.com → Developer → My Apps → [your app]** and set:
 | Field | Value |
 |---|---|
 | **Redirect URL** | `https://invest.hungrytimes.in/auth/upstox/callback` (required for app creation; not used daily) |
-| **Postback URL** | `https://invest.hungrytimes.in/upstox/postback` |
-| **Notifier Webhook Endpoint** | `https://invest.hungrytimes.in/upstox/notifier` |
+| **Postback URL** | `https://invest.hungrytimes.in/webhook/upstox/postback` |
+| **Notifier Webhook Endpoint** | `https://invest.hungrytimes.in/webhook/upstox/notifier` |
+
+> Note: `/webhook/*` paths bypass Cloudflare Zero Trust auth on this domain. The canonical `/upstox/notifier` and `/upstox/postback` paths also exist but require Cloudflare Access to be bypassed explicitly.
 
 Save and wait for Upstox to validate the URLs (they send a test POST).
 

@@ -80,9 +80,24 @@ const SCAN_SCHEDULE_DEF = [
   { name: 'evening-playbook',hour: 19, minute: 30, recoveryDeadline: 20 * 60 + 30 }, // still protected until 8:30 PM
 ];
 
+/**
+ * Record a completed scan run.
+ * Writes to in-memory map AND persists to the Config table so heartbeats
+ * survive container restarts. A zero-signal run is still a completed run.
+ */
 export function recordScanRun(name, signals = 0) {
-  scanHeartbeat.set(name, { at: new Date(), signals });
+  const now = new Date();
+  scanHeartbeat.set(name, { at: now, signals });
   logger.info(`[Heartbeat] ${name} completed — ${signals} signal(s)`);
+
+  // Persist to DB (fire-and-forget — don't block caller)
+  const todayIST = now.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const key = `heartbeat:${name}:${todayIST}`;
+  prisma.config.upsert({
+    where: { key },
+    update: { value: JSON.stringify({ at: now.toISOString(), signals }) },
+    create: { key, value: JSON.stringify({ at: now.toISOString(), signals }) },
+  }).catch(e => logger.warn(`[Heartbeat] DB persist failed for ${name}: ${e.message}`));
 }
 
 /** IST current time as { h, m, totalMin } */
@@ -156,6 +171,26 @@ async function runStartupRecovery() {
     } catch (e) {
       logger.warn('[Startup Recovery] Could not restore overnight watchlist:', e.message);
     }
+  }
+
+  // ── Restore persisted scan heartbeats from Config (survives restarts) ───────
+  // A scan that ran and produced 0 signals leaves no TradeSignal records in the DB,
+  // but it DOES write a Config entry. Restoring those here prevents startup recovery
+  // from re-running scans that already completed — even on zero-signal days.
+  try {
+    const todayIST = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const heartbeatKeys = SCAN_SCHEDULE_DEF.map(s => `heartbeat:${s.name}:${todayIST}`);
+    const persisted = await prisma.config.findMany({ where: { key: { in: heartbeatKeys } } });
+    for (const row of persisted) {
+      const scanName = row.key.replace(`heartbeat:`, '').replace(`:${todayIST}`, '');
+      if (!scanHeartbeat.has(scanName)) {
+        const val = JSON.parse(row.value);
+        scanHeartbeat.set(scanName, { at: new Date(val.at), signals: val.signals });
+        logger.info(`[Startup Recovery] Heartbeat restored from DB for ${scanName} (${val.signals} signals)`);
+      }
+    }
+  } catch (e) {
+    logger.warn('[Startup Recovery] Could not restore persisted heartbeats:', e.message);
   }
 
   // Handle evening playbook recovery (deploy happened around 7:30 PM)
@@ -289,11 +324,28 @@ async function checkScanHealthAndRecover() {
     }
 
     // DB guard: verify the scan really is missing before alerting.
-    // Protects against heartbeat being wiped on restart after scans already ran.
+    // Checks (in order):
+    //   1. Persisted Config heartbeat (covers zero-signal days after restart)
+    //   2. AIAnalysis record (evening-playbook) / trade signal count (other scans)
     {
       const startOfToday = getISTMidnight();
+      const todayIST = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 
-      // For evening-playbook: check AIAnalysis records (not trade signals — may be zero on cash days)
+      // 1. Config heartbeat — most reliable; set by recordScanRun regardless of signal count
+      const configKey = `heartbeat:${scan.name}:${todayIST}`;
+      try {
+        const persisted = await prisma.config.findUnique({ where: { key: configKey } });
+        if (persisted) {
+          const val = JSON.parse(persisted.value);
+          scanHeartbeat.set(scan.name, { at: new Date(val.at), signals: val.signals });
+          logger.info(`[Watchdog] ${scan.name} — Config heartbeat found (${val.signals} signals), synced`);
+          continue;
+        }
+      } catch (e) {
+        logger.warn(`[Watchdog] Config heartbeat check failed for ${scan.name}: ${e.message}`);
+      }
+
+      // 2. Fallback: AIAnalysis (evening-playbook) or trade signal count (other scans)
       if (scan.name === 'evening-playbook') {
         const playbookSaved = await prisma.aIAnalysis.count({
           where: { analysisType: 'EVENING_PLAYBOOK', createdAt: { gte: startOfToday } }

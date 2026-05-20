@@ -194,14 +194,19 @@ async function runStartupRecovery() {
   }
 
   // Handle evening playbook recovery (deploy happened around 7:30 PM)
-  if (inEveningHours && !scanHeartbeat.get('evening-playbook')) {
+  if (inEveningHours) {
+    if (scanHeartbeat.get('evening-playbook')) {
+      logger.info('[Startup Recovery] Evening Playbook already ran today — skipping');
+      return;
+    }
     logger.warn('[Startup Recovery] Evening Playbook not sent yet — running now');
     try {
       const { runEveningPlaybook } = await import('./telegramAlerts.js');
       await runEveningPlaybook();
-      recordScanRun('evening-playbook');
     } catch (err) {
       logger.error('[Startup Recovery] Evening Playbook failed:', err.message);
+    } finally {
+      recordScanRun('evening-playbook'); // mark attempted regardless of success — no infinite retry
     }
     return;
   }
@@ -217,7 +222,23 @@ async function runStartupRecovery() {
     return;
   }
 
-  // Find active portfolios missing today's signals
+  // ── Morning scan already ran? ───────────────────────────────────────────────
+  // The heartbeat is restored from Config (above) — if it's present, the 9:30 scan
+  // ran today even if it produced 0 signals. Don't re-run; just seed remaining
+  // heartbeats so the watchdog doesn't fire for them either.
+  if (scanHeartbeat.has('9:30-signals')) {
+    logger.info('[Startup Recovery] 9:30-signals already ran today — no recovery needed');
+    for (const scan of SCAN_SCHEDULE_DEF) {
+      const scanMin = scan.hour * 60 + scan.minute;
+      if (scanMin <= totalMin && !scanHeartbeat.has(scan.name)) {
+        scanHeartbeat.set(scan.name, { at: new Date(), signals: -1 });
+        logger.info(`[Startup Recovery] Heartbeat seeded for ${scan.name}`);
+      }
+    }
+    return;
+  }
+
+  // ── Morning scan genuinely missed — check which portfolios need signals ─────
   const today = getISTMidnight();
   const portfolios = await prisma.portfolio.findMany({
     where: { isActive: true, isPaused: false }
@@ -233,8 +254,6 @@ async function runStartupRecovery() {
 
   if (missing.length === 0) {
     logger.info('[Startup Recovery] All portfolios have today\'s signals — no action needed');
-    // Populate heartbeat for every scan that should have run by now so the watchdog
-    // doesn't re-fire them after this restart (heartbeat is in-memory; wiped on restart).
     for (const scan of SCAN_SCHEDULE_DEF) {
       const scanMin = scan.hour * 60 + scan.minute;
       if (scanMin <= totalMin && !scanHeartbeat.has(scan.name)) {
@@ -273,8 +292,20 @@ async function runStartupRecovery() {
     `⚡ *Recovery Scan Running*\n\nServer restarted during market hours. Missed morning scan detected.\nRunning signal generation now at ${nowISTStr()} IST...\n\n_All intelligence layers active. Back to full operation._`
   );
 
-  await generateSignalsForAllPortfolios();
-  recordScanRun('startup-recovery');
+  try {
+    await generateSignalsForAllPortfolios();
+  } catch (err) {
+    logger.error('[Startup Recovery] Signal generation failed:', err.message);
+    await alertEligibleUsers(`⚠️ *Recovery scan failed*: ${err.message.substring(0, 120)}`);
+  } finally {
+    // Always record completion — success or fail — so the next restart doesn't re-run
+    recordScanRun('startup-recovery');
+    // '9:30-signals' is recorded inside generateSignalsForAllPortfolios, but if it threw
+    // before reaching that point, record it here as a fallback so the watchdog doesn't retry
+    if (!scanHeartbeat.has('9:30-signals')) {
+      recordScanRun('9:30-signals', 0);
+    }
+  }
 }
 
 /**
@@ -386,21 +417,24 @@ async function checkScanHealthAndRecover() {
       if (scan.name === 'evening-playbook') {
         const { runEveningPlaybook } = await import('./telegramAlerts.js');
         await runEveningPlaybook();
-        recordScanRun(scan.name);
       } else if (scan.name.includes('pivot')) {
         const label = scan.name === '11:00-pivot' ? '11:00 AM' : '2:30 PM';
         await generateSignalsAtPivot(label);
-        recordScanRun(scan.name);
       } else if (scan.name === 'pre-market') {
         await generatePreMarketIntelligence();
-        recordScanRun(scan.name);
       } else {
         // '9:30-signals' or '13:00-signals'
         await generateSignalsForAllPortfolios();
-        recordScanRun(scan.name);
       }
     } catch (err) {
       logger.error(`[Watchdog] Recovery failed for ${scan.name}:`, err.message);
+      await alertEligibleUsers(
+        `⚠️ *Scan recovery failed* — ${scan.name}\n${err.message.substring(0, 120)}\n\n_Marked as attempted. Will not retry automatically._`
+      );
+    } finally {
+      // Always mark attempted — success or fail — one recovery per scan per day.
+      // recordScanRun writes to Config so this survives the next container restart.
+      recordScanRun(scan.name);
     }
 
     break; // Only recover one scan per watchdog cycle — next cycle handles the rest

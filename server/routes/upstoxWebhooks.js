@@ -75,8 +75,10 @@ async function processNotifier(req) {
     return;
   }
 
+  // Find integration regardless of isConnected — the notifier IS the reconnect mechanism.
+  // For single-user setup, take the first (and only) integration.
+  // client_id in payload can be used for multi-user matching in future.
   const integration = await prisma.upstoxIntegration.findFirst({
-    where: { isConnected: true },
     include: { user: { include: { telegramUser: true } } },
   });
 

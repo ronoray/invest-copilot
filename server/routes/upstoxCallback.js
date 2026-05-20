@@ -104,12 +104,11 @@ router.post('/webhook/upstox/token', async (req, res) => {
     }
 
     const integration = await prisma.upstoxIntegration.findFirst({
-      where: { isConnected: true },
       include: { user: { include: { telegramUser: true } } }
     });
 
     if (!integration) {
-      logger.warn('[/webhook/upstox/token] No connected integration found');
+      logger.warn('[/webhook/upstox/token] No integration found');
       return res.status(404).json({ error: 'No integration found' });
     }
 

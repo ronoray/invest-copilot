@@ -111,8 +111,6 @@ export async function requestAccessToken() {
     logger.warn('[auth-kickoff] Could not update lastAuthRequestAt:', e.message);
   }
 
-  _lastTriggeredAt = Date.now();
-
   logger.info(
     `[auth-kickoff] Token request sent. ` +
     `Waiting for user approval. ` +
@@ -127,6 +125,15 @@ export async function requestAccessToken() {
  * This is the function called by both the cron job and manual HTTP trigger.
  */
 export async function kickoffWithNotification() {
+  // Dedup gate — any concurrent or back-to-back caller within COOLDOWN_MS is suppressed.
+  // _lastTriggeredAt is set HERE (before the HTTP call) so concurrent paths see it immediately.
+  const ageSec = Math.round((Date.now() - _lastTriggeredAt) / 1000);
+  if (Date.now() - _lastTriggeredAt < COOLDOWN_MS) {
+    logger.info(`[auth-kickoff] Suppressed — already triggered ${ageSec}s ago`);
+    return { ok: true, suppressed: true };
+  }
+  _lastTriggeredAt = Date.now();
+
   let bot = null;
   let telegramUser = null;
 

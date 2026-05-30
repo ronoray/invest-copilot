@@ -153,4 +153,11 @@ log "Commit: ${TARGET_SHA:0:7}"
 log "Branch: $BRANCH"
 log "Time: $(date)"
 
+# Report to the ops-panel Deployments page (silent: record-only, no email/SMS —
+# invest sends its own deploy email above). Non-fatal.
+curl -s -m 10 -X POST http://127.0.0.1:5000/api/deployments/notify \
+  -H "Content-Type: application/json" \
+  -d "{\"type\":\"invest\",\"success\":true,\"sha\":\"$TARGET_SHA\",\"silent\":true}" \
+  >/dev/null 2>&1 || log "⚠️ ops-panel notify failed (non-fatal)"
+
 exit 0

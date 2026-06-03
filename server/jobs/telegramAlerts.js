@@ -4,6 +4,7 @@ import { getCurrentPrice } from '../services/marketData.js';
 import { getBot } from '../services/telegramBot.js';
 import { generateWarRoomPlan, checkDeviations, triggerRecalibration, buildHourlyPulseMessage, generateEveningPlaybook } from '../services/warRoom.js';
 import { validateSignals, getEffectiveCash } from '../services/capitalGuard.js';
+import { createTodaySnapshot } from '../services/performanceService.js';
 import logger from '../services/logger.js';
 import { isTradingDay, isMarketHoliday, getISTMidnight } from '../utils/marketHolidays.js';
 
@@ -366,11 +367,29 @@ async function runEndOfDaySnapshot() {
           }
         }
 
-        // Update final earned amount
-        await prisma.dailyTarget.update({
-          where: { id: target.id },
-          data: { earnedActual: finalPL, earnedUpdatedAt: new Date() }
-        });
+        // Persist an equity snapshot (cash-based ground truth) so a real equity
+        // curve + drawdown finally accrue. Then set earnedActual to the TRUE daily
+        // realized P&L (today's cumulative realized − prior snapshot's), not the
+        // holdings mark-to-market drift that `finalPL` represents.
+        try {
+          const snap = await createTodaySnapshot(portfolio.id);
+          const priorSnap = await prisma.portfolioSnapshot.findFirst({
+            where: { portfolioId: portfolio.id, date: { lt: snap.date } },
+            orderBy: { date: 'desc' },
+          });
+          const trueDailyRealized = snap.realizedPnl - (priorSnap?.realizedPnl ?? 0);
+          await prisma.dailyTarget.update({
+            where: { id: target.id },
+            data: { earnedActual: trueDailyRealized, earnedUpdatedAt: new Date() }
+          });
+        } catch (snapErr) {
+          logger.warn(`EOD snapshot/realized-P&L failed for portfolio ${portfolio.id}: ${snapErr.message}`);
+          // Fallback: keep the holdings-drift figure so the record isn't left blank
+          await prisma.dailyTarget.update({
+            where: { id: target.id },
+            data: { earnedActual: finalPL, earnedUpdatedAt: new Date() }
+          }).catch(() => {});
+        }
 
         // Fetch available cash for tomorrow context
         let cashAvailable = parseFloat(portfolio.availableCash || 0);

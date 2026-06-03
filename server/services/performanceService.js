@@ -1,5 +1,57 @@
 import prisma from './prisma.js';
 import logger from './logger.js';
+import { fifoRealized } from './costModel.js';
+
+// ─── Broker fills (the REAL trade record) ─────────────────────────────────────
+// The legacy `Trade` table is abandoned (a handful of stale rows). All real
+// executions live in UpstoxOrder. Status casing is inconsistent ('complete' vs
+// 'COMPLETE') because of a historical code change — match both.
+async function getFills(portfolioId) {
+  const orders = await prisma.upstoxOrder.findMany({
+    where: {
+      portfolioId,
+      status: { in: ['complete', 'COMPLETE'] },
+      filledQuantity: { gt: 0 },
+    },
+    orderBy: { placedAt: 'asc' },
+    select: { symbol: true, transactionType: true, filledQuantity: true, averagePrice: true, placedAt: true },
+  });
+  return orders
+    .filter(o => o.averagePrice && o.averagePrice > 0)
+    .map(o => ({
+      symbol: o.symbol,
+      side: String(o.transactionType).toLowerCase(),
+      quantity: o.filledQuantity,
+      price: o.averagePrice,
+      date: o.placedAt,
+    }));
+}
+
+/**
+ * Cash-based realized P&L — the ground truth.
+ * Upstox-synced availableCash already nets every fill, every transaction cost,
+ * and any sells placed directly on the Upstox app (which never hit UpstoxOrder).
+ *   equity   = cash + holdingsMarketValue
+ *   realized = cash + holdingsCostBasis − startingCapital
+ *   unrealized = holdingsMarketValue − holdingsCostBasis
+ */
+function cashBasedPnl(portfolio) {
+  const startingCapital = portfolio.startingCapital;
+  const cash = portfolio.availableCash || 0;
+  let costBasis = 0, marketValue = 0;
+  for (const h of (portfolio.holdings || [])) {
+    costBasis += h.quantity * h.avgPrice;
+    marketValue += h.quantity * (h.currentPrice || h.avgPrice);
+  }
+  const realizedPnl = cash + costBasis - startingCapital;
+  const unrealizedPnl = marketValue - costBasis;
+  return {
+    startingCapital, cash, costBasis, marketValue,
+    realizedPnl, unrealizedPnl,
+    totalPnl: realizedPnl + unrealizedPnl,
+    currentEquity: cash + marketValue,
+  };
+}
 
 // ─── Equity Curve ───────────────────────────────────────────────────────────
 
@@ -121,49 +173,27 @@ export async function getSummaryMetrics(portfolioId) {
   });
   if (!portfolio) throw new Error('Portfolio not found');
 
-  const startingCapital = portfolio.startingCapital;
-
-  // Realized P&L from SELL trades
-  const sellTrades = await prisma.trade.findMany({
-    where: { portfolioId, type: 'SELL', status: 'COMPLETED' }
-  });
-  const realizedPnl = sellTrades.reduce((sum, t) => sum + (t.profit || 0), 0);
-
-  // Unrealized P&L from current holdings
-  let investedValue = 0;
-  let currentHoldingsValue = 0;
-  for (const h of portfolio.holdings) {
-    const cost = h.quantity * h.avgPrice;
-    const current = h.quantity * (h.currentPrice || h.avgPrice);
-    investedValue += cost;
-    currentHoldingsValue += current;
-  }
-  const unrealizedPnl = currentHoldingsValue - investedValue;
-  const totalPnl = realizedPnl + unrealizedPnl;
-  const currentEquity = startingCapital + realizedPnl + unrealizedPnl;
+  // Headline P&L: cash-based ground truth (captures every cost + off-platform sells)
+  const cb = cashBasedPnl(portfolio);
+  const { startingCapital, realizedPnl, unrealizedPnl, totalPnl, currentEquity } = cb;
+  const investedValue = cb.costBasis;
   const returnPct = startingCapital > 0 ? (totalPnl / startingCapital) * 100 : 0;
 
-  // Trade stats
-  const allTrades = await prisma.trade.findMany({
-    where: { portfolioId, type: 'SELL', status: 'COMPLETED' }
-  });
-  const wins = allTrades.filter(t => (t.profit || 0) > 0);
-  const losses = allTrades.filter(t => (t.profit || 0) < 0);
-  const winRate = allTrades.length > 0 ? (wins.length / allTrades.length) * 100 : 0;
-  const avgWin = wins.length > 0
-    ? wins.reduce((s, t) => s + (t.profit || 0), 0) / wins.length
-    : 0;
-  const avgLoss = losses.length > 0
-    ? losses.reduce((s, t) => s + (t.profit || 0), 0) / losses.length
-    : 0;
-
-  const grossProfit = wins.reduce((s, t) => s + (t.profit || 0), 0);
-  const grossLoss = Math.abs(losses.reduce((s, t) => s + (t.profit || 0), 0));
-  const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? Infinity : 0;
-
-  const winRateFraction = winRate / 100;
-  const lossRateFraction = 1 - winRateFraction;
-  const expectancy = (winRateFraction * avgWin) + (lossRateFraction * avgLoss);
+  // Trade-level stats: FIFO round-trips reconstructed from the REAL fills (UpstoxOrder),
+  // net of the cost model. The legacy `Trade` table is not used.
+  const fills = await getFills(portfolioId);
+  const fifo = fifoRealized(fills);
+  const trips = fifo.trips;
+  const wins = trips.filter(t => t.gross > 0);
+  const losses = trips.filter(t => t.gross < 0);
+  const winRate = fifo.winRate;
+  const avgWin = fifo.avgWin;
+  const avgLoss = fifo.avgLoss;
+  const grossProfit = wins.reduce((s, t) => s + t.gross, 0);
+  const grossLoss = Math.abs(losses.reduce((s, t) => s + t.gross, 0));
+  const profitFactor = fifo.profitFactor;
+  const expectancy = fifo.expectancy; // NET of costs, per round-trip
+  const totalCosts = fifo.totalCosts;
 
   // Max drawdown
   const { maxDrawdown, currentDrawdown } = await computeDrawdown(portfolioId, startingCapital);
@@ -177,22 +207,19 @@ export async function getSummaryMetrics(portfolioId) {
     ? (winSignals.length / signals.length) * 100
     : null;
 
-  // Best/worst trade
-  const bestTrade = allTrades.length > 0
-    ? allTrades.reduce((a, b) => ((a.profit || 0) > (b.profit || 0) ? a : b))
+  // Best/worst round-trip (gross)
+  const bestTrade = trips.length > 0
+    ? trips.reduce((a, b) => (a.gross > b.gross ? a : b))
     : null;
-  const worstTrade = allTrades.length > 0
-    ? allTrades.reduce((a, b) => ((a.profit || 0) < (b.profit || 0) ? a : b))
+  const worstTrade = trips.length > 0
+    ? trips.reduce((a, b) => (a.gross < b.gross ? a : b))
     : null;
 
-  // Consecutive losses
-  const sortedTrades = [...allTrades].sort(
-    (a, b) => new Date(a.executedAt) - new Date(b.executedAt)
-  );
+  // Consecutive losses (trips are already time-ordered by sell)
   let maxConsecLosses = 0;
   let consecLosses = 0;
-  for (const t of sortedTrades) {
-    if ((t.profit || 0) < 0) {
+  for (const t of trips) {
+    if (t.gross < 0) {
       consecLosses++;
       if (consecLosses > maxConsecLosses) maxConsecLosses = consecLosses;
     } else {
@@ -217,16 +244,17 @@ export async function getSummaryMetrics(portfolioId) {
     avgLoss: round2(avgLoss),
     profitFactor: round2(profitFactor),
     expectancy: round2(expectancy),
-    totalTrades: allTrades.length,
+    totalCosts: round2(totalCosts),
+    totalTrades: trips.length,
     winCount: wins.length,
     lossCount: losses.length,
     grossProfit: round2(grossProfit),
     grossLoss: round2(grossLoss),
     bestTrade: bestTrade
-      ? { symbol: bestTrade.symbol, profit: round2(bestTrade.profit || 0), date: bestTrade.executedAt }
+      ? { symbol: bestTrade.symbol, profit: round2(bestTrade.gross), date: bestTrade.date }
       : null,
     worstTrade: worstTrade
-      ? { symbol: worstTrade.symbol, profit: round2(worstTrade.profit || 0), date: worstTrade.executedAt }
+      ? { symbol: worstTrade.symbol, profit: round2(worstTrade.gross), date: worstTrade.date }
       : null,
     maxConsecutiveLosses: maxConsecLosses,
     signalAccuracy: signalAccuracy !== null ? round2(signalAccuracy) : null,
@@ -420,22 +448,13 @@ export async function createTodaySnapshot(portfolioId) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  // Realized P&L
-  const sellTrades = await prisma.trade.findMany({
-    where: { portfolioId, type: 'SELL', status: 'COMPLETED' }
-  });
-  const realizedPnl = sellTrades.reduce((s, t) => s + (t.profit || 0), 0);
-
-  // Holdings
-  let investedValue = 0;
-  let currentHoldingsValue = 0;
-  for (const h of portfolio.holdings) {
-    investedValue += h.quantity * h.avgPrice;
-    currentHoldingsValue += h.quantity * (h.currentPrice || h.avgPrice);
-  }
-  const unrealizedPnl = currentHoldingsValue - investedValue;
-  const currentEquity = portfolio.startingCapital + realizedPnl + unrealizedPnl;
-  const cashBalance = portfolio.availableCash;
+  // Cash-based ground truth (nets all costs + off-platform sells via synced cash)
+  const cb = cashBasedPnl(portfolio);
+  const realizedPnl = cb.realizedPnl;
+  const unrealizedPnl = cb.unrealizedPnl;
+  const investedValue = cb.costBasis;
+  const currentEquity = cb.currentEquity;
+  const cashBalance = cb.cash;
 
   // Compute high-water mark
   const prevSnapshots = await prisma.portfolioSnapshot.findMany({

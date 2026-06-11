@@ -10,6 +10,8 @@ import logger from './logger.js';
 
 const anthropic = new Anthropic({
   apiKey: process.env.CLAUDE_API_KEY,
+  baseURL: process.env.ANTHROPIC_BASE_URL,
+  defaultHeaders: { 'x-caller-id': 'invest-copilot', 'x-feature-name': 'advanced_screener' },
 });
 
 /**

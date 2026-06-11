@@ -1,7 +1,11 @@
 import Anthropic from '@anthropic-ai/sdk';
 import logger from './logger.js';
 
-const anthropic = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
+const anthropic = new Anthropic({
+  apiKey: process.env.CLAUDE_API_KEY,
+  baseURL: process.env.ANTHROPIC_BASE_URL,
+  defaultHeaders: { 'x-caller-id': 'invest-copilot', 'x-feature-name': 'signal_triage' },
+});
 
 /**
  * Use Claude Haiku to decide if significant price moves warrant signal regeneration.

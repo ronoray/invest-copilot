@@ -62,3 +62,4 @@ verify_database.sh
 complete_seed_data.sql
 INSERT_DATA_CORRECT.sql
 scan_migration_files.ps1
+.gitnexus

@@ -97,8 +97,14 @@ function _startPollingWatchdog() {
 function getBot() {
   if (!bot && process.env.TELEGRAM_BOT_TOKEN) {
     try {
-      // Init without polling first so we can send messages immediately
-      bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: false });
+      // Init without polling first so we can send messages immediately.
+      // baseApiUrl routes through the CF Worker proxy — the droplet's path to
+      // api.telegram.org is blocked upstream (India Section-69A block). Polling
+      // (getUpdates) and all sends go via the proxy when TELEGRAM_API_BASE is set.
+      bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, {
+        polling: false,
+        baseApiUrl: process.env.TELEGRAM_API_BASE || 'https://api.telegram.org',
+      });
 
       // Self-healing polling error handler — restarts polling with exponential backoff
       bot.on('polling_error', (error) => {

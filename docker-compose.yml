@@ -72,6 +72,9 @@ services:
       # Telegram
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       TELEGRAM_ADMIN_ID: ${TELEGRAM_ADMIN_ID}
+      # CF Worker proxy for api.telegram.org (India upstream block). Default keeps
+      # direct api.telegram.org when unset.
+      TELEGRAM_API_BASE: ${TELEGRAM_API_BASE:-https://api.telegram.org}
       
       # Email (GoDaddy)
       EMAIL_HOST: ${EMAIL_HOST:-smtpout.secureserver.net}

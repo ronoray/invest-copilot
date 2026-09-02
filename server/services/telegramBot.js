@@ -48,9 +48,22 @@ function _startPolling(delayMs = 0) {
       }
     } catch (_) {}
     try {
+      // timeout is the getUpdates LONG-POLL duration, so it sets the request
+      // rate: one call per (timeout + interval). Every call bills a Cloudflare
+      // Worker invocation, because TELEGRAM_API_BASE points at
+      // tg-proxy.hungrytimes.in which is a custom_domain Worker — there is no
+      // free path through it. At timeout 10 this bot alone spent ~7,850
+      // requests/day of the account's shared 100k/day free cap; at 30 it spends
+      // ~2,800. Inbound latency is unchanged: a long poll returns the moment an
+      // update arrives, it does not wait out the timeout.
+      //
+      // 30 rather than Telegram's maximum of 50: 30 is the grammY default and
+      // has been running through this same Worker for months, so it is known to
+      // survive the edge. The 30-50s band is untested here and this bot carries
+      // trade alerts.
       bot.startPolling({
         interval: 1000,
-        params: { timeout: 10, allowed_updates: ['message', 'callback_query'] }
+        params: { timeout: 30, allowed_updates: ['message', 'callback_query'] }
       });
       logger.info('Telegram bot polling started');
       _lastPollActivityAt = Date.now();
@@ -127,9 +140,12 @@ function getBot() {
         logger.error('Telegram error:', error?.message || String(error));
       });
 
-      // Delay initial polling start by 15s — gives previous container's 10s long-poll time to expire
-      // This eliminates the 409 Conflict on every restart/deploy.
-      _startPolling(15000);
+      // Delay initial polling start until the previous container's long poll has
+      // expired, which eliminates the 409 Conflict on every restart/deploy.
+      // Must stay above the getUpdates timeout above (30s) or the overlap comes
+      // back. Sends are unaffected — the bot is constructed with polling:false
+      // and can send immediately; only inbound commands wait this out.
+      _startPolling(35000);
 
       // Watchdog: restart polling if it silently dies
       _startPollingWatchdog();

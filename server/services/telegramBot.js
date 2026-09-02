@@ -48,23 +48,10 @@ function _startPolling(delayMs = 0) {
       }
     } catch (_) {}
     try {
-      // timeout is the getUpdates LONG-POLL duration, so it sets the request
-      // rate: one call per (timeout + interval). Every call bills a Cloudflare
-      // Worker invocation, because TELEGRAM_API_BASE points at
-      // tg-proxy.hungrytimes.in which is a custom_domain Worker — there is no
-      // free path through it. At timeout 10 this bot alone spent ~7,850
-      // requests/day of the account's shared 100k/day free cap; at 30 it spends
-      // ~2,800. Inbound latency is unchanged: a long poll returns the moment an
-      // update arrives, it does not wait out the timeout.
-      //
-      // 30 rather than Telegram's maximum of 50: 30 is the grammY default and
-      // has been running through this same Worker for months, so it is known to
-      // survive the edge. The 30-50s band is untested here and this bot carries
-      // trade alerts.
-      bot.startPolling({
-        interval: 1000,
-        params: { timeout: 30, allowed_updates: ['message', 'callback_query'] }
-      });
+      // No options here on purpose: startPolling() discards everything except
+      // `restart`. The interval and params come from the constructor — see the
+      // comment on `polling:` in getBot().
+      bot.startPolling();
       logger.info('Telegram bot polling started');
       _lastPollActivityAt = Date.now();
       // Only reset backoff after 30s of stable polling — not on the start() call itself
@@ -114,8 +101,34 @@ function getBot() {
       // baseApiUrl routes through the CF Worker proxy — the droplet's path to
       // api.telegram.org is blocked upstream (India Section-69A block). Polling
       // (getUpdates) and all sends go via the proxy when TELEGRAM_API_BASE is set.
+      // Polling options are read ONLY from here. node-telegram-bot-api builds
+      // its poller as `new TelegramBotPolling(this)` and reads
+      // `bot.options.polling`; anything handed to startPolling() is discarded
+      // except `restart`. While this said `polling: false`, a boolean, the
+      // poller fell back to library defaults — timeout 10, interval 300ms — so
+      // the interval/params this file passed to startPolling() never applied,
+      // allowed_updates included. `autoStart: false` keeps the deferred start
+      // further down; it is what `polling: false` was really there for.
+      //
+      // `params.timeout` is the getUpdates long-poll duration, so it sets the
+      // request rate: one call per (timeout + interval). Every call bills a
+      // Cloudflare Worker invocation, because TELEGRAM_API_BASE points at
+      // tg-proxy.hungrytimes.in, a custom_domain Worker with no free path
+      // through it. At the effective 10s + 300ms this bot alone spent ~7,850
+      // requests/day of the account's shared 100k/day cap; at 30s + 1s it
+      // spends ~2,800. Inbound latency does not change — a long poll returns
+      // the moment an update arrives rather than waiting out the timeout.
+      //
+      // 30 rather than Telegram's maximum of 50: 30 is grammY's default and has
+      // run through this same Worker for months, so it is known to survive the
+      // edge. The 30-50s band is untested here and this bot carries trade
+      // alerts.
       bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, {
-        polling: false,
+        polling: {
+          autoStart: false,
+          interval: 1000,
+          params: { timeout: 30, allowed_updates: ['message', 'callback_query'] },
+        },
         baseApiUrl: process.env.TELEGRAM_API_BASE || 'https://api.telegram.org',
       });
 
